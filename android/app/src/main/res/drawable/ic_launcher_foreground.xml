@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The mark, kept inside the centre 72dp so the launcher's mask can't clip it.
+     Simplified from logo.ico on purpose: the source's facet texture turns to
+     mush below ~96px (plan section 1 calls for exactly this trade). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M26,32L37,32L37,76L26,76Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="26" android:startY="32"
+                android:endX="82" android:endY="76"
+                android:type="linear">
+                <item android:offset="0" android:color="#FF184C8C" />
+                <item android:offset="1" android:color="#FF8CC2F0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M26,32L37,32L54,54L54,70Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="26" android:startY="32"
+                android:endX="82" android:endY="76"
+                android:type="linear">
+                <item android:offset="0" android:color="#FF184C8C" />
+                <item android:offset="1" android:color="#FF8CC2F0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M82,32L71,32L54,54L54,70Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="26" android:startY="32"
+                android:endX="82" android:endY="76"
+                android:type="linear">
+                <item android:offset="0" android:color="#FF184C8C" />
+                <item android:offset="1" android:color="#FF8CC2F0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M71,32L82,32L82,76L71,76Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="26" android:startY="32"
+                android:endX="82" android:endY="76"
+                android:type="linear">
+                <item android:offset="0" android:color="#FF184C8C" />
+                <item android:offset="1" android:color="#FF8CC2F0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M73.46,64.22L73.64,64.76L73.75,65.32L73.79,65.9L73.76,66.49L73.66,67.09L73.49,67.68L73.25,68.27L72.95,68.84L72.58,69.4L72.16,69.93L71.68,70.44L71.15,70.91L70.58,71.35L69.97,71.74L69.32,72.09L68.65,72.39L67.96,72.63L67.25,72.83L66.54,72.96L65.82,73.04L65.11,73.06L64.42,73.02L63.74,72.93L63.1,72.78L62.48,72.57L61.9,72.31L61.37,71.99L60.89,71.63L60.46,71.23L60.09,70.78L59.78,70.3L59.54,69.78L59.36,69.24L59.25,68.68L59.21,68.1L59.24,67.51L59.34,66.91L59.51,66.32L59.75,65.73L60.05,65.16L60.42,64.6L60.84,64.07L61.32,63.56L61.85,63.09L62.42,62.65L63.03,62.26L63.68,61.91L64.35,61.61L65.04,61.37L65.75,61.17L66.46,61.04L67.18,60.96L67.89,60.94L68.58,60.98L69.26,61.07L69.9,61.22L70.52,61.43L71.1,61.69L71.63,62.01L72.11,62.37L72.54,62.77L72.91,63.22L73.22,63.7Z" android:fillColor="#FFBFDFFF" />
+    <path android:pathData="M49,34L49,46L59.5,40Z" android:fillColor="#FFBFDFFF" />
+</vector>
