@@ -83,8 +83,9 @@ class AppTheme {
           statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
           statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           systemNavigationBarColor: Colors.transparent,
-          systemNavigationBarIconBrightness:
-              isDark ? Brightness.light : Brightness.dark,
+          systemNavigationBarIconBrightness: isDark
+              ? Brightness.light
+              : Brightness.dark,
         ),
         titleTextStyle: TextStyle(
           fontSize: 22,
@@ -220,14 +221,19 @@ class AppTheme {
           fontWeight: FontWeight.w600,
           color: scheme.onSurface,
         ),
-        contentTextStyle: TextStyle(fontSize: 14, color: scheme.onSurfaceVariant),
+        contentTextStyle: TextStyle(
+          fontSize: 14,
+          color: scheme.onSurfaceVariant,
+        ),
       ),
 
       bottomSheetTheme: BottomSheetThemeData(
         backgroundColor: scheme.surfaceContainerLow,
         surfaceTintColor: Colors.transparent,
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(_dialogRadius)),
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(_dialogRadius),
+          ),
         ),
         showDragHandle: true,
       ),
@@ -249,7 +255,10 @@ class AppTheme {
           borderSide: BorderSide(color: scheme.primary, width: 2),
         ),
         hintStyle: TextStyle(color: scheme.onSurfaceVariant),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 14,
+        ),
       ),
 
       floatingActionButtonTheme: FloatingActionButtonThemeData(

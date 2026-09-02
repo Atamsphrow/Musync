@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Small icon for the media notification.
+
+  Deliberately not the launcher icon. Android draws a notification's small icon
+  as a silhouette: it keeps the alpha channel and throws the colours away. The
+  launcher icon is an adaptive icon — a layered XML with a coloured plate — and
+  handing that to the status bar gives a white square at best, and no
+  notification at all at worst, which is what Musync was doing.
+
+  A plain music note instead: one path, legible at 24dp, unmistakable at the
+  size a status bar actually renders it.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,3v10.55c-0.59,-0.34 -1.27,-0.55 -2,-0.55 -2.21,0 -4,1.79 -4,4s1.79,4 4,4 4,-1.79 4,-4V7h4V3h-6z" />
+</vector>

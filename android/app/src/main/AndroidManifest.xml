@@ -47,8 +47,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop"
-            android:taskAffinity=""
+            android:launchMode="singleTask"
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
@@ -57,9 +56,67 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+
+            <!--
+              Off, because this app has no deep links and one intent filter below
+              makes the default actively harmful.
+
+              Flutter enables deep linking by default and, when it is on, uses an
+              incoming intent's `data` as the app's *initial route*. The
+              "open with" filter below is `ACTION_VIEW` on `audio/*`, so opening a
+              track with Musync from a file manager handed Flutter
+              `/storage/emulated/0/Audio/09. Snapchat.mp3` as a route name — and
+              the app answered "Page introuvable : …" instead of opening.
+
+              Musync reads that intent itself, in `queueSharedAudio`, and hands
+              the path to Dart over its own channel. Flutter never needed to see
+              it as a route.
+            -->
+            <meta-data
+              android:name="flutter_deeplinking_enabled"
+              android:value="false"
+              />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+
+            <!--
+              Share sheet: accept audio sent from a file manager or another
+              player, so a track can be handed straight to Musync for tagging.
+
+              `launchMode="singleTask"` above, and no `taskAffinity`.
+
+              Both matter, and the previous pair got it wrong in a way that only
+              showed with the app already running. `singleTop` reuses an
+              instance only when it sits at the top of the *same* task — but
+              `taskAffinity=""` puts the activity in no task at all, so every
+              share arrived in a brand-new one. Three or four Musyncs would pile
+              up in the recents list, none of them the one already playing.
+
+              `singleTask` brings the existing instance forward and delivers the
+              intent to `onNewIntent` instead, whatever launched it.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="audio/*"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="audio/*"/>
+            </intent-filter>
+
+            <!--
+              "Open with" on an audio file, which is the same job arriving by a
+              different verb.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:mimeType="audio/*"/>
             </intent-filter>
         </activity>
 

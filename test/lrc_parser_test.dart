@@ -13,16 +13,20 @@ void main() {
       final lyrics = LrcParser.parse('[01:23.45]Bonjour');
 
       expect(lyrics.lines, hasLength(1));
-      expect(lyrics.lines.first.timestamp,
-          const Duration(minutes: 1, seconds: 23, milliseconds: 450));
+      expect(
+        lyrics.lines.first.timestamp,
+        const Duration(minutes: 1, seconds: 23, milliseconds: 450),
+      );
       expect(lyrics.lines.first.text, 'Bonjour');
     });
 
     test('reads milliseconds', () {
       final lyrics = LrcParser.parse('[00:05.123]Trois chiffres');
 
-      expect(lyrics.lines.first.timestamp,
-          const Duration(seconds: 5, milliseconds: 123));
+      expect(
+        lyrics.lines.first.timestamp,
+        const Duration(seconds: 5, milliseconds: 123),
+      );
     });
 
     test('accepts a timestamp with no fraction at all', () {
@@ -36,15 +40,19 @@ void main() {
     test('accepts a colon as the fraction separator', () {
       final lyrics = LrcParser.parse('[00:12:50]Deux-points');
 
-      expect(lyrics.lines.first.timestamp,
-          const Duration(seconds: 12, milliseconds: 500));
+      expect(
+        lyrics.lines.first.timestamp,
+        const Duration(seconds: 12, milliseconds: 500),
+      );
     });
 
     test('reads timestamps past ten minutes', () {
       final lyrics = LrcParser.parse('[123:45.67]Morceau très long');
 
-      expect(lyrics.lines.first.timestamp,
-          const Duration(minutes: 123, seconds: 45, milliseconds: 670));
+      expect(
+        lyrics.lines.first.timestamp,
+        const Duration(minutes: 123, seconds: 45, milliseconds: 670),
+      );
     });
   });
 
@@ -55,7 +63,7 @@ void main() {
 
       expect(lyrics.lines, hasLength(3));
       expect(lyrics.lines.map((l) => l.text), everyElement('Refrain'));
-      expect(lyrics.lines.map((l) => l.timestamp.inSeconds), [10, 80, 150]);
+      expect(lyrics.lines.map((l) => l.timestamp!.inSeconds), [10, 80, 150]);
     });
 
     test('drops metadata rows', () {
@@ -77,8 +85,10 @@ void main() {
 [00:10.00]Décalée
 ''');
 
-      expect(lyrics.lines.first.timestamp,
-          const Duration(seconds: 9, milliseconds: 500));
+      expect(
+        lyrics.lines.first.timestamp,
+        const Duration(seconds: 9, milliseconds: 500),
+      );
     });
 
     test('a negative offset never pushes a line before zero', () {
@@ -141,7 +151,8 @@ Une note de bas de page
     test('pads every field to two digits', () {
       expect(
         LrcParser.formatTimestamp(
-            const Duration(minutes: 1, seconds: 2, milliseconds: 30)),
+          const Duration(minutes: 1, seconds: 2, milliseconds: 30),
+        ),
         '01:02.03',
       );
     });
@@ -155,8 +166,11 @@ Une note de bas de page
     ]);
 
     test('sorts by timestamp on construction', () {
-      expect(sample.lines.map((l) => l.text),
-          ['Première', 'Deuxième', 'Troisième']);
+      expect(sample.lines.map((l) => l.text), [
+        'Première',
+        'Deuxième',
+        'Troisième',
+      ]);
     });
 
     test('the sort is stable, so untimed lines keep their reading order', () {
@@ -167,8 +181,13 @@ Une note de bas de page
           LyricLine(timestamp: Duration.zero, text: text),
       ]);
 
-      expect(untimed.lines.map((l) => l.text),
-          ['un', 'deux', 'trois', 'quatre', 'cinq']);
+      expect(untimed.lines.map((l) => l.text), [
+        'un',
+        'deux',
+        'trois',
+        'quatre',
+        'cinq',
+      ]);
     });
 
     test('getLineAt finds the line in progress', () {
@@ -185,7 +204,7 @@ Une note de bas de page
     test('offsetAll shifts every line', () {
       final shifted = sample.offsetAll(const Duration(seconds: 5));
 
-      expect(shifted.lines.map((l) => l.timestamp.inSeconds), [15, 25, 35]);
+      expect(shifted.lines.map((l) => l.timestamp!.inSeconds), [15, 25, 35]);
     });
 
     test('offsetAll floors at zero instead of going negative', () {
@@ -197,7 +216,7 @@ Une note de bas de page
     test('offsetLine touches only the line asked for', () {
       final shifted = sample.offsetLine(0, const Duration(seconds: 2));
 
-      expect(shifted.lines.map((l) => l.timestamp.inSeconds), [12, 20, 30]);
+      expect(shifted.lines.map((l) => l.timestamp!.inSeconds), [12, 20, 30]);
     });
 
     test('offsetLine ignores an out-of-range index', () {
@@ -241,6 +260,91 @@ Une note de bas de page
     test('equality is by value', () {
       expect(const UnsyncedLyrics('a'), const UnsyncedLyrics('a'));
       expect(const UnsyncedLyrics('a'), isNot(const UnsyncedLyrics('b')));
+    });
+  });
+
+  group('stripTimestamps', () {
+    // Turns an LRC-bearing USLT into words. Distinct from parse(), which keeps
+    // only the timed lines — here nothing may be dropped.
+    test('removes the prefixes and keeps the words', () {
+      expect(
+        LrcParser.stripTimestamps('[00:01.00]Une\n[00:04.50]Deux'),
+        'Une\nDeux',
+      );
+    });
+
+    test('keeps a line that never had a timestamp', () {
+      // The whole reason this is not `parse().toPlainText()`: a structural
+      // marker belongs to the lyric and would be filtered out by parsing.
+      expect(
+        LrcParser.stripTimestamps('[00:01.00]Une\n[Refrain]\n[00:09.00]Deux'),
+        'Une\n[Refrain]\nDeux',
+      );
+    });
+
+    test('strips a whole run of prefixes, as a repeated chorus carries', () {
+      expect(
+        LrcParser.stripTimestamps('[00:10.00][01:20.00][02:30.00]Refrain'),
+        'Refrain',
+      );
+    });
+
+    test('leaves a timestamp that is not at the head of the line', () {
+      // Mid-sentence brackets are lyrics, not cues — the same call the parser
+      // makes. The two must agree on where the words begin.
+      expect(
+        LrcParser.stripTimestamps('[00:01.00]On se voit a [00:02.00] pile'),
+        'On se voit a [00:02.00] pile',
+      );
+    });
+
+    test('text with no timestamps at all comes back unchanged', () {
+      expect(
+        LrcParser.stripTimestamps('Une chanson\nsans horodatage'),
+        'Une chanson\nsans horodatage',
+      );
+    });
+  });
+
+  group('timestamps separated by a space', () {
+    test('a chorus written with spaces keeps both timings', () {
+      // A shape that turns up in downloaded files. `parse` required the
+      // timestamps to be adjacent, so it took the first, left the second
+      // bracket sitting in the words, and lost one of the two cues.
+      final lyrics = LrcParser.parse('[00:10.00] [01:20.00]Refrain');
+
+      expect(lyrics.length, 2);
+      expect(lyrics.lines.map((l) => l.text), ['Refrain', 'Refrain']);
+      expect(lyrics.lines.first.timestamp, const Duration(seconds: 10));
+      expect(lyrics.lines.last.timestamp, const Duration(seconds: 80));
+    });
+
+    test('and no bracket is left in the words', () {
+      final lyrics = LrcParser.parse('[00:01.00]  [00:05.00]Texte');
+
+      expect(lyrics.lines.first.text, 'Texte');
+      expect(lyrics.lines.first.text, isNot(contains('[')));
+    });
+
+    test('parse and stripTimestamps agree on where the words start', () {
+      // They disagreed: stripping allowed the space, parsing did not, so the
+      // same line came out two different ways depending on which one saw it.
+      const line = '[00:01.00] [00:05.00]Texte';
+
+      expect(LrcParser.stripTimestamps(line), 'Texte');
+      expect(LrcParser.parse(line).lines.first.text, 'Texte');
+    });
+
+    test('a timestamp after real words is still a lyric', () {
+      // The distinction that must survive: only the *leading* run is cues.
+      final lyrics = LrcParser.parse('[00:01.00]Il a dit [00:05.00] puis rien');
+
+      expect(lyrics.length, 1);
+      expect(lyrics.lines.single.text, 'Il a dit [00:05.00] puis rien');
+    });
+
+    test('a line that opens with words is not timed at all', () {
+      expect(LrcParser.parse('Sans heure [00:05.00]').isEmpty, isTrue);
     });
   });
 }

@@ -1,8 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Adaptive icon (Android 8+). minSdk is 26, so this is the form every
-     supported device actually renders; the mipmap PNGs are only a fallback. -->
+<!--
+  Adaptive icon, built from the user's own logo.ico.
+
+  With minSdk 26 this is the form every target device actually shows; the PNGs
+  in mipmap-*/ic_launcher.png are only a fallback for launchers that ignore
+  adaptive icons.
+
+  The foreground is the complete 256x256 artwork — its dark plate and rounded
+  corners included — scaled into the 72dp safe zone of the 108dp canvas. The
+  mark spans 81% of the source square, so letting it bleed to the canvas edge
+  would have put its outer edges under the launcher's mask; shrinking it into
+  the safe zone is what keeps it whole.
+
+  The background is that artwork's own plate colour, sampled from it, so the
+  seam between the scaled square and the plate behind it is invisible whatever
+  shape the launcher crops to.
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@drawable/ic_launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
-    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <!-- Android 13+ themed icons: the M, keyed off the artwork's own contrast. -->
+    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
 </adaptive-icon>

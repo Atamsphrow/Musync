@@ -40,9 +40,19 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     if (!_scrollController.hasClients) return;
     _lastCenteredIndex = index;
 
-    final target = (index * _lineExtent) -
-        (viewportHeight / 2) +
-        (_lineExtent / 2);
+    // The list carries `viewportHeight / 2` of padding at each end, which is
+    // what lets the first and last lines reach the middle of the screen at all.
+    // Line `index` therefore starts at `viewportHeight / 2 + index * extent`,
+    // and centring its midpoint means scrolling to:
+    //
+    //     (viewportHeight / 2 + index * extent + extent / 2) - viewportHeight / 2
+    //
+    // which is simply `index * extent + extent / 2` — the two halves cancel.
+    //
+    // The previous version subtracted the half-viewport without adding the
+    // padding back, landing half a screen short every time. That is why the
+    // active line drifted to the bottom edge and stuck there.
+    final target = (index * _lineExtent) + (_lineExtent / 2);
 
     _scrollController.animateTo(
       target.clamp(0.0, _scrollController.position.maxScrollExtent),
@@ -55,7 +65,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final currentIndex = ref.watch(currentLineIndexProvider);
+    final currentIndex = ref.watch(currentLineIndexProvider).valueOrNull;
 
     if (widget.lyrics.isEmpty) {
       return _EmptyLyrics(onSearchOnline: widget.onSearchOnline);
@@ -89,21 +99,29 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
             }
 
             return InkWell(
+              // Non-null: this view renders SyncedLyrics, which is timed-only.
               onTap: () =>
-                  ref.read(audioPlayerServiceProvider).seekTo(line.timestamp),
+                  ref.read(audioPlayerServiceProvider).seekTo(line.timestamp!),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: Center(
                   child: AnimatedDefaultTextStyle(
-                    duration: const Duration(milliseconds: 250),
-                    style: (isCurrent
-                            ? textTheme.titleMedium
-                            : textTheme.bodyLarge)!
-                        .copyWith(
-                      color: color,
-                      fontWeight:
-                          isCurrent ? FontWeight.w700 : FontWeight.w400,
-                    ),
+                    // Short on purpose, and it is the other half of T22: the
+                    // detection is now exact to the frame, but a quarter-second
+                    // cross-fade on the colour and the weight still reads as
+                    // lag. The scroll below keeps its 400 ms — that one is
+                    // motion, and motion is allowed to be smooth.
+                    duration: const Duration(milliseconds: 120),
+                    style:
+                        (isCurrent
+                                ? textTheme.titleMedium
+                                : textTheme.bodyLarge)!
+                            .copyWith(
+                              color: color,
+                              fontWeight: isCurrent
+                                  ? FontWeight.w700
+                                  : FontWeight.w400,
+                            ),
                     textAlign: TextAlign.center,
                     child: Text(
                       line.text,

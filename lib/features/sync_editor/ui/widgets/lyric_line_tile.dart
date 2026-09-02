@@ -3,7 +3,23 @@ import 'package:musync/core/id3/lrc_parser.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 
 /// Action chosen from a line's overflow menu.
-enum LyricLineAction { editText, nudgeBack, nudgeForward, insertBelow, delete }
+enum LyricLineAction {
+  editText,
+  editTimestamp,
+  nudgeBack,
+  nudgeForward,
+
+  /// Put the line back to un-timed and move the cursor onto it, ready for the
+  /// next tap of *Caler*.
+  retime,
+
+  /// Strip the time for good — for a structural marker that should stay in the
+  /// words without ever being sung.
+  clearTimestamp,
+
+  insertBelow,
+  delete,
+}
 
 /// One row of the sync editor.
 ///
@@ -43,8 +59,6 @@ class LyricLineTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
 
-    final isUntimed = line.timestamp == Duration.zero;
-
     return Material(
       color: isCursor ? scheme.secondaryContainer : Colors.transparent,
       child: InkWell(
@@ -56,10 +70,12 @@ class LyricLineTile extends StatelessWidget {
               if (showTimestamp) ...[
                 _TimestampChip(
                   timestamp: line.timestamp,
-                  // An untimed line reads as a placeholder rather than as
-                  // "starts at zero", which is what 00:00.00 would imply.
-                  isUntimed: isUntimed,
-                  onTap: onStamp,
+                  // Tap types the value, long-press grabs the playhead. The
+                  // spec asks for the exact time to be reachable by hand, and a
+                  // chip showing a number is where a hand goes looking for it —
+                  // stamping keeps the big "Caler" button and the long-press.
+                  onTap: () => onAction(LyricLineAction.editTimestamp),
+                  onLongPress: onStamp,
                 ),
                 const SizedBox(width: 10),
               ],
@@ -72,14 +88,16 @@ class LyricLineTile extends StatelessWidget {
                     color: line.text.isEmpty
                         ? scheme.onSurfaceVariant.withValues(alpha: 0.5)
                         : isCursor
-                            ? scheme.onSecondaryContainer
-                            : isPlaying
-                                ? scheme.primary
-                                : scheme.onSurface,
-                    fontWeight:
-                        isCursor || isPlaying ? FontWeight.w600 : FontWeight.w400,
-                    fontStyle:
-                        line.text.isEmpty ? FontStyle.italic : FontStyle.normal,
+                        ? scheme.onSecondaryContainer
+                        : isPlaying
+                        ? scheme.primary
+                        : scheme.onSurface,
+                    fontWeight: isCursor || isPlaying
+                        ? FontWeight.w600
+                        : FontWeight.w400,
+                    fontStyle: line.text.isEmpty
+                        ? FontStyle.italic
+                        : FontStyle.normal,
                   ),
                 ),
               ),
@@ -94,22 +112,56 @@ class LyricLineTile extends StatelessWidget {
                       leading: Icon(Icons.edit_outlined),
                       title: Text('Modifier le texte'),
                       contentPadding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
                     ),
                   ),
+                  PopupMenuItem(
+                    value: LyricLineAction.editTimestamp,
+                    child: ListTile(
+                      leading: Icon(Icons.schedule),
+                      title: Text('Saisir l\'horodatage'),
+                      contentPadding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                  PopupMenuDivider(),
                   PopupMenuItem(
                     value: LyricLineAction.nudgeBack,
                     child: ListTile(
                       leading: Icon(Icons.fast_rewind),
-                      title: Text('Reculer de 100 ms'),
+                      title: Text('Reculer de 10 ms'),
                       contentPadding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
                     ),
                   ),
                   PopupMenuItem(
                     value: LyricLineAction.nudgeForward,
                     child: ListTile(
                       leading: Icon(Icons.fast_forward),
-                      title: Text('Avancer de 100 ms'),
+                      title: Text('Avancer de 10 ms'),
                       contentPadding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                  PopupMenuDivider(),
+                  PopupMenuItem(
+                    value: LyricLineAction.retime,
+                    child: ListTile(
+                      leading: Icon(Icons.restart_alt),
+                      title: Text('Réinitialiser le calage'),
+                      subtitle: Text('Efface le calage, curseur ici'),
+                      contentPadding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: LyricLineAction.clearTimestamp,
+                    child: ListTile(
+                      leading: Icon(Icons.timer_off_outlined),
+                      title: Text('Ligne sans horodatage'),
+                      subtitle: Text('Pour un marqueur : [Refrain], [Pont]'),
+                      contentPadding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
                     ),
                   ),
                   PopupMenuDivider(),
@@ -119,6 +171,7 @@ class LyricLineTile extends StatelessWidget {
                       leading: Icon(Icons.playlist_add),
                       title: Text('Insérer une ligne en dessous'),
                       contentPadding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
                     ),
                   ),
                   PopupMenuItem(
@@ -127,6 +180,7 @@ class LyricLineTile extends StatelessWidget {
                       leading: Icon(Icons.delete_outline),
                       title: Text('Supprimer la ligne'),
                       contentPadding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
                     ),
                   ),
                 ],
@@ -140,41 +194,61 @@ class LyricLineTile extends StatelessWidget {
 }
 
 class _TimestampChip extends StatelessWidget {
-  final Duration timestamp;
-  final bool isUntimed;
+  /// Three states, and they must not be confused with each other:
+  ///
+  ///  * a real time — the line is placed;
+  ///  * `Duration.zero` — not stamped *yet*; the line is waiting its turn;
+  ///  * `null` — deliberately stripped, a structural marker like `[Refrain]`
+  ///    that will be left out of SYLT.
+  ///
+  /// The middle one used to stand in for both, which meant a marker the user
+  /// had cleared looked identical to a line they still had to time.
+  final Duration? timestamp;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
 
   const _TimestampChip({
     required this.timestamp,
-    required this.isUntimed,
     required this.onTap,
+    required this.onLongPress,
   });
+
+  bool get _isCleared => timestamp == null;
+  bool get _isPending => timestamp == Duration.zero;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isPlaced = !_isCleared && !_isPending;
 
     return Tooltip(
-      message: 'Caler cette ligne sur la lecture',
+      message: 'Toucher pour saisir l\'heure, appui long pour caler',
       child: Material(
-        color: isUntimed ? scheme.surfaceContainerHighest : scheme.primaryContainer,
+        color: isPlaced
+            ? scheme.primaryContainer
+            : scheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(8),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
+          onLongPress: onLongPress,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
             child: Text(
-              isUntimed ? '--:--.--' : LrcParser.formatTimestamp(timestamp),
+              switch (timestamp) {
+                null => '—  —',
+                Duration.zero => '--:--.--',
+                final t => LrcParser.formatTimestamp(t),
+              },
               style: TextStyle(
                 // Tabular digits keep the column from jittering as the numbers
                 // change under the user's finger.
                 fontFeatures: const [FontFeature.tabularFigures()],
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: isUntimed
-                    ? scheme.onSurfaceVariant
-                    : scheme.onPrimaryContainer,
+                color: isPlaced
+                    ? scheme.onPrimaryContainer
+                    : scheme.onSurfaceVariant,
               ),
             ),
           ),

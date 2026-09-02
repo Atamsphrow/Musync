@@ -8,6 +8,7 @@ library;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
 
 /// Key for [artworkSchemeProvider] — a scheme depends on both the artwork and
@@ -41,18 +42,31 @@ class ArtworkSchemeRequest {
 /// rather than growing with the size of the library.
 final artworkSchemeProvider = FutureProvider.autoDispose
     .family<ColorScheme?, ArtworkSchemeRequest>((ref, request) async {
-  final scanner = ref.watch(musicScannerProvider);
+      final scanner = ref.watch(musicScannerProvider);
 
-  final Uint8List? bytes = await scanner.getArtwork(request.songId);
-  if (bytes == null || bytes.isEmpty) return null;
+      final Uint8List? bytes = await scanner.getArtwork(request.songId);
+      if (bytes == null || bytes.isEmpty) return null;
 
-  try {
-    return await ColorScheme.fromImageProvider(
-      provider: MemoryImage(bytes),
-      brightness: request.brightness,
-    );
-  } catch (_) {
-    // Corrupt or unsupported artwork — fall back to the app-wide scheme.
-    return null;
-  }
-});
+      try {
+        return await ColorScheme.fromImageProvider(
+          provider: MemoryImage(bytes),
+          brightness: request.brightness,
+        );
+      } catch (error) {
+        // Corrupt or unsupported artwork — fall back to the app-wide scheme.
+        //
+        // Once per session, and this one is not optional: this runs for every
+        // track the player opens. A codec Flutter dislikes across the library
+        // would post a line per track, and the buffer holds 400 — the flood
+        // would push out every entry worth reading, which is the opposite of
+        // capturing everything.
+        DebugLog.instance.once(
+          'artwork-decode',
+          LogLevel.info,
+          'Thème',
+          'Pochette non décodable : le thème gardera la palette de l\'app',
+          error: error,
+        );
+        return null;
+      }
+    });

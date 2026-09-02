@@ -38,28 +38,54 @@ class Id3Frame {
   final int flagsHi;
   final int flagsLo;
 
+  /// Which version's flag layout [flagsLo] follows.
+  ///
+  /// Required rather than defaulted, because the two layouts share no bit
+  /// positions and a default would be a silent wrong answer. The flags were
+  /// read with v2.4's meanings regardless of the tag's actual version, so a
+  /// v2.3 compressed frame looked ordinary — `isOpaque` said false and its
+  /// payload was parsed as though it were plain text.
+  final int majorVersion;
+
   final Uint8List body;
 
   const Id3Frame({
     required this.id,
     required this.body,
+    required this.majorVersion,
     this.flagsHi = 0,
     this.flagsLo = 0,
   });
 
-  // ── v2.4 frame flags (low byte) ──
-  bool get _isCompressed => flagsLo & 0x08 != 0;
-  bool get _isEncrypted => flagsLo & 0x04 != 0;
-  bool get _isUnsynchronised => flagsLo & 0x02 != 0;
-  bool get _hasDataLengthIndicator => flagsLo & 0x01 != 0;
+  bool get _isV4 => majorVersion >= 4;
+
+  // ── Frame format flags, whose bits moved between v2.3 and v2.4 ──
+  bool get _isCompressed => _isV4 ? flagsLo & 0x08 != 0 : flagsLo & 0x80 != 0;
+  bool get _isEncrypted => _isV4 ? flagsLo & 0x04 != 0 : flagsLo & 0x40 != 0;
+  bool get _isGrouped => _isV4 ? flagsLo & 0x40 != 0 : flagsLo & 0x20 != 0;
+
+  /// v2.4 only. v2.3 unsynchronises the whole tag or nothing.
+  bool get _isUnsynchronised => _isV4 && flagsLo & 0x02 != 0;
+  bool get _hasDataLengthIndicator => _isV4 && flagsLo & 0x01 != 0;
 
   /// True when the payload is in a form this app can't decode. Such frames are
   /// still copied through untouched — only reading them is off the table.
   bool get isOpaque => _isCompressed || _isEncrypted;
 
-  /// The body with v2.4's per-frame wrappers peeled off, ready to parse.
+  /// The body with the per-frame wrappers peeled off, ready to parse.
+  ///
+  /// The extra bytes a flag adds sit in front of the data, in the order the
+  /// flags are listed by the spec: group identifier, then encryption method,
+  /// then the data length indicator. Encrypted frames never reach here — they
+  /// are [isOpaque] — so grouping and the length indicator are what has to come
+  /// off, and grouping was not being stripped at all: its one byte shifted
+  /// every field of the frame by one, so the encoding byte read as part of the
+  /// language and the text decoded as noise.
   Uint8List get decodedBody {
     var data = body;
+    if (_isGrouped && data.isNotEmpty) {
+      data = Uint8List.sublistView(data, 1);
+    }
     if (_hasDataLengthIndicator && data.length >= 4) {
       data = Uint8List.sublistView(data, 4);
     }
@@ -68,6 +94,21 @@ class Id3Frame {
     }
     return data;
   }
+
+  /// The same frame with the v2.4 unsynchronisation flag cleared.
+  ///
+  /// Used when a whole-tag pass has already removed the stuffing: leaving the
+  /// flag set would say "this body is unsynchronised" over bytes that are not,
+  /// so reading it back would strip $00s that were never padding — and the
+  /// writer copies frames verbatim, flags included, so that claim would be
+  /// written into the user's file.
+  Id3Frame withoutUnsynchronisationFlag() => Id3Frame(
+    id: id,
+    body: body,
+    majorVersion: majorVersion,
+    flagsHi: flagsHi,
+    flagsLo: flagsLo & ~0x02,
+  );
 }
 
 /// A parsed ID3v2 tag, plus where the audio starts behind it.
@@ -107,14 +148,14 @@ class Id3Tag {
 
   /// An empty v2.4 tag, for files that arrive with no tag at all.
   factory Id3Tag.empty() => const Id3Tag(
-        majorVersion: 4,
-        revision: 0,
-        frames: [],
-        audioOffset: 0,
-        declaredSize: 0,
-        hadFooter: false,
-        isSupported: true,
-      );
+    majorVersion: 4,
+    revision: 0,
+    frames: [],
+    audioOffset: 0,
+    declaredSize: 0,
+    hadFooter: false,
+    isSupported: true,
+  );
 
   Id3Frame? frameById(String id) {
     for (final frame in frames) {
@@ -134,7 +175,7 @@ class Id3Tag {
     final major = bytes[3];
     final revision = bytes[4];
     final flags = bytes[5];
-    final declaredSize = _readSynchsafe(bytes, 6);
+    final declaredSize = readSynchsafe(bytes, 6);
 
     // Per spec the declared size covers neither the header nor the footer.
     final hadFooter = major >= 4 && (flags & 0x10) != 0;
@@ -188,8 +229,11 @@ class Id3Tag {
     required bool tagUnsynchronised,
   }) {
     if (!tagUnsynchronised) {
-      return _walkFrames(body, majorVersion,
-          skipExtendedHeader: skipExtendedHeader);
+      return _walkFrames(
+        body,
+        majorVersion,
+        skipExtendedHeader: skipExtendedHeader,
+      );
     }
 
     // Reading A: sizes describe the data once the stuffing is gone.
@@ -207,7 +251,13 @@ class Id3Tag {
       unsynchroniseBodies: true,
     );
 
-    return perFrame.length > wholeTag.length ? perFrame : wholeTag;
+    final chosen = perFrame.length > wholeTag.length ? perFrame : wholeTag;
+
+    // Both readings hand back de-unsynchronised bodies, so a frame that also
+    // carried the v2.4 per-frame flag must stop claiming to be unsynchronised —
+    // otherwise it gets de-unsynchronised a second time on the way back in, and
+    // written to the file with a flag its bytes contradict.
+    return [for (final frame in chosen) frame.withoutUnsynchronisationFlag()];
   }
 
   static List<Id3Frame> _walkFrames(
@@ -223,29 +273,36 @@ class Id3Tag {
       // size of the whole extended header, itself included.
       offset += majorVersion == 3
           ? readBigEndian(body, 0) + 4
-          : _readSynchsafe(body, 0);
+          : readSynchsafe(body, 0);
     }
 
     final frames = <Id3Frame>[];
 
     while (offset + 10 <= body.length) {
       final id = String.fromCharCodes(body, offset, offset + 4);
-      if (!_isFrameId(id)) break; // padding, or the tag is corrupt from here
+      if (!isFrameId(id)) break; // padding, or the tag is corrupt from here
 
       final size = majorVersion == 4
-          ? _readSynchsafe(body, offset + 4)
+          ? readSynchsafe(body, offset + 4)
           : readBigEndian(body, offset + 4);
 
       final start = offset + 10;
-      if (size <= 0 || start + size > body.length) break;
+      // A frame of size zero is empty, not the end of the tag. Treating it as
+      // the end abandoned the walk there and lost every frame behind it — the
+      // artwork included, since APIC is usually written last. Some taggers do
+      // emit empty frames, and one of them should not cost the cover.
+      if (size < 0 || start + size > body.length) break;
 
       final raw = Uint8List.sublistView(body, start, start + size);
-      frames.add(Id3Frame(
-        id: id,
-        flagsHi: body[offset + 8],
-        flagsLo: body[offset + 9],
-        body: unsynchroniseBodies ? removeUnsynchronisation(raw) : raw,
-      ));
+      frames.add(
+        Id3Frame(
+          id: id,
+          majorVersion: majorVersion,
+          flagsHi: body[offset + 8],
+          flagsLo: body[offset + 9],
+          body: unsynchroniseBodies ? removeUnsynchronisation(raw) : raw,
+        ),
+      );
 
       offset = start + size;
     }
@@ -366,9 +423,11 @@ class Id3Tag {
     // handed over as raw code units.
     final units = <int>[];
     for (var i = offset; i + 1 < bytes.length; i += 2) {
-      units.add(isBigEndian
-          ? (bytes[i] << 8) | bytes[i + 1]
-          : (bytes[i + 1] << 8) | bytes[i]);
+      units.add(
+        isBigEndian
+            ? (bytes[i] << 8) | bytes[i + 1]
+            : (bytes[i + 1] << 8) | bytes[i],
+      );
     }
     return String.fromCharCodes(units);
   }
@@ -417,7 +476,9 @@ class Id3Tag {
 
   /// Synchsafe: 7 bits per byte, so the value can never contain a $FF that a
   /// decoder would mistake for an MPEG frame sync.
-  static int _readSynchsafe(List<int> bytes, int offset) =>
+  /// Public because the streaming lyrics reader walks frames itself,
+  /// without ever materialising the tag. See Id3Reader.readLyricsFrames.
+  static int readSynchsafe(List<int> bytes, int offset) =>
       ((bytes[offset] & 0x7F) << 21) |
       ((bytes[offset + 1] & 0x7F) << 14) |
       ((bytes[offset + 2] & 0x7F) << 7) |
@@ -444,15 +505,15 @@ class Id3Tag {
   }
 
   static List<int> encodeBigEndian(int value) => [
-        (value >> 24) & 0xFF,
-        (value >> 16) & 0xFF,
-        (value >> 8) & 0xFF,
-        value & 0xFF,
-      ];
+    (value >> 24) & 0xFF,
+    (value >> 16) & 0xFF,
+    (value >> 8) & 0xFF,
+    value & 0xFF,
+  ];
 
   /// Frame IDs are upper-case alphanumeric. Anything else means the walk has
   /// run into padding or off the rails.
-  static bool _isFrameId(String id) {
+  static bool isFrameId(String id) {
     if (id.length != 4) return false;
     for (var i = 0; i < 4; i++) {
       final c = id.codeUnitAt(i);

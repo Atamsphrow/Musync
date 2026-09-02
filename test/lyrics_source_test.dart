@@ -21,16 +21,15 @@ Map<String, dynamic> entry({
   int duration = 200,
   String? synced = '[00:01.00]Une ligne',
   String? plain = 'Une ligne',
-}) =>
-    {
-      'id': id,
-      'trackName': track,
-      'artistName': artist,
-      'albumName': album,
-      'duration': duration,
-      'syncedLyrics': synced,
-      'plainLyrics': plain,
-    };
+}) => {
+  'id': id,
+  'trackName': track,
+  'artistName': artist,
+  'albumName': album,
+  'duration': duration,
+  'syncedLyrics': synced,
+  'plainLyrics': plain,
+};
 
 /// Serves `/get` and `/search` from the given payloads.
 ///
@@ -86,47 +85,54 @@ void main() {
     test('a track returned by both endpoints appears once', () async {
       // The old dedup compared every search hit against the *first* one, so
       // the exact match came back twice.
-      final results = await search(mockLrclib(
-        getPayload: entry(id: 7),
-        searchPayload: [entry(id: 7), entry(id: 8, track: 'Autre')],
-      ));
+      final results = await search(
+        mockLrclib(
+          getPayload: entry(id: 7),
+          searchPayload: [
+            entry(id: 7),
+            entry(id: 8, track: 'Autre'),
+          ],
+        ),
+      );
 
       expect(results.map((r) => r.title), hasLength(2));
       expect(results.where((r) => r.title == 'Ma Chanson'), hasLength(1));
     });
 
     test('the duplicate keeps the higher confidence', () async {
-      final results = await search(mockLrclib(
-        getPayload: entry(id: 7),
-        searchPayload: [entry(id: 7)],
-      ));
+      final results = await search(
+        mockLrclib(getPayload: entry(id: 7), searchPayload: [entry(id: 7)]),
+      );
 
       expect(results.single.confidence, 1.0);
     });
 
     test('results come back best first', () async {
-      final results = await search(mockLrclib(
-        getPayload: null,
-        getStatus: 404,
-        searchPayload: [
-          entry(id: 1, track: 'Vaguement Proche', artist: 'Quelqu\'un'),
-          entry(id: 2),
-        ],
-      ));
+      final results = await search(
+        mockLrclib(
+          getPayload: null,
+          getStatus: 404,
+          searchPayload: [
+            entry(id: 1, track: 'Vaguement Proche', artist: 'Quelqu\'un'),
+            entry(id: 2),
+          ],
+        ),
+      );
 
       expect(results.first.title, 'Ma Chanson');
-      expect(results.first.confidence,
-          greaterThan(results.last.confidence));
+      expect(results.first.confidence, greaterThan(results.last.confidence));
     });
 
     test('a matching duration outranks a mismatched one', () async {
-      final results = await search(mockLrclib(
-        getStatus: 404,
-        searchPayload: [
-          entry(id: 1, duration: 999),
-          entry(id: 2, duration: 200),
-        ],
-      ));
+      final results = await search(
+        mockLrclib(
+          getStatus: 404,
+          searchPayload: [
+            entry(id: 1, duration: 999),
+            entry(id: 2, duration: 200),
+          ],
+        ),
+      );
 
       expect(results.first.confidence, greaterThan(results.last.confidence));
     });
@@ -146,15 +152,17 @@ void main() {
     test('accents survive: the body is decoded as UTF-8', () async {
       // Reading `response.body` instead of `bodyBytes` turns "éàü" into mojibake
       // whenever the server omits the charset — which LRCLIB does.
-      final results = await search(mockLrclib(
-        getPayload: entry(
-          id: 1,
-          track: 'Été à Nîmes',
-          artist: 'Cœur',
-          synced: '[00:01.00]Où êtes-vous ?',
+      final results = await search(
+        mockLrclib(
+          getPayload: entry(
+            id: 1,
+            track: 'Été à Nîmes',
+            artist: 'Cœur',
+            synced: '[00:01.00]Où êtes-vous ?',
+          ),
+          searchPayload: const [],
         ),
-        searchPayload: const [],
-      ));
+      );
 
       expect(results.first.title, 'Été à Nîmes');
       expect(results.first.artist, 'Cœur');
@@ -162,13 +170,12 @@ void main() {
     });
 
     test('parses the LRC into timed lines', () async {
-      final results = await search(mockLrclib(
-        getPayload: entry(
-          id: 1,
-          synced: '[00:01.50]Une\n[00:03.00]Deux',
+      final results = await search(
+        mockLrclib(
+          getPayload: entry(id: 1, synced: '[00:01.50]Une\n[00:03.00]Deux'),
+          searchPayload: const [],
         ),
-        searchPayload: const [],
-      ));
+      );
 
       final lines = results.first.syncedLyrics!.lines;
       expect(lines, hasLength(2));
@@ -177,23 +184,27 @@ void main() {
 
     test('an entry with no lyrics at all is dropped', () async {
       // LRCLIB returns instrumentals with both fields empty.
-      final results = await search(mockLrclib(
-        getStatus: 404,
-        searchPayload: [
-          entry(id: 1, synced: null, plain: null),
-          entry(id: 2),
-        ],
-      ));
+      final results = await search(
+        mockLrclib(
+          getStatus: 404,
+          searchPayload: [
+            entry(id: 1, synced: null, plain: null),
+            entry(id: 2),
+          ],
+        ),
+      );
 
       expect(results, hasLength(1));
       expect(results.single.hasSyncedLyrics, isTrue);
     });
 
     test('a plain-only entry survives, flagged as unsynced', () async {
-      final results = await search(mockLrclib(
-        getPayload: entry(id: 1, synced: null),
-        searchPayload: const [],
-      ));
+      final results = await search(
+        mockLrclib(
+          getPayload: entry(id: 1, synced: null),
+          searchPayload: const [],
+        ),
+      );
 
       expect(results.single.hasSyncedLyrics, isFalse);
       expect(results.single.hasUnsyncedLyrics, isTrue);
@@ -202,10 +213,9 @@ void main() {
 
   group('LrclibSource — failures', () {
     test('404 on /get is "no match", not an error', () async {
-      final results = await search(mockLrclib(
-        getStatus: 404,
-        searchPayload: [entry(id: 1)],
-      ));
+      final results = await search(
+        mockLrclib(getStatus: 404, searchPayload: [entry(id: 1)]),
+      );
 
       expect(results, hasLength(1));
     });
@@ -224,10 +234,7 @@ void main() {
         (request) async => http.Response('pas du json', 200),
       );
 
-      expect(
-        () => search(client),
-        throwsA(isA<LyricsSourceException>()),
-      );
+      expect(() => search(client), throwsA(isA<LyricsSourceException>()));
     });
 
     test('a network drop is raised as a source failure', () async {
@@ -235,19 +242,18 @@ void main() {
         (request) async => throw http.ClientException('connexion perdue'),
       );
 
-      expect(
-        () => search(client),
-        throwsA(isA<LyricsSourceException>()),
-      );
+      expect(() => search(client), throwsA(isA<LyricsSourceException>()));
     });
   });
 
   group('LyricsRepository — multi-source', () {
     test('one failing source does not take the search down', () async {
-      final repo = LyricsRepository(sources: [
-        _FailingSource(),
-        _StubSource([_result('Depuis la source qui marche', 0.9)]),
-      ]);
+      final repo = LyricsRepository(
+        sources: [
+          _FailingSource(),
+          _StubSource([_result('Depuis la source qui marche', 0.9)]),
+        ],
+      );
 
       final results = await repo.searchAll(
         title: query.title,
@@ -257,28 +263,38 @@ void main() {
       expect(results.map((r) => r.title), ['Depuis la source qui marche']);
     });
 
-    test('every source failing does throw — there is nothing to show', () async {
-      final repo = LyricsRepository(sources: [_FailingSource(), _FailingSource()]);
+    test(
+      'every source failing does throw — there is nothing to show',
+      () async {
+        final repo = LyricsRepository(
+          sources: [_FailingSource(), _FailingSource()],
+        );
 
-      expect(
-        () => repo.searchAll(title: query.title, artist: query.artist),
-        throwsA(isA<LyricsSourceException>()),
-      );
-    });
+        expect(
+          () => repo.searchAll(title: query.title, artist: query.artist),
+          throwsA(isA<LyricsSourceException>()),
+        );
+      },
+    );
 
-    test('results from several sources are merged and ranked together', () async {
-      final repo = LyricsRepository(sources: [
-        _StubSource([_result('Moyenne', 0.5)]),
-        _StubSource([_result('Excellente', 0.95)]),
-      ]);
+    test(
+      'results from several sources are merged and ranked together',
+      () async {
+        final repo = LyricsRepository(
+          sources: [
+            _StubSource([_result('Moyenne', 0.5)]),
+            _StubSource([_result('Excellente', 0.95)]),
+          ],
+        );
 
-      final results = await repo.searchAll(
-        title: query.title,
-        artist: query.artist,
-      );
+        final results = await repo.searchAll(
+          title: query.title,
+          artist: query.artist,
+        );
 
-      expect(results.map((r) => r.title), ['Excellente', 'Moyenne']);
-    });
+        expect(results.map((r) => r.title), ['Excellente', 'Moyenne']);
+      },
+    );
 
     test('empty results from a reachable source are not an error', () async {
       final repo = LyricsRepository(sources: [_StubSource(const [])]);
@@ -295,9 +311,89 @@ void main() {
       expect(await repo.searchAll(title: '  ', artist: ''), isEmpty);
     });
   });
+
+  group('one endpoint down is not the source down', () {
+    test('a failing /get still lets /search answer', () async {
+      // The two endpoints are used together on purpose. Letting the exact
+      // lookup throw meant one slow request failed the whole source, even
+      // though the broad search below had the answer.
+      final results = await search(
+        mockLrclib(getStatus: 500, searchPayload: [entry(id: 7)]),
+      );
+
+      expect(results, hasLength(1));
+      expect(results.single.title, 'Ma Chanson');
+    });
+
+    test('both down does throw, with the earlier reason', () async {
+      // Only when there is genuinely nothing to show.
+      await expectLater(
+        search(mockLrclib(getStatus: 500, searchStatus: 500)),
+        throwsA(isA<LyricsSourceException>()),
+      );
+    });
+
+    test('a failing /search alone still throws', () async {
+      await expectLater(
+        search(mockLrclib(getStatus: 404, searchStatus: 503)),
+        throwsA(isA<LyricsSourceException>()),
+      );
+    });
+  });
+
+  group('a source that misbehaves', () {
+    test('an unexpected throw is that source failing, not the search', () async {
+      // `searchAll` caught only LyricsSourceException, so a TypeError from one
+      // source's JSON mapping escaped Future.wait and took down a search the
+      // others could have answered.
+      final repository = LyricsRepository(
+        sources: [_ExplodingSource(), _FixedSource()],
+      );
+
+      final results = await repository.searchAll(
+        title: query.title,
+        artist: query.artist,
+      );
+
+      expect(results, hasLength(1));
+      expect(results.single.source, 'fiable');
+    });
+
+    test('every source misbehaving is reported, not swallowed', () async {
+      final repository = LyricsRepository(sources: [_ExplodingSource()]);
+
+      await expectLater(
+        repository.searchAll(title: query.title, artist: query.artist),
+        throwsA(isA<LyricsSourceException>()),
+      );
+    });
+
+    test(
+      'equal confidence keeps the order the sources were listed in',
+      () async {
+        // `List.sort` is not stable, so two equally confident hits could swap
+        // between one search and the next for no reason a user could see.
+        final repository = LyricsRepository(
+          sources: [
+            _FixedSource(name: 'premiere'),
+            _FixedSource(name: 'seconde'),
+          ],
+        );
+
+        for (var i = 0; i < 5; i++) {
+          final results = await repository.searchAll(
+            title: query.title,
+            artist: query.artist,
+          );
+          expect(results.map((r) => r.source), ['premiere', 'seconde']);
+        }
+      },
+    );
+  });
 }
 
-LyricsSearchResult _result(String title, double confidence) => LyricsSearchResult(
+LyricsSearchResult _result(String title, double confidence) =>
+    LyricsSearchResult(
       source: 'Test',
       title: title,
       artist: 'Artiste',
@@ -321,8 +417,7 @@ class _StubSource extends LyricsSource {
     required String artist,
     String? album,
     int? durationMs,
-  }) async =>
-      results;
+  }) async => results;
 }
 
 class _FailingSource extends LyricsSource {
@@ -335,6 +430,43 @@ class _FailingSource extends LyricsSource {
     required String artist,
     String? album,
     int? durationMs,
-  }) async =>
-      throw const LyricsSourceException('Cassée', 'injoignable');
+  }) async => throw const LyricsSourceException('Cassée', 'injoignable');
+}
+
+/// Throws something the sources are not supposed to throw.
+class _ExplodingSource implements LyricsSource {
+  @override
+  String get name => 'explosive';
+
+  @override
+  Future<List<LyricsSearchResult>> search({
+    required String title,
+    required String artist,
+    String? album,
+    int? durationMs,
+  }) async => throw StateError('reponse inattendue du serveur');
+}
+
+/// Always answers, with a fixed confidence.
+class _FixedSource implements LyricsSource {
+  @override
+  final String name;
+
+  _FixedSource({this.name = 'fiable'});
+
+  @override
+  Future<List<LyricsSearchResult>> search({
+    required String title,
+    required String artist,
+    String? album,
+    int? durationMs,
+  }) async => [
+    LyricsSearchResult(
+      source: name,
+      title: title,
+      artist: artist,
+      unsyncedLyrics: const UnsyncedLyrics('Des mots'),
+      confidence: 0.6,
+    ),
+  ];
 }

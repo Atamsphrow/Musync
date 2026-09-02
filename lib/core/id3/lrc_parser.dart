@@ -12,13 +12,36 @@ class LrcParser {
   LrcParser._();
 
   /// `[mm:ss]`, `[mm:ss.cc]` or `[mm:ss.mmm]`.
-  static final RegExp _timestamp =
-      RegExp(r'\[(\d{1,3}):([0-5]?\d)(?:[.:](\d{1,3}))?\]');
+  static final RegExp _timestamp = RegExp(
+    r'\[(\d{1,3}):([0-5]?\d)(?:[.:](\d{1,3}))?\]',
+  );
 
   /// `[ar:...]`, `[offset:-500]` — metadata rather than a timed line. Matched
   /// on shape (letters, then a colon) so unlisted tags don't leak into the
   /// lyrics as text.
   static final RegExp _metadata = RegExp(r'^\[([a-zA-Z_]+):(.*)\]$');
+
+  /// Leading run of timestamps, which is the only place they mean anything.
+  ///
+  /// A `[00:02.00]` mid-sentence is a lyric, not a cue — the parser makes the
+  /// same distinction, and stripping has to agree with it or the two would
+  /// disagree about where the words start.
+  static final RegExp _leadingTimestamps = RegExp(
+    r'^(?:\s*\[\d{1,3}:[0-5]?\d(?:[.:]\d{1,3})?\])+',
+  );
+
+  /// Strips the `[mm:ss.xx]` prefixes and keeps every line.
+  ///
+  /// Not the same job as [parse], which keeps only the timed lines. A line
+  /// without a timestamp — a `[Refrain]` marker — belongs to the words and has
+  /// to survive, so this is what turns an LRC-bearing USLT into something a
+  /// person can actually read.
+  static String stripTimestamps(String text) {
+    return text
+        .split('\n')
+        .map((line) => line.replaceFirst(_leadingTimestamps, '').trim())
+        .join('\n');
+  }
 
   static SyncedLyrics parse(String lrcContent) {
     final lyricLines = <LyricLine>[];
@@ -42,10 +65,17 @@ class LrcParser {
       // Only the run of timestamps at the head of the row belongs to it. A
       // `[00:12]` further in is part of the lyric — a spoken aside, a stage
       // direction — and consuming it would swallow the words before it.
+      //
+      // Whitespace *between* two leading timestamps is still part of that run.
+      // `[00:01.00] [00:05.00]Texte` is one line sung twice, and it is a shape
+      // that turns up in downloaded files. Requiring them to be adjacent left
+      // the second bracket sitting in the words — the very T11 symptom — and
+      // dropped one of the two timings. It also put this out of step with
+      // [stripTimestamps], which has always allowed the space.
       final matches = <RegExpMatch>[];
       var cursor = 0;
       for (final match in _timestamp.allMatches(line)) {
-        if (match.start != cursor) break;
+        if (line.substring(cursor, match.start).trim().isNotEmpty) break;
         matches.add(match);
         cursor = match.end;
       }
@@ -55,10 +85,12 @@ class LrcParser {
 
       for (final match in matches) {
         final stamp = _toDuration(match) + offset;
-        lyricLines.add(LyricLine(
-          timestamp: stamp.isNegative ? Duration.zero : stamp,
-          text: text,
-        ));
+        lyricLines.add(
+          LyricLine(
+            timestamp: stamp.isNegative ? Duration.zero : stamp,
+            text: text,
+          ),
+        );
       }
     }
 
@@ -88,7 +120,8 @@ class LrcParser {
 
   static String generate(SyncedLyrics lyrics) {
     return lyrics.lines
-        .map((line) => '[${formatTimestamp(line.timestamp)}]${line.text}')
+        // Non-null throughout: SyncedLyrics holds only timed lines.
+        .map((line) => '[${formatTimestamp(line.timestamp!)}]${line.text}')
         .join('\n');
   }
 
@@ -96,8 +129,10 @@ class LrcParser {
   static String formatTimestamp(Duration d) {
     final minutes = d.inMinutes.toString().padLeft(2, '0');
     final seconds = (d.inSeconds % 60).toString().padLeft(2, '0');
-    final centiseconds =
-        ((d.inMilliseconds % 1000) ~/ 10).toString().padLeft(2, '0');
+    final centiseconds = ((d.inMilliseconds % 1000) ~/ 10).toString().padLeft(
+      2,
+      '0',
+    );
     return '$minutes:$seconds.$centiseconds';
   }
 }

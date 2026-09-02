@@ -53,7 +53,8 @@ class PermissionService {
   /// that the inapplicable one does not come back "unavailable" — it comes back
   /// *permanently denied*, which the result below has to account for.
   static Future<PermissionOutcome> _requestAudioAccess() async {
-    if (await Permission.audio.isGranted || await Permission.storage.isGranted) {
+    if (await Permission.audio.isGranted ||
+        await Permission.storage.isGranted) {
       return PermissionOutcome.granted;
     }
 
@@ -82,7 +83,8 @@ class PermissionService {
 
   static Future<bool> hasAudioAccess() async {
     if (!Platform.isAndroid) return true;
-    return await Permission.audio.isGranted || await Permission.storage.isGranted;
+    return await Permission.audio.isGranted ||
+        await Permission.storage.isGranted;
   }
 
   // ── Write access ──

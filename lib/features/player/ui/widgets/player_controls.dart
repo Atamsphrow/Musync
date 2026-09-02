@@ -19,8 +19,9 @@ class PlayerControls extends ConsumerWidget {
 
     final isPlaying = playerStateAsync.value?.playing ?? false;
 
-    final repeatIcon =
-        loopMode == LoopMode.one ? Icons.repeat_one : Icons.repeat;
+    final repeatIcon = loopMode == LoopMode.one
+        ? Icons.repeat_one
+        : Icons.repeat;
     final repeatColor = loopMode == LoopMode.off
         ? scheme.onSurfaceVariant
         : scheme.primary;

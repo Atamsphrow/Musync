@@ -8,17 +8,21 @@ final musicScannerProvider = Provider<MusicScanner>((ref) => MusicScanner());
 /// Set when the audio permission is refused, so the library screen can show
 /// the "grant access" state instead of an empty list that looks like the phone
 /// has no music on it.
-final libraryPermissionDeniedProvider =
-    StateProvider<PermissionOutcome?>((ref) => null);
+final libraryPermissionDeniedProvider = StateProvider<PermissionOutcome?>(
+  (ref) => null,
+);
 
 /// How the library is ordered. Sorting is state rather than a one-off mutation
 /// so it survives a rescan.
 enum LibrarySort { title, artist, album }
 
-final librarySortProvider = StateProvider<LibrarySort>((ref) => LibrarySort.title);
+final librarySortProvider = StateProvider<LibrarySort>(
+  (ref) => LibrarySort.title,
+);
 
-final songListProvider =
-    AsyncNotifierProvider<SongListNotifier, List<Song>>(SongListNotifier.new);
+final songListProvider = AsyncNotifierProvider<SongListNotifier, List<Song>>(
+  SongListNotifier.new,
+);
 
 class SongListNotifier extends AsyncNotifier<List<Song>> {
   @override
@@ -48,12 +52,15 @@ class SongListNotifier extends AsyncNotifier<List<Song>> {
 
   static List<Song> _sorted(List<Song> songs, LibrarySort sort) {
     final compare = switch (sort) {
-      LibrarySort.title => (Song a, Song b) =>
-          a.title.toLowerCase().compareTo(b.title.toLowerCase()),
-      LibrarySort.artist => (Song a, Song b) =>
-          a.artist.toLowerCase().compareTo(b.artist.toLowerCase()),
-      LibrarySort.album => (Song a, Song b) =>
-          a.album.toLowerCase().compareTo(b.album.toLowerCase()),
+      LibrarySort.title => (Song a, Song b) => a.title.toLowerCase().compareTo(
+        b.title.toLowerCase(),
+      ),
+      LibrarySort.artist =>
+        (Song a, Song b) =>
+            a.artist.toLowerCase().compareTo(b.artist.toLowerCase()),
+      LibrarySort.album => (Song a, Song b) => a.album.toLowerCase().compareTo(
+        b.album.toLowerCase(),
+      ),
     };
     return List<Song>.from(songs)..sort(compare);
   }

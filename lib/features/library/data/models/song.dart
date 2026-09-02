@@ -30,13 +30,11 @@ class Song {
     this.albumId,
   });
 
-  /// MediaStore's album-art URI, for the media notification.
-  ///
-  /// `audio_service` resolves this itself, so no bytes need to cross into Dart
-  /// just to show a thumbnail on the lock screen.
-  Uri? get artworkUri => albumId == null
-      ? null
-      : Uri.parse('content://media/external/audio/albumart/$albumId');
+  // There was an `artworkUri` here, building
+  // `content://media/external/audio/albumart/<albumId>`. It is gone: that
+  // provider was removed in Android 10, so the address resolved to nothing and
+  // the media notification was asked to fetch an image that cannot exist.
+  // Cover art now comes out of the tag — see ArtworkCache.
 
   Duration get durationValue => Duration(milliseconds: duration);
 

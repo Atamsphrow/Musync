@@ -2,7 +2,7 @@ name: musync
 description: "Musync — Lecteur de musique local et gestionnaire de paroles synchronisées"
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 2.14.0+21400
 
 environment:
   sdk: ^3.12.2
@@ -21,6 +21,20 @@ dependencies:
   just_audio: ^0.9.43
   audio_service: ^0.18.17
   just_audio_background: ^0.0.1-beta.14
+
+  # Direct, not transitive, because main.dart names JustAudioPlatform: the one
+  # fact that decides whether a media notification can exist is whether
+  # just_audio_background has actually replaced the platform instance, and the
+  # app now checks and reports it. Depending on a package you reference is the
+  # rule; leaving it transitive would be a lint and a landmine on the next
+  # `pub upgrade`.
+  just_audio_platform_interface: ^4.6.0
+
+  # Direct for the same reason: `core/utils/atomic_file.dart` names Lock. The six
+  # places that replace a file's contents now serialise per path, after the
+  # user's own debug log caught two overlapping writes fighting over one temp
+  # file.
+  synchronized: ^3.4.0
 
   # Music library scan (MediaStore).
   #
@@ -51,3 +65,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    # The owner's avatar, shown in the About box. Declared as a directory rather
+    # than a file so the build does not depend on it being there: the code falls
+    # back to the generic silhouette when the image is missing.
+    - assets/images/

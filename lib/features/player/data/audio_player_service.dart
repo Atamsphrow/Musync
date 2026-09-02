@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
+import 'package:musync/core/services/audio_backend_check.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/player/data/artwork_cache.dart';
 
 /// Wraps [AudioPlayer] and owns the playback queue.
 ///
@@ -14,14 +18,39 @@ class AudioPlayerService {
   List<Song> _queue = const [];
   Song? _currentSong;
 
+  final StreamController<Song?> _currentSongController =
+      StreamController<Song?>.broadcast();
+
+  /// Held so it can be cancelled before the controller closes — see [dispose].
+  late final StreamSubscription<int?> _indexSubscription;
+
   AudioPlayerService() : _player = AudioPlayer() {
     // The player drives the current index, not the other way round: skipping
     // from the notification or the lock screen never passes through this class.
-    _player.currentIndexStream.listen((index) {
+    _indexSubscription = _player.currentIndexStream.listen((index) {
       if (index != null && index >= 0 && index < _queue.length) {
-        _currentSong = _queue[index];
+        _setCurrentSong(_queue[index]);
       }
     });
+  }
+
+  /// Emits whenever the playing track actually changes.
+  ///
+  /// A dedicated stream rather than something derived from the index, because
+  /// the index is not enough to tell: playing the first track of one list and
+  /// then the first track of another emits `0` twice. Nothing downstream saw a
+  /// change, so the mini player and the now-playing screen kept showing the
+  /// previous track while the audio had already moved on.
+  Stream<Song?> get currentSongStream => _currentSongController.stream;
+
+  /// Single point where the current track changes, so no path can move the
+  /// audio without telling the UI.
+  void _setCurrentSong(Song? song) {
+    if (song == _currentSong) return;
+    _currentSong = song;
+    // Guarded: `add` on a closed controller throws, and the player can emit one
+    // last index while it is being torn down.
+    if (!_currentSongController.isClosed) _currentSongController.add(song);
   }
 
   Song? get currentSong => _currentSong;
@@ -44,18 +73,51 @@ class AudioPlayerService {
   /// Rebuilding the audio source is expensive and restarts playback, so a call
   /// that only re-selects a song already in the current queue seeks instead.
   Future<void> playSong(Song song, {List<Song>? queue, int? index}) async {
-    final newQueue = queue ?? (_queue.contains(song) ? _queue : [..._queue, song]);
+    final newQueue =
+        queue ?? (_queue.contains(song) ? _queue : [..._queue, song]);
     final resolvedIndex = _resolveIndex(newQueue, song, index);
 
-    final sameQueue = _listEquals(newQueue, _queue) && _player.audioSource != null;
+    final sameQueue =
+        _listEquals(newQueue, _queue) && _player.audioSource != null;
     if (sameQueue) {
+      // Announce the move before seeking. `currentIndexStream` will report it
+      // too, but only once the player gets there — and not at all when the
+      // index happens to be unchanged. Leaving it to that stream is what left
+      // the old track on screen after picking a different one from the same
+      // list.
+      _setCurrentSong(newQueue.isEmpty ? null : newQueue[resolvedIndex]);
       await _player.seek(Duration.zero, index: resolvedIndex);
       await _player.play();
       return;
     }
 
+    // Before the audio source is built, and therefore before just_audio
+    // resolves the platform for the first time.
+    //
+    // This is the moment that decided whether a media notification could ever
+    // exist, and it was being lost: the platform is resolved lazily on the
+    // first load, by which time the plugin registrant has re-run and replaced
+    // the background wrapper with the plain one. Restoring it here is what puts
+    // playback back through audio_service.
+    AudioBackendCheck.ensureIntercepted();
+
     _queue = List.unmodifiable(newQueue);
-    _currentSong = _queue.isEmpty ? null : _queue[resolvedIndex];
+    final target = _queue.isEmpty ? null : _queue[resolvedIndex];
+    _setCurrentSong(target);
+
+    // The track about to play, plus a short run behind it.
+    //
+    // A `MediaItem` is fixed when the source is built, so a track whose artwork
+    // is not in the cache by now will show none in the notification for this
+    // whole queue — even after the player advances to it. Extracting only the
+    // first track therefore meant every automatic advance lost its thumbnail.
+    //
+    // Extracting the whole queue is not the answer either: a play from the
+    // library hands over every track on the phone, and reading a cover out of
+    // each before a single note sounds would take seconds. So a window, and a
+    // small one — the cache keys by album, so an album queue costs exactly one
+    // read and a shuffled one costs at most [_artworkLookahead].
+    await _warmArtwork(resolvedIndex);
 
     await _player.setAudioSource(
       ConcatenatingAudioSource(
@@ -74,19 +136,38 @@ class AudioPlayerService {
     return found >= 0 ? found : 0;
   }
 
-  static AudioSource _toSource(Song song) => AudioSource.file(
-        song.filePath,
-        tag: MediaItem(
-          // MediaItem ids must be unique within the queue; the MediaStore id
-          // already is.
-          id: song.id.toString(),
-          title: song.title,
-          artist: song.artist,
-          album: song.album,
-          duration: song.durationValue,
-          artUri: song.artworkUri,
-        ),
-      );
+  /// Cover art for the notification, pulled from the tag rather than from
+  /// MediaStore's removed album-art provider. See [ArtworkCache].
+  final ArtworkCache _artwork = ArtworkCache();
+
+  /// How many tracks past the one being started get their cover read now.
+  ///
+  /// Enough to cover a few automatic advances, which is where the thumbnail
+  /// used to disappear. Keyed by album inside the cache, so this is four reads
+  /// in the worst case and one for an album played in order.
+  static const int _artworkLookahead = 4;
+
+  /// Reads the covers the queue is about to need, ignoring failures.
+  Future<void> _warmArtwork(int from) async {
+    final end = (from + _artworkLookahead).clamp(0, _queue.length);
+    for (var i = from.clamp(0, _queue.length); i < end; i++) {
+      await _artwork.extract(_queue[i]);
+    }
+  }
+
+  AudioSource _toSource(Song song) => AudioSource.file(
+    song.filePath,
+    tag: MediaItem(
+      // MediaItem ids must be unique within the queue; the MediaStore id
+      // already is.
+      id: song.id.toString(),
+      title: song.title,
+      artist: song.artist,
+      album: song.album,
+      duration: song.durationValue,
+      artUri: _artwork.cached(song),
+    ),
+  );
 
   static bool _listEquals(List<Song> a, List<Song> b) {
     if (identical(a, b)) return true;
@@ -139,7 +220,15 @@ class AudioPlayerService {
     await _player.setLoopMode(next);
   }
 
-  void dispose() {
-    _player.dispose();
+  /// Order matters here.
+  ///
+  /// Closing the controller first left the index subscription alive over a
+  /// closed sink: one last event from the player being torn down called `add`
+  /// on it and threw `Cannot add new events after calling close` from inside a
+  /// stream callback, where nothing was waiting to catch it.
+  Future<void> dispose() async {
+    await _indexSubscription.cancel();
+    await _player.dispose();
+    await _currentSongController.close();
   }
 }

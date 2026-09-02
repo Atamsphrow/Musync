@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The plate behind the adaptive icon's foreground.
+
+      Sampled from logo.ico itself (rgb(30, 34, 42)) rather than picked to
+      taste: the foreground is the artwork's full square, its own dark ground
+      included, so any other value would draw a visible edge around it once the
+      launcher masks the icon to its shape.
+    -->
+    <color name="ic_launcher_background">#1E222A</color>
+</resources>

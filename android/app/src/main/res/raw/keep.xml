@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Resources the shrinker must not remove.
+
+  A release build runs R8 and the resource shrinker, which keep only what they
+  can see referenced from code or from another resource. Everything listed here
+  is named to Android as a *string*, from Dart, which the shrinker cannot follow.
+
+  `ic_notification` is Musync's own: the small icon handed to
+  `JustAudioBackground.init`.
+
+  `audio_service_*` are the seven media-control icons that ship inside the
+  audio_service package, referenced from `MediaControl.androidIcon` — strings
+  like 'drawable/audio_service_play_arrow'. All seven were being deleted, and
+  that is what kept the media notification from ever appearing:
+
+    W System.err: java.lang.IllegalArgumentException:
+      You must specify an icon resource id to build a CustomAction
+
+  `AudioService.getResourceId` resolved each name to 0, building the playback
+  state's actions threw, and `enterPlayingState()` never reached
+  `startForeground`. So no notification, no lock-screen controls, and no
+  notification channel was ever even created — while the audio itself played
+  perfectly, because just_audio does not go through any of this. Nothing was
+  logged on the Dart side, because the throw was on the Java one.
+
+  Release builds only, which is why it survived every test and every debug run.
+
+  Anything else Musync ever names from Dart rather than from code belongs here
+  too.
+-->
+<resources
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_notification,@drawable/audio_service_*" />

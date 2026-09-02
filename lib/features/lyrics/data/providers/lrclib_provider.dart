@@ -13,7 +13,10 @@ import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.
 /// when the duration is known, `/search` casts a wider net for when the file's
 /// tags are wrong. Their results overlap, so they are merged by track id.
 class LrclibSource extends LyricsSource {
-  static const String _baseUrl = 'https://lrclib.net/api';
+  /// The public instance. LRCLIB is self-hostable and its API is documented, so
+  /// pointing this at another deployment is all a "custom source" needs to be
+  /// (plan P5) — see [LrclibSource.custom].
+  static const String defaultBaseUrl = 'https://lrclib.net/api';
 
   /// LRCLIB asks clients to identify themselves so it can contact maintainers
   /// about misbehaving apps rather than just blocking them.
@@ -28,10 +31,32 @@ class LrclibSource extends LyricsSource {
 
   final http.Client _client;
 
-  LrclibSource({http.Client? client}) : _client = client ?? http.Client();
+  /// Where to send requests. Always an LRCLIB-shaped API.
+  final String baseUrl;
 
+  /// A final field satisfies the abstract getter on [LyricsSource], which keeps
+  /// the name settable per instance without a second accessor.
   @override
-  String get name => 'LRCLIB';
+  final String name;
+
+  LrclibSource({http.Client? client})
+    : _client = client ?? http.Client(),
+      baseUrl = defaultBaseUrl,
+      name = 'LRCLIB';
+
+  /// Another LRCLIB deployment, named by the user.
+  ///
+  /// Deliberately not "any lyrics API": a source has to return something this
+  /// code can read, and describing an arbitrary JSON shape through a settings
+  /// form would be both a large feature and an unusable one. LRCLIB is
+  /// self-hostable and mirrored, so pointing at a different instance is the
+  /// version of "custom source" that actually works — and anything genuinely
+  /// different is a `LyricsSource` subclass, which is a ten-line file.
+  LrclibSource.custom({
+    required this.name,
+    required this.baseUrl,
+    http.Client? client,
+  }) : _client = client ?? http.Client();
 
   @override
   Future<List<LyricsSearchResult>> search({
@@ -62,22 +87,45 @@ class LrclibSource extends LyricsSource {
 
     // 1. Exact lookup. Only possible with a duration, and 404 simply means
     //    LRCLIB has nothing for this exact recording — not an error.
+    //
+    //    A failure here does not end the search. The two endpoints are used
+    //    together on purpose, and letting this one throw meant a single slow
+    //    exact lookup failed the source outright — even though the broad search
+    //    below would have answered. The reason is kept in case *both* fail.
+    LyricsSourceException? exactFailure;
     if (durationMs != null && durationMs > 0) {
-      final exact = await _getJson(Uri.parse('$_baseUrl/get').replace(
-        queryParameters: {
-          'artist_name': artist,
-          'track_name': title,
-          if (album != null && album.isNotEmpty) 'album_name': album,
-          'duration': (durationMs ~/ 1000).toString(),
-        },
-      ));
-      if (exact is Map<String, dynamic>) collect(exact, 1.0);
+      try {
+        final exact = await _getJson(
+          Uri.parse('$baseUrl/get').replace(
+            queryParameters: {
+              'artist_name': artist,
+              'track_name': title,
+              if (album != null && album.isNotEmpty) 'album_name': album,
+              'duration': (durationMs ~/ 1000).toString(),
+            },
+          ),
+        );
+        if (exact is Map<String, dynamic>) collect(exact, 1.0);
+      } on LyricsSourceException catch (e) {
+        exactFailure = e;
+      }
     }
 
     // 2. Broad search, to cover files whose tags don't line up with LRCLIB's.
-    final found = await _getJson(Uri.parse('$_baseUrl/search').replace(
-      queryParameters: {'artist_name': artist, 'track_name': title},
-    ));
+    final Object? found;
+    try {
+      found = await _getJson(
+        Uri.parse('$baseUrl/search').replace(
+          queryParameters: {'artist_name': artist, 'track_name': title},
+        ),
+      );
+    } on LyricsSourceException catch (e) {
+      // Both endpoints failed, so the source really is unusable. The exact
+      // lookup's reason comes first when there is one: it was the earlier
+      // failure, and the two are almost always the same cause anyway.
+      throw exactFailure ?? e;
+    }
+
     if (found is List) {
       for (final item in found) {
         if (item is! Map<String, dynamic>) continue;
@@ -103,8 +151,7 @@ class LrclibSource extends LyricsSource {
     } on TimeoutException catch (e) {
       throw LyricsSourceException(name, 'LRCLIB ne répond pas.', e);
     } on SocketException catch (e) {
-      throw LyricsSourceException(
-          name, 'Pas de connexion internet.', e);
+      throw LyricsSourceException(name, 'Pas de connexion internet.', e);
     } on http.ClientException catch (e) {
       throw LyricsSourceException(name, 'Connexion à LRCLIB impossible.', e);
     }

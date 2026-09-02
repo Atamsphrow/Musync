@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:musync/core/utils/snackbar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:musync/core/router/app_router.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
+import 'package:musync/features/settings/providers/ai_settings_provider.dart';
+import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/lyrics/providers/search_provider.dart';
 import 'package:musync/features/lyrics/ui/embed_lyrics_action.dart';
 
@@ -22,10 +24,16 @@ class LyricsSearchScreen extends ConsumerStatefulWidget {
 }
 
 class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
-  late final TextEditingController _titleController =
-      TextEditingController(text: widget.song.title);
-  late final TextEditingController _artistController =
-      TextEditingController(text: widget.song.artist);
+  late final TextEditingController _titleController = TextEditingController(
+    text: widget.song.title,
+  );
+  late final TextEditingController _artistController = TextEditingController(
+    text: widget.song.artist,
+  );
+
+  /// True while a model is being asked. It can take a few seconds, and a
+  /// button that looks idle invites a second press.
+  bool _guessing = false;
 
   @override
   void initState() {
@@ -38,6 +46,94 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
     _titleController.dispose();
     _artistController.dispose();
     super.dispose();
+  }
+
+  /// Rewrites the two fields from what the file is called.
+  ///
+  /// For the common case where the tags are wrong — a library built from
+  /// downloads is full of tracks whose artist is "Unknown" and whose title is
+  /// the whole file name, decoration and all — while the name itself says
+  /// perfectly clearly who and what.
+  ///
+  /// Only the fields are touched. Nothing reaches the file until the user picks
+  /// a result, so a wrong guess costs one correction, not a bad tag.
+  Future<void> _fillFromFilename() async {
+    final messenger = ScaffoldMessenger.of(context);
+
+    // The heuristic first, always. It costs nothing, needs no network, and is
+    // right on the regular shapes — so it is both the answer and the fallback.
+    var guess = FilenameParser.parse(widget.song.filePath);
+    // Which model answered, or null when the heuristic's answer is the one being
+    // shown. Named rather than a bare flag because with a fallback chain the
+    // provider that answered is not necessarily the first one configured.
+    String? answeredBy;
+
+    final settings = ref.read(aiSettingsProvider).valueOrNull;
+    final resolver = ref.read(aiFilenameResolverProvider);
+    final statuses = ref.read(aiProviderStatusProvider.notifier);
+
+    if (settings != null && settings.usable.isNotEmpty) {
+      setState(() => _guessing = true);
+      // Every configured model in turn, stopping at the first that answers.
+      // One broken provider no longer takes the feature down with it, and no
+      // longer produces a snackbar on every press — the intermediate failures
+      // go to the log, and the user hears about it only if none of them work.
+      final resolution = await resolver.resolve(
+        settings: settings,
+        fileName: widget.song.filePath.split(RegExp(r'[/\\]')).last,
+      );
+      // Feeds the per-provider indicators in Paramètres › IA, so the answer to
+      // "which of my keys works" lives next to the keys.
+      statuses.recordAttempts(resolution.attempts);
+
+      if (resolution.answered) {
+        guess = resolution.guess!;
+        answeredBy = resolution.providerName;
+      } else if (resolution.allFailed) {
+        // The heuristic's answer still goes into the fields below; this only
+        // says why the model did not get a say.
+        messenger.showOnly(
+          SnackBar(
+            content: Text(
+              'Aucun modèle n\'a répondu. Analyse locale utilisée. '
+              '${resolution.failureSummary}',
+            ),
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+
+      if (mounted) setState(() => _guessing = false);
+    }
+
+    if (!mounted) return;
+
+    if (guess.title.isEmpty && guess.artist.isEmpty) {
+      messenger.showOnly(
+        const SnackBar(
+          content: Text('Le nom du fichier ne dit rien d’exploitable.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      if (guess.title.isNotEmpty) _titleController.text = guess.title;
+      if (guess.artist.isNotEmpty) _artistController.text = guess.artist;
+    });
+
+    // Said out loud, because the fields may have been right already and the
+    // user needs to see that something happened — and where it came from.
+    final source = answeredBy == null ? '' : '$answeredBy : ';
+    messenger.showOnly(
+      SnackBar(
+        content: Text(
+          guess.artist.isEmpty
+              ? '${source}titre deviné, pas d’artiste dans le nom.'
+              : '$source${guess.artist} — ${guess.title}',
+        ),
+      ),
+    );
   }
 
   void _search() {
@@ -64,25 +160,39 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             child: Column(
               children: [
-                TextField(
+                _ClearableField(
                   controller: _titleController,
+                  label: 'Titre',
+                  icon: Icons.music_note,
                   textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(
-                    labelText: 'Titre',
-                    prefixIcon: Icon(Icons.music_note),
-                  ),
                 ),
                 const SizedBox(height: 12),
-                TextField(
+                _ClearableField(
                   controller: _artistController,
+                  label: 'Artiste',
+                  icon: Icons.person_outline,
                   textInputAction: TextInputAction.search,
                   onSubmitted: (_) => _search(),
-                  decoration: const InputDecoration(
-                    labelText: 'Artiste',
-                    prefixIcon: Icon(Icons.person_outline),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: _guessing ? null : _fillFromFilename,
+                    icon: _guessing
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.auto_fix_high, size: 18),
+                    label: Text(
+                      _guessing
+                          ? 'Le modèle réfléchit…'
+                          : 'Deviner depuis le nom du fichier',
+                    ),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 4),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
@@ -128,7 +238,8 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
       return const _Message(
         icon: Icons.search_off,
         title: 'Aucun résultat',
-        message: 'Vérifiez le titre et l\'artiste, puis relancez la recherche. '
+        message:
+            'Vérifiez le titre et l\'artiste, puis relancez la recherche. '
             'Les tags du fichier sont parfois incomplets.',
       );
     }
@@ -140,7 +251,11 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
         final result = results[index];
         return Card(
           child: ListTile(
-            title: Text(result.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+            title: Text(
+              result.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
             subtitle: Text(
               '${result.artist} • ${result.source}',
               maxLines: 1,
@@ -182,35 +297,32 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
     BuildContext sheetContext,
     LyricsSearchResult result,
   ) async {
-    final saved = await embedLyrics(
+    // One message, not two.
+    //
+    // This screen used to show its own confirmation on top of the one
+    // `embedLyrics` shows, so picking a result produced two stacked banners
+    // saying much the same thing — and the second hid the first's action.
+    // The wording is handed over instead; the undo comes with it.
+    //
+    // The "Ajuster" shortcut that used to live here is the casualty: a snackbar
+    // carries one action, and between adjusting timings and undoing a write to
+    // the user's own file, the way back matters more. The sync editor is still
+    // one tap away from the player.
+    final outcome = await embedLyrics(
       context,
       ref,
       filePath: widget.song.filePath,
       synced: result.syncedLyrics,
       unsynced: result.unsyncedLyrics,
+      successMessage: result.hasSyncedLyrics
+          ? '${result.syncedLyrics!.length} lignes calées enregistrées.'
+          : 'Paroles enregistrées dans le fichier.',
     );
-    if (!saved || !mounted) return;
+    if (outcome != EmbedOutcome.written || !mounted) return;
 
     if (sheetContext.mounted) Navigator.pop(sheetContext);
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('Paroles enregistrées dans le fichier.'),
-        // Timing is the natural next step for a synced result, so offer it
-        // instead of making the user walk back through the player.
-        action: result.hasSyncedLyrics
-            ? SnackBarAction(
-                label: 'Ajuster',
-                onPressed: () => Navigator.pushNamed(
-                  context,
-                  AppRoutes.syncEditor,
-                  arguments: SongRouteArgs(song: widget.song),
-                ),
-              )
-            : null,
-      ),
-    );
     Navigator.pop(context);
   }
 }
@@ -243,8 +355,9 @@ class _PreviewSheet extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   '${result.artist}${result.album != null ? ' • ${result.album}' : ''}',
-                  style: textTheme.bodySmall
-                      ?.copyWith(color: scheme.onSurfaceVariant),
+                  style: textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
@@ -255,8 +368,10 @@ class _PreviewSheet extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: SelectableText(
                 body,
-                style: textTheme.bodyMedium
-                    ?.copyWith(color: scheme.onSurfaceVariant, height: 1.5),
+                style: textTheme.bodyMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  height: 1.5,
+                ),
               ),
             ),
           ),
@@ -308,11 +423,57 @@ class _Message extends StatelessWidget {
             Text(
               message,
               textAlign: TextAlign.center,
-              style: textTheme.bodyMedium
-                  ?.copyWith(color: scheme.onSurfaceVariant),
+              style: textTheme.bodyMedium?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
             ),
             if (action != null) ...[const SizedBox(height: 24), action!],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A text field with a clear button (plan P6).
+///
+/// The button appears only once there is something to clear, so an empty form
+/// isn't cluttered with two dead crosses. It watches the controller rather than
+/// keeping its own copy of the text: one source of truth, and no listener to
+/// register and tear down by hand.
+class _ClearableField extends StatelessWidget {
+  final TextEditingController controller;
+  final String label;
+  final IconData icon;
+  final TextInputAction textInputAction;
+  final ValueChanged<String>? onSubmitted;
+
+  const _ClearableField({
+    required this.controller,
+    required this.label,
+    required this.icon,
+    required this.textInputAction,
+    this.onSubmitted,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) => TextField(
+        controller: controller,
+        textInputAction: textInputAction,
+        onSubmitted: onSubmitted,
+        decoration: InputDecoration(
+          labelText: label,
+          prefixIcon: Icon(icon),
+          suffixIcon: value.text.isEmpty
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.clear),
+                  tooltip: 'Effacer',
+                  onPressed: controller.clear,
+                ),
         ),
       ),
     );
