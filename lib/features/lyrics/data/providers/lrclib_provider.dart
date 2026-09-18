@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:musync/core/app_info.dart';
 import 'package:musync/core/id3/lrc_parser.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
@@ -20,8 +21,15 @@ class LrclibSource extends LyricsSource {
 
   /// LRCLIB asks clients to identify themselves so it can contact maintainers
   /// about misbehaving apps rather than just blocking them.
+  ///
+  /// Derived from [AppInfo] rather than written out: this string announced
+  /// `1.0.0` long after the app had moved on, and a version LRCLIB cannot
+  /// trust is a version it cannot use — it also skews the traffic split it
+  /// publishes. `app_info_test.dart` already fails the build when
+  /// [AppInfo.version] and `pubspec.yaml` disagree, so sourcing it here means
+  /// the header can no longer drift on its own.
   static const String _userAgent =
-      'Musync/1.0.0 (https://github.com/atamsphrow/musync)';
+      '${AppInfo.name}/${AppInfo.version} (https://github.com/atamsphrow/musync)';
 
   static const Duration _timeout = Duration(seconds: 12);
 

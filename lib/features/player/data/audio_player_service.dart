@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:musync/core/services/audio_backend_check.dart';
@@ -18,6 +19,15 @@ class AudioPlayerService {
   List<Song> _queue = const [];
   Song? _currentSong;
 
+  /// Long-lived HTTP clients this service owns, closed in [dispose].
+  ///
+  /// Nothing uses this today — every source builds its own client and lives for
+  /// the session. The registry exists for the one plan that would change that,
+  /// P5's batch sweep: spinning up a source per album would otherwise leak one
+  /// connection pool per album, quietly, for a whole sweep. A source that is
+  /// handed a client can register it here so teardown has something to close.
+  final List<http.Client> _httpClients = [];
+
   final StreamController<Song?> _currentSongController =
       StreamController<Song?>.broadcast();
 
@@ -33,6 +43,9 @@ class AudioPlayerService {
       }
     });
   }
+
+  /// Registers a client so [dispose] closes it. See [_httpClients].
+  void adoptHttpClient(http.Client client) => _httpClients.add(client);
 
   /// Emits whenever the playing track actually changes.
   ///
@@ -200,8 +213,28 @@ class AudioPlayerService {
     if (_player.hasNext) await _player.seekToNext();
   }
 
+  /// Mirrors what every other player does with this button, and what the
+  /// previous implementation did not.
+  ///
+  /// It read `if (hasPrevious) seekToPrevious()`, so at the head of a queue the
+  /// button did nothing at all — no restart, no feedback, just a dead control.
+  /// The convention (YouTube Music, Spotify, Musicolet) is two rules:
+  ///
+  ///   1. past ~3 s into the track, the button means "back to the start of this
+  ///      track", regardless of where the queue is;
+  ///   2. within the first seconds, it means "the previous track" — and when
+  ///      there is none, that degrades to rule 1 rather than to nothing.
+  ///
+  /// The 3 s threshold is also what keeps a double-tap from being swallowed:
+  /// the first tap returns to 0, the second, now inside the window, steps back.
+  ///
+  /// Callers are unchanged: `player_controls.dart` calls this directly.
   Future<void> previous() async {
-    if (_player.hasPrevious) await _player.seekToPrevious();
+    if (_player.position > const Duration(seconds: 3) ||
+        !_player.hasPrevious) {
+      return _player.seek(Duration.zero);
+    }
+    await _player.seekToPrevious();
   }
 
   Future<void> toggleShuffle() async {
@@ -226,9 +259,17 @@ class AudioPlayerService {
   /// closed sink: one last event from the player being torn down called `add`
   /// on it and threw `Cannot add new events after calling close` from inside a
   /// stream callback, where nothing was waiting to catch it.
+  ///
+  /// The adopted clients are closed last, and after the player: nothing here
+  /// issues a request, so a client still in flight during teardown is a request
+  /// already abandoned.
   Future<void> dispose() async {
     await _indexSubscription.cancel();
     await _player.dispose();
     await _currentSongController.close();
+    for (final client in _httpClients) {
+      client.close();
+    }
+    _httpClients.clear();
   }
 }
