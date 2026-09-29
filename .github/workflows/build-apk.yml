@@ -26,6 +26,9 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
       - name: Install dependencies
         run: flutter pub get
 
