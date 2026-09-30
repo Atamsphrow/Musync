@@ -43,6 +43,22 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// the `_dependents.isEmpty` assertion, not a typing bug.
   late final TextEditingController _searchController;
 
+  /// The last-played track is restored once, when the library first loads —
+  /// never on a manual refresh.
+  bool _restoreAttempted = false;
+
+  Future<void> _restoreLastPlayed() async {
+    try {
+      final songs = await ref.read(songListProvider.future);
+      if (!mounted || _restoreAttempted || songs.isEmpty) return;
+      _restoreAttempted = true;
+      await ref.read(audioPlayerServiceProvider).restoreLastPlayed(songs);
+    } catch (_) {
+      // No library, no restore: the empty-library UI explains itself.
+      _restoreAttempted = true;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -67,6 +83,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // where the intent is already waiting before Dart has a listener.
     MediaStore.listenForSharedAudio(() => unawaited(_openSharedAudio()));
     WidgetsBinding.instance.addObserver(this);
+    // Re-opens the track that was playing when the app was last closed, once
+    // the library has loaded and the track can be found by its path. Paused,
+    // at the saved position — never on a manual refresh.
+    unawaited(_restoreLastPlayed());
 
     // The scan needs the audio permission, so ask before anything tries to
     // read MediaStore. Post-frame because a permission dialog cannot be raised
