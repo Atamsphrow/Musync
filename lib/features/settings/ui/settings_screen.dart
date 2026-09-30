@@ -21,6 +21,7 @@ import 'package:musync/features/settings/providers/settings_provider.dart';
 import 'package:musync/features/settings/ui/ai_tab.dart';
 import 'package:musync/features/settings/ui/backup_tab.dart';
 import 'package:musync/features/settings/ui/settings_export_dialog.dart';
+import 'package:musync/features/settings/ui/settings_import_dialog.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -33,6 +34,13 @@ class SettingsScreen extends StatelessWidget {
         appBar: AppBar(
           title: const Text('Paramètres'),
           actions: [
+            Builder(
+              builder: (context) => IconButton(
+                icon: const Icon(Icons.file_download_outlined),
+                tooltip: 'Importer les paramètres',
+                onPressed: () => importSettings(context),
+              ),
+            ),
             Builder(
               builder: (context) => IconButton(
                 icon: const Icon(Icons.file_upload_outlined),
