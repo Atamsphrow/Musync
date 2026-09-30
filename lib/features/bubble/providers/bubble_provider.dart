@@ -10,6 +10,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
@@ -97,7 +98,7 @@ class LyricsBubbleController extends Notifier<BubbleState> {
       // Opened at the width of what is being sung right now, so it does not
       // start wide and shrink.
       final screenWidth = _screenWidthDp();
-      _width = bubbleWidthFor(_payload(), screenWidth);
+      _width = _payload().widthDp;
 
       // flutter_overlay_window 0.5.0 reads the width/height given here as raw
       // pixels in onStartCommand (dp values would shrink the window to a
@@ -164,13 +165,9 @@ class LyricsBubbleController extends Notifier<BubbleState> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(_prefsKey, clamped);
       if (state.active) {
-        // More or fewer lines change what is widest as well as how tall.
-        _width = bubbleWidthFor(_payload(), _screenWidthDp());
-        await FlutterOverlayWindow.resizeOverlay(
-          _width,
-          bubbleHeightFor(clamped),
-          true,
-        );
+        // More or fewer lines change what is widest as well as how tall. The
+        // new size travels inside the payload and the overlay applies it.
+        _forcePush();
       }
     } catch (error) {
       DebugLog.instance.warning(
@@ -179,7 +176,6 @@ class LyricsBubbleController extends Notifier<BubbleState> {
         error: error,
       );
     }
-    _forcePush();
   }
 
   // ---- feed -------------------------------------------------------------
@@ -214,21 +210,31 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     if (event == 'ready') {
       _forcePush();
     } else if (event == 'closed') {
-      // The × on the bubble itself.
-      _detach();
-      state = state.copyWith(active: false);
+      // The × on the bubble itself. Only the main isolate can reach the
+      // plugin's closeOverlay, so the overlay just signals and we close here.
+      unawaited(stop());
     }
   }
 
   BubblePayload _payload() {
     final synced = ref.read(currentLyricsProvider).valueOrNull?.synced;
-    if (synced == null || synced.isEmpty) {
-      return BubblePayload.idle(state.lines);
-    }
-    return BubblePayload.fromLines(
-      [for (final line in synced.lines) line.text],
-      ref.read(currentLineIndexProvider).valueOrNull,
-      state.lines,
+    final screenWidth = _screenWidthDp();
+    // The width is measured here, from the same texts the bubble draws, and
+    // travels inside the payload: the overlay isolate applies it itself.
+    final base = synced == null || synced.isEmpty
+        ? BubblePayload.idle(state.lines)
+        : BubblePayload.fromLines(
+            [for (final line in synced.lines) line.text],
+            ref.read(currentLineIndexProvider).valueOrNull,
+            state.lines,
+            widthDp: 0, // Replaced by the measurement below.
+          );
+    return BubblePayload(
+      previous: base.previous,
+      current: base.current,
+      next: base.next,
+      lines: base.lines,
+      widthDp: bubbleWidthFor(base, screenWidth),
     );
   }
 
@@ -241,31 +247,38 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     if (!state.active) return;
     final payload = _payload();
     final data = payload.encode();
-    // Same text as last time: nothing to say, and the stream ticks often.
+    // Same payload as last time (texts, lines and width): nothing to say,
+    // and the stream ticks often.
     if (data == _lastSent) return;
     _lastSent = data;
 
-    // The bubble follows the length of the line. Only when the step changes,
-    // so a line a few pixels longer does not make the window twitch.
-    final width = bubbleWidthFor(payload, _screenWidthDp());
-    if (width != _width) {
-      _width = width;
-      unawaited(_resize(width, payload.lines));
-    }
     unawaited(_send(data));
+    // The bubble is draggable and the plugin lets it wander off the screen.
+    // Pulled back inside on every new line; a drag that stays on screen is
+    // left exactly where the finger put it.
+    unawaited(_keepOnScreen(payload.widthDp, payload.lines));
   }
 
-  Future<void> _resize(int width, int lines) async {
+  /// Moves the bubble back fully on screen when it drifted (or was dragged)
+  /// past an edge. `moveOverlay`/`getOverlayPosition` are on the plugin's
+  /// main-isolate channel, so this runs here — the overlay could not do it.
+  Future<void> _keepOnScreen(int widthDp, int lines) async {
     try {
-      await FlutterOverlayWindow.resizeOverlay(
-        width,
-        bubbleHeightFor(lines),
-        true,
+      final pos = await FlutterOverlayWindow.getOverlayPosition();
+      final maxX = math.max(0.0, _screenWidthDp() - widthDp);
+      final maxY = math.max(
+        0.0,
+        _screenHeightDp() - bubbleHeightFor(lines),
       );
+      final x = pos.x.clamp(0.0, maxX);
+      final y = pos.y.clamp(0.0, maxY);
+      if (x != pos.x || y != pos.y) {
+        await FlutterOverlayWindow.moveOverlay(OverlayPosition(x, y));
+      }
     } catch (error) {
       DebugLog.instance.warning(
         'Bulle',
-        'Redimensionnement de la bulle impossible',
+        'Recentrage de la bulle impossible',
         error: error,
       );
     }
@@ -277,6 +290,14 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     if (views.isEmpty) return 360;
     final view = views.first;
     return view.physicalSize.width / view.devicePixelRatio;
+  }
+
+  /// Height of the screen in dp, for keeping the bubble on screen.
+  double _screenHeightDp() {
+    final views = PlatformDispatcher.instance.views;
+    if (views.isEmpty) return 640;
+    final view = views.first;
+    return view.physicalSize.height / view.devicePixelRatio;
   }
 
   /// Screen density. Only the initial overlay size goes through as raw
