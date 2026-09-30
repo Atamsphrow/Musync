@@ -21,7 +21,10 @@ import 'package:musync/core/utils/atomic_file.dart';
 const String kExportRedacted = '';
 
 /// Field names taken for secrets, wherever they appear in the JSON.
-final RegExp _secretName = RegExp(
+///
+/// Public so the import can apply the same definition: a secret blanked in an
+/// export must be recognised as a secret again when the file comes back.
+final RegExp secretFieldName = RegExp(
   r'api.?key|token|secret|authorization|password',
   caseSensitive: false,
 );
@@ -123,7 +126,7 @@ class SettingsExporter {
     if (node is Map) {
       return {
         for (final entry in node.entries)
-          '${entry.key}': _secretName.hasMatch('${entry.key}') &&
+          '${entry.key}': secretFieldName.hasMatch('${entry.key}') &&
                   entry.value is String
               ? kExportRedacted
               : redact(entry.value),
