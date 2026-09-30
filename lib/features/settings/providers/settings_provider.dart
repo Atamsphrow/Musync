@@ -40,7 +40,7 @@ class LyricsSourcesNotifier extends AsyncNotifier<List<LyricsSourceConfig>> {
   }
 
   Future<void> add({required String name, required String baseUrl}) async {
-    final current = state.valueOrNull ?? const [lrclibDefault];
+    final current = state.valueOrNull ?? builtInSources;
     await _commit([
       ...current,
       LyricsSourceConfig(
@@ -54,7 +54,7 @@ class LyricsSourcesNotifier extends AsyncNotifier<List<LyricsSourceConfig>> {
   }
 
   Future<void> setEnabled(String id, bool enabled) async {
-    final current = state.valueOrNull ?? const [lrclibDefault];
+    final current = state.valueOrNull ?? builtInSources;
     await _commit([
       for (final config in current)
         if (config.id == id) config.copyWith(enabled: enabled) else config,
@@ -62,7 +62,7 @@ class LyricsSourcesNotifier extends AsyncNotifier<List<LyricsSourceConfig>> {
   }
 
   Future<void> edit(String id, {String? name, String? baseUrl}) async {
-    final current = state.valueOrNull ?? const [lrclibDefault];
+    final current = state.valueOrNull ?? builtInSources;
     await _commit([
       for (final config in current)
         if (config.id == id && !config.isBuiltIn)
@@ -78,7 +78,7 @@ class LyricsSourcesNotifier extends AsyncNotifier<List<LyricsSourceConfig>> {
   /// Removes a source. The bundled one is ignored rather than refused loudly —
   /// the UI never offers it, so reaching here means a caller got it wrong.
   Future<void> remove(String id) async {
-    final current = state.valueOrNull ?? const [lrclibDefault];
+    final current = state.valueOrNull ?? builtInSources;
     await _commit([
       for (final config in current)
         if (config.id != id || config.isBuiltIn) config,
