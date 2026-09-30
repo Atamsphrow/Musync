@@ -82,7 +82,7 @@ Future<void> importSettings(BuildContext context) async {
     final lines = report.appliedPreferences.contains('bubble_lines')
         ? bundle.preferences['bubble_lines']
         : null;
-    if (lines != null) {
+    if (lines is int) {
       await container.read(lyricsBubbleProvider.notifier).setLines(lines);
     }
 
@@ -109,6 +109,7 @@ String _summary(ImportReport report) {
   final parts = [
     for (final file in report.appliedFiles) _fileLabels[file] ?? file,
     if (report.appliedPreferences.contains('bubble_lines')) 'Bulle flottante',
+    if (report.appliedPreferences.contains('last_song_path')) 'Dernier morceau',
   ];
   var text = 'Importé : ${parts.join(', ')}.';
   if (report.secretsApplied > 0) {
@@ -135,6 +136,7 @@ class _ImportConfirmDialog extends StatelessWidget {
       for (final entry in bundle.preferences.entries)
         if (entry.key == 'bubble_lines')
           'Bulle flottante : ${entry.value} lignes',
+      if (bundle.preferences.containsKey('last_song_path')) 'Dernier morceau',
     ];
     return AlertDialog(
       title: const Text('Importer les paramètres'),
