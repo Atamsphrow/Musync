@@ -115,6 +115,51 @@ void main() {
         expect(bundle.preferences, isEmpty, reason: 'bubble_lines=$bad');
       }
     });
+
+    test('accepts the last-played track preferences', () async {
+      final bundle = await importer.parse(
+        await bundleFile(validBundle()
+          ..['preferences'] = {
+            'bubble_lines': 2,
+            'last_song_path': '/storage/music/song.mp3',
+            'last_song_position_ms': 83450,
+          }),
+      );
+
+      expect(bundle.preferences, {
+        'bubble_lines': 2,
+        'last_song_path': '/storage/music/song.mp3',
+        'last_song_position_ms': 83450,
+      });
+    });
+
+    test('drops invalid last-played track values and unknown keys', () async {
+      final bundle = await importer.parse(
+        await bundleFile(validBundle()
+          ..['preferences'] = {
+            'last_song_path': '',
+            'last_song_position_ms': -1,
+            'unknown_key': 'nope',
+          }),
+      );
+      expect(bundle.preferences, isEmpty);
+
+      for (final badPath in [0, 12.5, null]) {
+        final parsed = await importer.parse(
+          await bundleFile(validBundle()
+            ..['preferences'] = {'last_song_path': badPath}),
+        );
+        expect(parsed.preferences, isEmpty, reason: 'last_song_path=$badPath');
+      }
+      for (final badPos in ['83450', 83.45, null]) {
+        final parsed = await importer.parse(
+          await bundleFile(validBundle()
+            ..['preferences'] = {'last_song_position_ms': badPos}),
+        );
+        expect(parsed.preferences, isEmpty,
+            reason: 'last_song_position_ms=$badPos');
+      }
+    });
   });
 
   group('apply', () {
@@ -138,6 +183,28 @@ void main() {
           ['playback_settings.json', 'lyrics_sources.json']);
       expect(prefs.getInt('bubble_lines'), 3);
       expect(report.appliedPreferences, ['bubble_lines']);
+    });
+
+    test('round-trips the last-played track through parse and apply', () async {
+      final bundle = await importer.parse(
+        await bundleFile(validBundle()
+          ..['preferences'] = {
+            'bubble_lines': 1,
+            'last_song_path': '/storage/music/song.mp3',
+            'last_song_position_ms': 83450,
+          }),
+      );
+      final prefs = await SharedPreferences.getInstance();
+
+      final report = await importer.apply(bundle, prefs);
+
+      expect(prefs.getInt('bubble_lines'), 1);
+      expect(prefs.getString('last_song_path'), '/storage/music/song.mp3');
+      expect(prefs.getInt('last_song_position_ms'), 83450);
+      expect(
+        report.appliedPreferences,
+        ['bubble_lines', 'last_song_path', 'last_song_position_ms'],
+      );
     });
 
     test('a blank secret keeps the stored key, matched by provider id',
