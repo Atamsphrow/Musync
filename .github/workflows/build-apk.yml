@@ -32,6 +32,17 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Setup release signing
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/musync-release.jks
+          cat > android/key.properties <<'PROPEOF'
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          storeFile=musync-release.jks
+          PROPEOF
+
       - name: Build APK
         run: flutter build apk --release
 
