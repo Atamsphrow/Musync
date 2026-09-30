@@ -59,6 +59,10 @@ dependencies:
   shared_preferences: ^2.3.0
   flutter_overlay_window: ^0.5.0
 
+  # Picking a settings export back from the Downloads folder (system picker,
+  # no storage permission needed).
+  file_picker: ^13.1.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
