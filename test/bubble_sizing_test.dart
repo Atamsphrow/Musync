@@ -4,7 +4,13 @@ import 'package:musync/features/bubble/data/bubble_payload.dart';
 import 'package:musync/features/bubble/data/bubble_sizing.dart';
 
 BubblePayload _showing(String current, {String next = '', int lines = 1}) =>
-    BubblePayload(previous: '', current: current, next: next, lines: lines);
+    BubblePayload(
+      previous: '',
+      current: current,
+      next: next,
+      lines: lines,
+      widthDp: 200,
+    );
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
