@@ -42,6 +42,10 @@ final lyricsBubbleProvider =
 class LyricsBubbleController extends Notifier<BubbleState> {
   static const String _prefsKey = 'bubble_lines';
 
+  /// Distance from the top of the screen in dp: just below the status bar,
+  /// like the bubble used to sit.
+  static const double _kBubbleTopMarginDp = 28;
+
   final List<ProviderSubscription<Object?>> _feeds = [];
   StreamSubscription<dynamic>? _fromOverlay;
   String? _lastSent;
@@ -92,16 +96,29 @@ class LyricsBubbleController extends Notifier<BubbleState> {
 
       // Opened at the width of what is being sung right now, so it does not
       // start wide and shrink.
-      _width = bubbleWidthFor(_payload(), _screenWidthDp());
+      final screenWidth = _screenWidthDp();
+      _width = bubbleWidthFor(_payload(), screenWidth);
 
+      // flutter_overlay_window 0.5.0 reads the width/height given here as raw
+      // pixels in onStartCommand (dp values would shrink the window to a
+      // postage stamp), while moveOverlay/resizeOverlay do convert dp to px.
+      // So the initial size is sent pre-converted to pixels, and the position
+      // is given explicitly in dp: the default path feeds -statusBarHeightPx()
+      // — already pixels — through dpToPx a second time, which parks the
+      // window fully off-screen with a top alignment. That is why only the
+      // "Paroles flottantes affichées" notification ever appeared, never the
+      // bubble itself.
+      final density = _screenDensity();
+      final xDp = ((screenWidth - _width) / 2).clamp(0.0, screenWidth);
       await FlutterOverlayWindow.showOverlay(
-        width: _width,
-        height: bubbleHeightFor(state.lines),
+        width: (_width * density).round(),
+        height: (bubbleHeightFor(state.lines) * density).round(),
         alignment: OverlayAlignment.topCenter,
         enableDrag: true,
         positionGravity: PositionGravity.none,
         overlayTitle: 'Musync',
         overlayContent: 'Paroles flottantes affichées',
+        startPosition: OverlayPosition(xDp, _kBubbleTopMarginDp),
       );
     } catch (error, stack) {
       DebugLog.instance.error(
@@ -260,6 +277,14 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     if (views.isEmpty) return 360;
     final view = views.first;
     return view.physicalSize.width / view.devicePixelRatio;
+  }
+
+  /// Screen density. Only the initial overlay size goes through as raw
+  /// pixels (see start()); resizes are converted by the plugin itself.
+  double _screenDensity() {
+    final views = PlatformDispatcher.instance.views;
+    if (views.isEmpty) return 1;
+    return views.first.devicePixelRatio;
   }
 
   Future<void> _send(String data) async {
