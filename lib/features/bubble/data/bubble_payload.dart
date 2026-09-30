@@ -26,15 +26,26 @@ class BubblePayload {
   /// 1, 2 or 3: which of the three texts are drawn.
   final int lines;
 
+  /// Width the overlay window should be for these lines, in dp. Computed in
+  /// the main isolate (which owns the sizing) and applied by the overlay
+  /// isolate itself: `resizeOverlay` only reaches the plugin from the overlay
+  /// side, a call from the main isolate throws `MissingPluginException` and
+  /// silently leaves the bubble at its opening width.
+  final int widthDp;
+
   const BubblePayload({
     required this.previous,
     required this.current,
     required this.next,
     required this.lines,
+    required this.widthDp,
   });
 
   /// Nothing to sing: the bubble stays up, showing only the note.
-  const BubblePayload.idle(this.lines)
+  ///
+  /// The default width matches [kBubbleMinWidth] in `bubble_sizing.dart`,
+  /// written out here so this file stays free of Flutter imports.
+  const BubblePayload.idle(this.lines, {this.widthDp = 120})
     : previous = '',
       current = kBubbleIdle,
       next = '';
@@ -48,9 +59,10 @@ class BubblePayload {
   factory BubblePayload.fromLines(
     List<String> texts,
     int? activeIndex,
-    int lines,
-  ) {
-    if (texts.isEmpty) return BubblePayload.idle(lines);
+    int lines, {
+    required int widthDp,
+  }) {
+    if (texts.isEmpty) return BubblePayload.idle(lines, widthDp: widthDp);
 
     String at(int i) => i >= 0 && i < texts.length ? texts[i].trim() : '';
 
@@ -60,6 +72,7 @@ class BubblePayload {
         current: kBubbleIdle,
         next: at(0),
         lines: lines,
+        widthDp: widthDp,
       );
     }
 
@@ -70,6 +83,7 @@ class BubblePayload {
       current: current.isEmpty ? kBubbleIdle : current,
       next: at(activeIndex + 1),
       lines: lines,
+      widthDp: widthDp,
     );
   }
 
@@ -78,6 +92,7 @@ class BubblePayload {
     'c': current,
     'n': next,
     'l': lines,
+    'w': widthDp,
   });
 
   /// Null for anything that is not a payload (the overlay also receives plain
@@ -92,6 +107,8 @@ class BubblePayload {
         current: '${map['c'] ?? kBubbleIdle}',
         next: '${map['n'] ?? ''}',
         lines: ((map['l'] as num?)?.toInt() ?? 2).clamp(1, 3),
+        // Same default as the const constructor above: 120 dp.
+        widthDp: (map['w'] as num?)?.toInt() ?? 120,
       );
     } on FormatException {
       return null;
