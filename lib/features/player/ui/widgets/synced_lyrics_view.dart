@@ -62,25 +62,12 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     // active line drifted to the bottom edge and stuck there.
     final target = (index * _lineExtent) + (_lineExtent / 2);
 
-    // The duration follows the tempo of the lyrics: a slow ballad scrolls
-    // gently, rap (lines under two seconds apart) scrolls briskly so one
-    // movement is finished before the next begins. 40 % of the gap to the
-    // next line, kept between 250 and 600 ms. 500 ms when it is unknown
-    // (last line, or a line without a timestamp).
-    final lines = widget.lyrics.lines;
-    var scrollMs = 500;
-    if (index + 1 < lines.length) {
-      final current = lines[index].timestamp;
-      final next = lines[index + 1].timestamp;
-      if (current != null && next != null) {
-        final gapMs = (next - current).inMilliseconds;
-        scrollMs = (gapMs * 0.4).clamp(250, 600).round();
-      }
-    }
-
+    // One fixed, quick glide per line: 250 ms. The previous version scaled
+    // the duration with the tempo, which left the scroll lagging a full beat
+    // behind on slow songs.
     _scrollController.animateTo(
       target.clamp(0.0, _scrollController.position.maxScrollExtent),
-      duration: Duration(milliseconds: scrollMs),
+      duration: const Duration(milliseconds: 250),
       curve: Curves.easeInOutCubic,
     );
   }
