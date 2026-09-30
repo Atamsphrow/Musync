@@ -25,6 +25,13 @@ class AudioPlayerService {
   /// Held so it can be cancelled before the controller closes — see [dispose].
   late final StreamSubscription<int?> _indexSubscription;
 
+  /// How often the current position is persisted while playing, so the
+  /// next launch resumes where the track actually stopped — not where the
+  /// previous track change left it.
+  static const Duration _positionSaveInterval = Duration(seconds: 15);
+
+  DateTime _lastPositionSave = DateTime.fromMillisecondsSinceEpoch(0);
+
   AudioPlayerService() : _player = AudioPlayer() {
     // The player drives the current index, not the other way round: skipping
     // from the notification or the lock screen never passes through this class.
@@ -32,6 +39,19 @@ class AudioPlayerService {
       if (index != null && index >= 0 && index < _queue.length) {
         _setCurrentSong(_queue[index]);
       }
+    });
+    // Periodic checkpoint of the position. Track changes alone persist too
+    // early (the new track's position, near zero); this keeps the stored
+    // position close to where playback really is.
+    _player.positionStream.listen((position) {
+      final song = _currentSong;
+      if (song == null || !_player.playing || position <= Duration.zero) {
+        return;
+      }
+      final now = DateTime.now();
+      if (now.difference(_lastPositionSave) < _positionSaveInterval) return;
+      _lastPositionSave = now;
+      unawaited(LastSongStore().save(song.filePath, position));
     });
   }
 
@@ -188,12 +208,62 @@ class AudioPlayerService {
   }
 
   Future<void> play() => _player.play();
-  Future<void> pause() => _player.pause();
+
+  Future<void> pause() async {
+    // Checkpoint: the app can be killed while paused, and the periodic save
+    // only runs while playing.
+    final song = _currentSong;
+    if (song != null) {
+      unawaited(LastSongStore().save(song.filePath, _player.position));
+    }
+    await _player.pause();
+  }
+
   Future<void> stop() => _player.stop();
+
+  /// Re-opens the track playing when the app was last closed, paused at the
+  /// saved position. Called once, after the library has loaded, so the track
+  /// can be found by its path.
+  ///
+  /// Returns true when a track was restored. Never starts playback by itself:
+  /// the track waits, paused, for the user to press play.
+  Future<bool> restoreLastPlayed(List<Song> library) async {
+    if (_currentSong != null) return false;
+    final saved = await LastSongStore().load();
+    final path = saved.path;
+    if (path == null || path.isEmpty) return false;
+    Song? match;
+    for (final song in library) {
+      if (song.filePath == path) {
+        match = song;
+        break;
+      }
+    }
+    if (match == null) return false;
+    try {
+      AudioBackendCheck.ensureIntercepted();
+      _queue = List.unmodifiable([match]);
+      await _warmArtwork(0);
+      await _player.setAudioSource(
+        ConcatenatingAudioSource(children: [_toSource(match)]),
+      );
+      var target = saved.position;
+      if (target.isNegative) target = Duration.zero;
+      final duration = _player.duration;
+      if (duration != null && target >= duration) target = Duration.zero;
+      await _player.seek(target);
+      // Announced (and persisted) after the seek, so the stored position is
+      // the restored one rather than zero.
+      _setCurrentSong(match);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
   Future<void> seekTo(Duration position) => _player.seek(position);
 
   Future<void> togglePlayPause() =>
-      _player.playing ? _player.pause() : _player.play();
+      _player.playing ? pause() : _player.play();
 
   /// Seeks by [delta], clamped to the track — seeking past the end would skip
   /// to the next song, which is never what a ±5 s button means.
