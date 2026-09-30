@@ -39,12 +39,20 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
   BubblePayload _payload = const BubblePayload.idle(2);
   StreamSubscription<dynamic>? _events;
 
+  /// Last (width, lines) the window was actually sized to. -1 forces the
+  /// first payload through.
+  int _appliedWidth = -1;
+  int _appliedLines = -1;
+
   @override
   void initState() {
     super.initState();
     _events = FlutterOverlayWindow.overlayListener.listen((event) {
       final next = BubblePayload.tryDecode(event);
-      if (next != null && mounted) setState(() => _payload = next);
+      if (next != null && mounted) {
+        setState(() => _payload = next);
+        unawaited(_applySize(next));
+      }
     });
     // Tells the app the engine is up, so it sends the current line now instead
     // of guessing how long the start takes.
@@ -57,9 +65,32 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
     super.dispose();
   }
 
+  /// Sizes the window to the payload. Done here, in the overlay isolate, on
+  /// purpose: the plugin's `resizeOverlay` handler lives on the overlay
+  /// engine's channel, so calling it from the main isolate throws
+  /// `MissingPluginException` and the bubble would keep its opening width
+  /// forever.
+  Future<void> _applySize(BubblePayload p) async {
+    if (p.widthDp == _appliedWidth && p.lines == _appliedLines) return;
+    try {
+      await FlutterOverlayWindow.resizeOverlay(
+        p.widthDp,
+        bubbleHeightFor(p.lines),
+        true,
+      );
+      _appliedWidth = p.widthDp;
+      _appliedLines = p.lines;
+    } catch (_) {
+      // The next line will try again; the text is already showing.
+    }
+  }
+
   Future<void> _close() async {
-    await FlutterOverlayWindow.shareData('closed');
-    await FlutterOverlayWindow.closeOverlay();
+    // Only the main isolate can reach the plugin's closeOverlay — the overlay
+    // engine has no handler for that channel. And the service never replies to
+    // the message, so awaiting it would hang here forever and the tap would do
+    // nothing. Fire the signal and let the main isolate close the window.
+    unawaited(FlutterOverlayWindow.shareData('closed'));
   }
 
   @override
