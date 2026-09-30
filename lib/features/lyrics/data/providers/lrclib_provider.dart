@@ -25,6 +25,10 @@ class LrclibSource extends LyricsSource {
 
   static const Duration _timeout = Duration(seconds: 12);
 
+  /// Pause before the single retry on a transient failure. One dropped request
+  /// on a mobile network is routine; waiting a beat lets it go through.
+  static const Duration _retryDelay = Duration(seconds: 1);
+
   /// `/get` matches on duration within a couple of seconds; anything past this
   /// is a different recording, however well the title matches.
   static const int _durationToleranceMs = 3000;
@@ -138,6 +142,34 @@ class LrclibSource extends LyricsSource {
     return results;
   }
 
+  /// One attempt at the request, plus exactly one retry on transient
+  /// failures — a timeout, a dropped socket, a refused connection.
+  ///
+  /// A single failed request on a mobile network is not the source being down,
+  /// so the retry keeps one from declaring it dead. The retry's own failure
+  /// propagates as-is: this is one second chance, not a loop.
+  Future<http.Response> _request(Uri uri) async {
+    try {
+      return await _send(uri);
+    } on TimeoutException catch (_) {
+      return _retryOnce(uri);
+    } on SocketException catch (_) {
+      return _retryOnce(uri);
+    } on http.ClientException catch (_) {
+      return _retryOnce(uri);
+    }
+  }
+
+  Future<http.Response> _send(Uri uri) => _client
+      .get(uri, headers: const {'User-Agent': _userAgent})
+      .timeout(_timeout);
+
+  /// The one retry, after a short pause. Any failure here is the answer.
+  Future<http.Response> _retryOnce(Uri uri) async {
+    await Future<void>.delayed(_retryDelay);
+    return _send(uri);
+  }
+
   /// Decodes one endpoint's body, or throws [LyricsSourceException].
   ///
   /// 404 comes back as null: for `/get` it is the documented "no match", which
@@ -145,9 +177,7 @@ class LrclibSource extends LyricsSource {
   Future<Object?> _getJson(Uri uri) async {
     final http.Response response;
     try {
-      response = await _client
-          .get(uri, headers: const {'User-Agent': _userAgent})
-          .timeout(_timeout);
+      response = await _request(uri);
     } on TimeoutException catch (e) {
       throw LyricsSourceException(name, 'LRCLIB ne répond pas.', e);
     } on SocketException catch (e) {
