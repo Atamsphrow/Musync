@@ -1,0 +1,7 @@
+# The `probe` tag marks tests that run the real writer against real MP3s pulled
+# off a device (test/real_file_probe_test.dart). They skip themselves when those
+# files aren't present, so a normal `flutter test` is unaffected; declaring the
+# tag here just stops the runner warning about an unknown one, and lets the
+# probe be selected on its own with `flutter test --tags probe`.
+tags:
+  probe:

@@ -1,0 +1,172 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- ── Permissions ── -->
+
+    <!-- Audio library access (Android 13+) -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
+    <!-- Audio library access (Android 12 and below fallback) -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!--
+      Tag writing.
+
+      Musync embeds lyrics into the user's existing MP3s, in place. Below
+      Android 11 the classic write grant covers that.
+    -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+
+    <!--
+      Android 11+: scoped storage blocks writes to files the app did not create,
+      and neither MediaStore write-requests nor the Storage Access Framework can
+      be driven from dart:io. See PermissionService.requestWriteAccess for the
+      full reasoning and the way out if Musync is ever shipped through Play.
+
+      Requested lazily, the first time the user embeds lyrics — never at launch.
+    -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+    <!-- Internet for LRCLIB API requests -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Notifications for media playback controls -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Background audio playback -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Floating lyrics bubble: drawn over other apps, started only by the
+         user from the now-playing screen. The service is the plugin's; on
+         Android 14 a foreground service needs a declared type, and
+         specialUse is the one that fits an overlay. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <application
+        android:label="Musync"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+
+            <!--
+              Off, because this app has no deep links and one intent filter below
+              makes the default actively harmful.
+
+              Flutter enables deep linking by default and, when it is on, uses an
+              incoming intent's `data` as the app's *initial route*. The
+              "open with" filter below is `ACTION_VIEW` on `audio/*`, so opening a
+              track with Musync from a file manager handed Flutter
+              `/storage/emulated/0/Audio/09. Snapchat.mp3` as a route name — and
+              the app answered "Page introuvable : …" instead of opening.
+
+              Musync reads that intent itself, in `queueSharedAudio`, and hands
+              the path to Dart over its own channel. Flutter never needed to see
+              it as a route.
+            -->
+            <meta-data
+              android:name="flutter_deeplinking_enabled"
+              android:value="false"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+
+            <!--
+              Share sheet: accept audio sent from a file manager or another
+              player, so a track can be handed straight to Musync for tagging.
+
+              `launchMode="singleTask"` above, and no `taskAffinity`.
+
+              Both matter, and the previous pair got it wrong in a way that only
+              showed with the app already running. `singleTop` reuses an
+              instance only when it sits at the top of the *same* task — but
+              `taskAffinity=""` puts the activity in no task at all, so every
+              share arrived in a brand-new one. Three or four Musyncs would pile
+              up in the recents list, none of them the one already playing.
+
+              `singleTask` brings the existing instance forward and delivers the
+              intent to `onNewIntent` instead, whatever launched it.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="audio/*"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="audio/*"/>
+            </intent-filter>
+
+            <!--
+              "Open with" on an audio file, which is the same job arriving by a
+              different verb.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:mimeType="audio/*"/>
+            </intent-filter>
+        </activity>
+
+        <!-- audio_service: background media playback service -->
+        <service
+            android:name="com.ryanheise.audioservice.AudioService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+
+        <!-- audio_service: media button receiver -->
+        <receiver
+            android:name="com.ryanheise.audioservice.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+
+        <!-- flutter_overlay_window: the floating lyrics bubble -->
+        <service
+            android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Floating window showing the current synchronised lyric line" />
+        </service>
+    </application>
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>

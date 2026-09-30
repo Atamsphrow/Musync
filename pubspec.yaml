@@ -1,0 +1,75 @@
+name: musync
+description: "Musync — Lecteur de musique local et gestionnaire de paroles synchronisées"
+publish_to: 'none'
+
+version: 2.15.0+21500
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^2.6.1
+
+  # Material You — wallpaper-derived color scheme (Android 12+)
+  dynamic_color: ^1.7.0
+
+  # Audio playback
+  just_audio: ^0.9.43
+  audio_service: ^0.18.17
+  just_audio_background: ^0.0.1-beta.14
+
+  # Direct, not transitive, because main.dart names JustAudioPlatform: the one
+  # fact that decides whether a media notification can exist is whether
+  # just_audio_background has actually replaced the platform instance, and the
+  # app now checks and reports it. Depending on a package you reference is the
+  # rule; leaving it transitive would be a lint and a landmine on the next
+  # `pub upgrade`.
+  just_audio_platform_interface: ^4.6.0
+
+  # Direct for the same reason: `core/utils/atomic_file.dart` names Lock. The six
+  # places that replace a file's contents now serialise per path, after the
+  # user's own debug log caught two overlapping writes fighting over one temp
+  # file.
+  synchronized: ^3.4.0
+
+  # Music library scan (MediaStore).
+  #
+  # Unmaintained since May 2023, and its Android module predates the `namespace`
+  # that AGP 8+ requires — so the build needs the shim in
+  # `android/build.gradle.kts`. Kept anyway: `on_audio_query_forked` looks like
+  # the way out but is broken as published (its Android module declares
+  # `implements: on_audio_query`, so it can never resolve as the fork's own
+  # implementation). Replacing this with a small MediaStore platform channel is
+  # the real fix if it ever breaks again.
+  on_audio_query: ^2.9.0
+
+  # Networking
+  http: ^1.3.0
+
+  # Permissions
+  permission_handler: ^11.4.0
+
+  # File paths
+  path_provider: ^2.1.5
+  path: ^1.9.1
+  shared_preferences: ^2.3.0
+  flutter_overlay_window: ^0.5.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    # The owner's avatar, shown in the About box. Declared as a directory rather
+    # than a file so the build does not depend on it being there: the code falls
+    # back to the generic silhouette when the image is missing.
+    - assets/images/
