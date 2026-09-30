@@ -11,8 +11,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Preferences worth carrying to another install. The last-played track and its
-/// position are left out: they are about this phone's files.
-const List<String> _exportedPreferences = ['bubble_lines'];
+/// position travel along: on the target phone they re-open the same track when
+/// it is there, and are simply ignored when the file does not exist.
+const List<String> _exportedPreferences = [
+  'bubble_lines',
+  'last_song_path',
+  'last_song_position_ms',
+];
 
 /// Asks what to include, writes the file and says where it went.
 Future<void> exportSettings(BuildContext context) async {
