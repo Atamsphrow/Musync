@@ -38,6 +38,13 @@ const String _aiProvidersFile = 'ai_providers.json';
 int? _validBubbleLines(Object? value) =>
     value is int && value >= 1 && value <= 3 ? value : null;
 
+/// A file path is only useful when it points somewhere.
+String? _validSongPath(Object? value) =>
+    value is String && value.isNotEmpty ? value : null;
+
+int? _validSongPosition(Object? value) =>
+    value is int && value >= 0 ? value : null;
+
 /// Thrown when the picked file is not a Musync settings export. The [message]
 /// is shown to the user as-is, so it is written in French.
 class ImportFormatException implements Exception {
@@ -53,8 +60,9 @@ class ImportBundle {
   /// What was inside `files`, keyed by file name.
   final Map<String, Object?> files;
 
-  /// Validated preferences (`bubble_lines` and friends).
-  final Map<String, int> preferences;
+  /// Validated preferences (`bubble_lines`, the last-played track and friends).
+  /// Values are the ints and strings the export wrote.
+  final Map<String, Object> preferences;
 
   /// When the bundle was exported, as written in the file.
   final String exportedAt;
@@ -158,11 +166,15 @@ class SettingsImporter {
       );
     }
 
-    final preferences = <String, int>{};
+    final preferences = <String, Object>{};
     final rawPrefs = bundle['preferences'];
     if (rawPrefs is Map) {
       final lines = _validBubbleLines(rawPrefs['bubble_lines']);
       if (lines != null) preferences['bubble_lines'] = lines;
+      final path = _validSongPath(rawPrefs['last_song_path']);
+      if (path != null) preferences['last_song_path'] = path;
+      final position = _validSongPosition(rawPrefs['last_song_position_ms']);
+      if (position != null) preferences['last_song_position_ms'] = position;
     }
 
     return ImportBundle(
@@ -204,7 +216,14 @@ class SettingsImporter {
 
     final appliedPrefs = <String>[];
     for (final entry in bundle.preferences.entries) {
-      await prefs.setInt(entry.key, entry.value);
+      final value = entry.value;
+      if (value is int) {
+        await prefs.setInt(entry.key, value);
+      } else if (value is String) {
+        await prefs.setString(entry.key, value);
+      } else {
+        continue;
+      }
       appliedPrefs.add(entry.key);
     }
 
