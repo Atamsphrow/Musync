@@ -32,15 +32,24 @@ jobs:
         run: flutter pub get
 
       - name: Setup release signing
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/musync-release.jks
-          cat > android/key.properties <<'PROPEOF'
-          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
-          keyPassword=${{ secrets.KEY_PASSWORD }}
-          keyAlias=${{ secrets.KEY_ALIAS }}
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "Aucun keystore configuré : la release sera signée avec la clé debug."
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/musync-release.jks
+          cat > android/key.properties <<PROPEOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
           storeFile=musync-release.jks
           PROPEOF
+          echo "Signature release configurée."
 
       - name: Build APK (arm64-v8a)
         run: flutter build apk --release --split-per-abi
