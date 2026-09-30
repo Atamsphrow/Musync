@@ -16,8 +16,6 @@ import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/permission_service.dart';
 import 'package:musync/features/settings/providers/audio_diagnostic_provider.dart';
 import 'package:musync/features/settings/data/hidden_photos.dart';
-import 'package:musync/features/settings/data/playback_settings.dart';
-import 'package:musync/features/settings/providers/playback_settings_provider.dart';
 import 'package:musync/features/settings/data/lyrics_source_config.dart';
 import 'package:musync/features/settings/providers/settings_provider.dart';
 import 'package:musync/features/settings/ui/ai_tab.dart';
@@ -318,8 +316,6 @@ class _SourcesTab extends ConsumerWidget {
             for (final source in sources)
               _SourceTile(source: source, key: ValueKey(source.id)),
             const Divider(height: 32),
-            const _LyricsOffsetSetting(),
-            const Divider(height: 32),
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16),
               child: _BubbleSetting(),
@@ -353,111 +349,6 @@ class _BubbleSetting extends StatelessWidget {
         const SizedBox(height: 12),
         const BubbleLinesSelector(),
       ],
-    );
-  }
-}
-
-/// The residual manual compensation for T20.
-///
-/// Display only: it shifts when the lines light up, and never touches a tag —
-/// so it cannot be confused with Décaler, which writes the timestamps of one
-/// track, and it cannot corrupt a file.
-///
-/// It exists as a net, not as the fix. The lag that was reported against
-/// Musicolet came from the line-transition interval and is corrected at the
-/// source (see `lineRefreshInterval`); this is here for what the app cannot
-/// measure about a given device or a badly encoded file. Zero should be right.
-class _LyricsOffsetSetting extends ConsumerWidget {
-  const _LyricsOffsetSetting();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    final offset = ref.watch(playbackSettingsProvider).lyricsOffsetMs;
-    final notifier = ref.read(playbackSettingsProvider.notifier);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-          child: Text(
-            'Affichage des paroles',
-            style: textTheme.titleSmall?.copyWith(color: scheme.primary),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Text(
-            "Décale le moment où chaque ligne s'allume, sans toucher aux "
-            "horodatages enregistrés. À laisser à zéro : le retard constaté "
-            "face à Musicolet est corrigé à la source. Négatif = les lignes "
-            "s'allument plus tôt.",
-            style: textTheme.bodySmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
-          ),
-        ),
-        ListTile(
-          title: const Text('Décalage global'),
-          subtitle: Text(
-            offset == 0 ? 'Aucun' : '${offset > 0 ? '+' : ''}$offset ms',
-          ),
-          trailing: offset == 0
-              ? null
-              : IconButton(
-                  tooltip: 'Remettre à zéro',
-                  icon: const Icon(Icons.restart_alt),
-                  onPressed: () => notifier.setLyricsOffsetMs(0),
-                ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: Slider(
-            value: offset.toDouble(),
-            min: -PlaybackSettings.maxOffsetMs.toDouble(),
-            max: PlaybackSettings.maxOffsetMs.toDouble(),
-            // 50 ms steps: finer than anyone can hear the difference of, and
-            // coarse enough that the slider can actually be aimed with a thumb.
-            divisions: (PlaybackSettings.maxOffsetMs * 2) ~/ 50,
-            label: '$offset ms',
-            // Written on every change rather than on release: the lines move as
-            // the slider is dragged, which is the only way to tell when it is
-            // right. The notifier ignores a value equal to the current one, so
-            // dragging within one step costs nothing.
-            onChanged: (value) => notifier.setLyricsOffsetMs(value.round()),
-          ),
-        ),
-        const _EncoderDelayLine(),
-      ],
-    );
-  }
-}
-
-/// What the track playing right now declares about its encoder delay.
-///
-/// The measurement T20 asked for, put where the decision is made. The ticket
-/// supposed the constant lag came from the silence LAME adds at the start of a
-/// file; this reads that field out of the file itself, so the hypothesis can be
-/// checked against the user's own library instead of argued about.
-class _EncoderDelayLine extends ConsumerWidget {
-  const _EncoderDelayLine();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    final info = ref.watch(currentTrackGaplessProvider).valueOrNull;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-      child: Text(
-        info == null
-            ? "Lancez un morceau pour voir ce que son encodeur déclare."
-            : "Morceau en cours — ${info.describe()}",
-        style: textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-      ),
     );
   }
 }
