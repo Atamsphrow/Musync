@@ -147,12 +147,21 @@ const List<LyricsSourceConfig> builtInSources = [
 class LyricsSourceStore {
   static const String _fileName = 'lyrics_sources.json';
 
+  /// Where the file lives. Production reads the app's documents directory;
+  /// tests inject a temporary file instead — `path_provider` has no plugin
+  /// in a unit test.
+  final Future<File> Function()? _fileLocator;
+
+  const LyricsSourceStore({this._fileLocator});
+
   Future<File> _file() async {
+    final locator = _fileLocator;
+    if (locator != null) return locator();
     final dir = await getApplicationDocumentsDirectory();
     return File('${dir.path}${Platform.pathSeparator}$_fileName');
   }
 
-  /// The stored list, with the built-in entry guaranteed present and first.
+  /// The stored list, with the bundled entries guaranteed present and first.
   ///
   /// Any failure — no file yet, unreadable JSON, a truncated write — falls back
   /// to the default rather than throwing. The lyrics search has to keep working
@@ -160,26 +169,26 @@ class LyricsSourceStore {
   Future<List<LyricsSourceConfig>> load() async {
     try {
       final file = await _file();
-      if (!await file.exists()) return const [lrclibDefault];
+      if (!await file.exists()) return builtInSources;
 
       final decoded = jsonDecode(await file.readAsString());
-      if (decoded is! List) return const [lrclibDefault];
+      if (decoded is! List) return builtInSources;
 
       final configs = <LyricsSourceConfig>[
         for (final entry in decoded) ?LyricsSourceConfig.fromJson(entry),
       ];
       return _withBuiltIn(configs);
     } catch (error, stack) {
-      // Falling back to LRCLIB alone keeps the search working, which is the
-      // point — but any mirror the user added has silently stopped being
+      // Falling back to the bundled sources keeps the search working, which
+      // is the point — but any mirror the user added has silently stopped being
       // queried, and they would have no way of telling.
       DebugLog.instance.error(
         'Réglages',
-        'Liste des sources illisible : seule LRCLIB sera interrogée',
+        'Liste des sources illisible : les sources intégrées seront utilisées',
         error: error,
         stackTrace: stack,
       );
-      return const [lrclibDefault];
+      return builtInSources;
     }
   }
 
