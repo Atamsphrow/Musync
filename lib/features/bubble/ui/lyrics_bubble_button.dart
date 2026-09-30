@@ -1,7 +1,7 @@
-/// The button on "Lecture en cours" that opens the floating bubble, and the
-/// small sheet behind it (on/off, and how many lines to show).
+/// The button on "Lecture en cours" that toggles the floating bubble directly.
 ///
-/// It is the only way the bubble is ever started.
+/// One tap: on when it is off, off when it is on. No sheet — the only bubble
+/// setting (how many lines) lives in Settings / Sources.
 library;
 
 import 'package:flutter/material.dart';
@@ -21,78 +21,39 @@ class LyricsBubbleButton extends ConsumerWidget {
       icon: const Icon(Icons.picture_in_picture_alt_outlined),
       selectedIcon: const Icon(Icons.picture_in_picture_alt),
       tooltip: 'Bulle de paroles flottante',
-      onPressed: () => showModalBottomSheet<void>(
-        context: context,
-        showDragHandle: true,
-        builder: (_) => const _BubbleSheet(),
-      ),
-    );
-  }
-}
-
-class _BubbleSheet extends ConsumerWidget {
-  const _BubbleSheet();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(lyricsBubbleProvider);
-    final controller = ref.read(lyricsBubbleProvider.notifier);
-
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Bulle flottante'),
-              subtitle: const Text(
-                'Affiche la ligne active par-dessus les autres applis.',
+      onPressed: () async {
+        final controller = ref.read(lyricsBubbleProvider.notifier);
+        if (active) {
+          await controller.stop();
+          return;
+        }
+        final result = await controller.start();
+        if (!context.mounted) return;
+        switch (result) {
+          case BubbleStart.started:
+            break;
+          case BubbleStart.permissionDenied:
+            ScaffoldMessenger.of(context).showOnly(
+              const SnackBar(
+                content: Text(
+                  'Autorise « Afficher par-dessus les autres '
+                  'applications » pour Musync.',
+                ),
               ),
-              value: state.active,
-              onChanged: (on) async {
-                if (!on) {
-                  await controller.stop();
-                  return;
-                }
-                final result = await controller.start();
-                if (!context.mounted) return;
-                switch (result) {
-                  case BubbleStart.started:
-                    break;
-                  case BubbleStart.permissionDenied:
-                    ScaffoldMessenger.of(context).showOnly(
-                      const SnackBar(
-                        content: Text(
-                          'Autorise « Afficher par-dessus les autres '
-                          'applications » pour Musync.',
-                        ),
-                      ),
-                    );
-                  case BubbleStart.failed:
-                    ScaffoldMessenger.of(context).showOnly(
-                      const SnackBar(
-                        content: Text('Impossible d\'ouvrir la bulle.'),
-                      ),
-                    );
-                }
-              },
-            ),
-            const SizedBox(height: 8),
-            const BubbleLinesSelector(),
-          ],
-        ),
-      ),
+            );
+          case BubbleStart.failed:
+            ScaffoldMessenger.of(
+              context,
+            ).showOnly(const SnackBar(content: Text('Impossible d\'ouvrir la bulle.')));
+        }
+      },
     );
   }
 }
 
-/// Choice of 1, 2 or 3 lines, with a line of explanation.
+/// Choice of 1, 2 or 3 lines.
 ///
-/// One widget for the two places it lives — the sheet on the now-playing screen
-/// and Settings — so they are the same setting and cannot drift apart.
+/// Lives in Settings / Sources — the only bubble setting.
 class BubbleLinesSelector extends ConsumerWidget {
   const BubbleLinesSelector({super.key});
 
@@ -128,12 +89,6 @@ class BubbleLinesSelector extends ConsumerWidget {
             2 => 'La ligne active et la suivante.',
             _ => 'La précédente, l\'active et la suivante.',
           },
-          style: textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'La largeur suit la longueur de la ligne et l\'écran. Seules les '
-          'paroles synchronisées sont affichées.',
           style: textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
         ),
       ],
