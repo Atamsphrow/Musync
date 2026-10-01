@@ -44,11 +44,17 @@ class _MarqueeTextState extends State<MarqueeText> {
   final ScrollController _controller = ScrollController();
   bool _running = false;
 
+  /// Invalidates the loop started for the previous text. The old loop may be
+  /// parked in an awaited delay or animation; without this it keeps driving
+  /// the controller underneath the new text's loop.
+  int _generation = 0;
+
   @override
   void didUpdateWidget(MarqueeText oldWidget) {
     super.didUpdateWidget(oldWidget);
     // A new track starts its own pass from the beginning.
     if (oldWidget.text != widget.text) {
+      _generation++;
       _running = false;
       if (_controller.hasClients) _controller.jumpTo(0);
       WidgetsBinding.instance.addPostFrameCallback((_) => _start());
@@ -69,14 +75,18 @@ class _MarqueeTextState extends State<MarqueeText> {
   Future<void> _start() async {
     if (_running || !mounted) return;
     _running = true;
+    final myGeneration = _generation;
 
-    while (mounted && _controller.hasClients) {
+    bool alive() =>
+        mounted && _controller.hasClients && myGeneration == _generation;
+
+    while (alive()) {
       final extent = _controller.position.maxScrollExtent;
       // Nothing to scroll: the title fits. Stop for good rather than spin.
       if (extent <= 0) break;
 
       await Future<void>.delayed(widget.pause);
-      if (!mounted || !_controller.hasClients) break;
+      if (!alive()) break;
 
       await _controller.animateTo(
         extent,
@@ -85,10 +95,10 @@ class _MarqueeTextState extends State<MarqueeText> {
         ),
         curve: Curves.linear,
       );
-      if (!mounted || !_controller.hasClients) break;
+      if (!alive()) break;
 
       await Future<void>.delayed(widget.pause);
-      if (!mounted || !_controller.hasClients) break;
+      if (!alive()) break;
 
       // Back to the start in one step rather than scrolling backwards: reading
       // a title in reverse is not a thing anyone does.
