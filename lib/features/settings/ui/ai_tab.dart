@@ -200,6 +200,8 @@ class _ProviderTile extends ConsumerWidget {
             onSelected: (action) => switch (action) {
               _Action.check =>
                 ref.read(aiProviderStatusProvider.notifier).check(provider),
+              _Action.ping =>
+                ref.read(aiProviderStatusProvider.notifier).ping(provider),
               _Action.edit => _openEditor(context, ref, existing: provider),
               _Action.delete => _confirmDelete(context, ref, provider),
             },
@@ -210,6 +212,15 @@ class _ProviderTile extends ConsumerWidget {
                   leading: Icon(Icons.published_with_changes),
                   title: Text('Vérifier'),
                   subtitle: Text('Le modèle existe-t-il encore ?'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: _Action.ping,
+                child: ListTile(
+                  leading: Icon(Icons.mark_chat_read_outlined),
+                  title: Text('Tester la réponse'),
+                  subtitle: Text('Le modèle répond-il vraiment ?'),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
@@ -289,7 +300,7 @@ class _StatusLine extends StatelessWidget {
   }
 }
 
-enum _Action { check, edit, delete }
+enum _Action { check, ping, edit, delete }
 
 Future<void> _confirmDelete(
   BuildContext context,
