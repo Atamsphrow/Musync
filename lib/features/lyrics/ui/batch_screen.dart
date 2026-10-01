@@ -1,12 +1,15 @@
 /// Search a whole tab's worth of tracks, look at what came back, then write.
 library;
 
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:musync/core/router/app_router.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/lyrics/providers/batch_provider.dart';
+import 'package:musync/core/services/permission_service.dart';
+import 'package:musync/core/utils/snackbar.dart';
 import 'package:musync/features/lyrics/ui/embed_lyrics_action.dart';
 
 /// What the batch route is given: the tracks, and whether to read the file
@@ -130,45 +133,72 @@ class _BatchScreenState extends ConsumerState<BatchScreen> with RouteAware {
 
     _kept = 0;
     _batch.beginWriting();
+    var completed = false;
 
-    for (final candidate in chosen) {
-      if (!mounted) return;
+    try {
+      for (final candidate in chosen) {
+        if (!mounted) return;
 
-      // Skip what this session already wrote.
-      //
-      // Writing needs the screen — the permission prompt and the error messages
-      // both need a context — so leaving mid-write still stops it. What it must
-      // not do is start over: an interrupted run used to rewrite every track it
-      // had already done, which is both slow and a chance to overwrite a good
-      // tag with a second, different guess. Pressing "Écrire" again now picks up
-      // where it stopped.
-      if (_batch.wasWritten(candidate.song.filePath)) continue;
+        // A permission revoked mid-batch used to pop the "authorize" dialog
+        // once per remaining file. Stop at the first one instead: the failure
+        // is already counted, and the summary below says why it stopped.
+        if (!await PermissionService.hasWriteAccess()) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showOnly(
+              const SnackBar(
+                content: Text(
+                  'Autorisation révoquée : écriture interrompue. '
+                  'Réautorise puis relance pour continuer.',
+                ),
+              ),
+            );
+          }
+          break;
+        }
 
-      final match = candidate.match!;
+        // Skip what this session already wrote.
+        //
+        // Writing needs the screen — the permission prompt and the error messages
+        // both need a context — so leaving mid-write still stops it. What it must
+        // not do is start over: an interrupted run used to rewrite every track it
+        // had already done, which is both slow and a chance to overwrite a good
+        // tag with a second, different guess. Pressing "Écrire" again now picks up
+        // where it stopped.
+        if (_batch.wasWritten(candidate.song.filePath)) continue;
 
-      final outcome = await embedLyrics(
-        context,
-        ref,
-        filePath: candidate.song.filePath,
-        synced: match.syncedLyrics,
-        unsynced: match.unsyncedLyrics,
-        // Skip rather than ask: a dialog per file is not a review, and the
-        // answer would be the same every time. A track that already has timed
-        // lyrics is left exactly as it was, and counted.
-        onPlainOverSynced: PlainOverSynced.skip,
-        // No per-track snackbar: a hundred of them stacked up would bury the
-        // screen. The summary at the end says what happened.
-        successMessage: '',
-      );
-      if (outcome == EmbedOutcome.written) {
-        _batch.recordWritten(candidate.song.filePath);
-      } else if (outcome == EmbedOutcome.keptSynced) {
-        _kept++;
+        final match = candidate.match!;
+
+        if (!mounted) return;
+        final outcome = await embedLyrics(
+          context,
+          ref,
+          filePath: candidate.song.filePath,
+          synced: match.syncedLyrics,
+          unsynced: match.unsyncedLyrics,
+          // Skip rather than ask: a dialog per file is not a review, and the
+          // answer would be the same every time. A track that already has timed
+          // lyrics is left exactly as it was, and counted.
+          onPlainOverSynced: PlainOverSynced.skip,
+          // No per-track snackbar: a hundred of them stacked up would bury the
+          // screen. The summary at the end says what happened.
+          successMessage: '',
+        );
+        if (outcome == EmbedOutcome.written) {
+          _batch.recordWritten(candidate.song.filePath);
+        } else if (outcome == EmbedOutcome.keptSynced) {
+          _kept++;
+        } else if (outcome == EmbedOutcome.failed) {
+          _batch.recordFailed(candidate.song.filePath);
+        }
       }
-    }
 
-    if (!mounted) return;
-    _batch.finish();
+      completed = true;
+    } finally {
+      // An abandoned loop (screen left mid-write) keeps the phase at
+      // `writing`: the screen then offers to resume instead of bricking the
+      // batch. Pressing "Écrire" again picks up where it stopped.
+      _batch.endWriting(completed: completed && mounted);
+    }
   }
 
   @override
@@ -204,7 +234,7 @@ class _BatchScreenState extends ConsumerState<BatchScreen> with RouteAware {
       body: switch (state.phase) {
         BatchPhase.idle || BatchPhase.searching => _Searching(state: state),
         BatchPhase.review => _Review(state: state),
-        BatchPhase.writing => _Writing(state: state),
+        BatchPhase.writing => _Writing(state: state, onResume: _writeSelected),
         BatchPhase.done => _Done(state: state, kept: _kept),
       },
       floatingActionButton: state.phase == BatchPhase.review
@@ -496,14 +526,46 @@ class _CandidateTile extends ConsumerWidget {
   }
 }
 
+/// The writing phase. When the write loop is gone — the screen was left
+/// mid-write — this offers to resume where it stopped instead of leaving the
+/// batch frozen: tracks already written are skipped, never rewritten.
 class _Writing extends StatelessWidget {
   final BatchState state;
+  final VoidCallback onResume;
 
-  const _Writing({required this.state});
+  const _Writing({required this.state, required this.onResume});
 
   @override
   Widget build(BuildContext context) {
     final total = state.selected.length;
+    if (!state.writeLoopRunning) {
+      return Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              'Écriture interrompue : ${state.written} / $total déjà écrit(s).',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'La reprise continue où elle s\u2019est arrêtée ; '
+              'ce qui est déjà écrit ne sera pas réécrit.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: onResume,
+              icon: const Icon(Icons.play_arrow),
+              label: const Text('Reprendre'),
+            ),
+          ],
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.all(32),
       child: Column(
@@ -542,7 +604,9 @@ class _Done extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final textTheme = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
-    final written = ref.read(batchProvider.notifier).written;
+    final notifier = ref.read(batchProvider.notifier);
+    final written = notifier.written;
+    final failed = notifier.failedPaths;
 
     return Column(
       children: [
@@ -573,6 +637,20 @@ class _Done extends ConsumerWidget {
           ),
         ),
         const Divider(height: 1),
+        if (failed.isNotEmpty)
+          Container(
+            width: double.infinity,
+            color: scheme.errorContainer,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Text(
+              '${failed.length} échec(s) d\u2019écriture : '
+              '${failed.map((p) => p.split(Platform.pathSeparator).last).take(3).join(', ')}'
+              '${failed.length > 3 ? ' (+${failed.length - 3} autres)' : ''}',
+              style: textTheme.bodySmall?.copyWith(
+                color: scheme.onErrorContainer,
+              ),
+            ),
+          ),
         Expanded(
           child: written.isEmpty
               ? Center(
