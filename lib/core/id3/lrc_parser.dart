@@ -37,7 +37,8 @@ class LrcParser {
   /// to survive, so this is what turns an LRC-bearing USLT into something a
   /// person can actually read.
   static String stripTimestamps(String text) {
-    return text
+    final content = text.startsWith('\uFEFF') ? text.substring(1) : text;
+    return content
         .split('\n')
         .map((line) => line.replaceFirst(_leadingTimestamps, '').trim())
         .join('\n');
@@ -47,7 +48,14 @@ class LrcParser {
     final lyricLines = <LyricLine>[];
     var offset = Duration.zero;
 
-    for (final raw in lrcContent.split('\n')) {
+    // A byte-order mark survives trim() (U+FEFF is not whitespace to Dart)
+    // and would sit in front of the first line's timestamp, silently
+    // dropping that line: the leading run would no longer start at index 0.
+    final content = lrcContent.startsWith('\uFEFF')
+        ? lrcContent.substring(1)
+        : lrcContent;
+
+    for (final raw in content.split('\n')) {
       final line = raw.trim();
       if (line.isEmpty) continue;
 
