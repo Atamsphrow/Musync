@@ -62,6 +62,11 @@ class BubblePayload {
   final int? positionMs;
   final int? sampledAtMs;
 
+  /// The system font scale, baked in by the main isolate: the overlay runs in
+  /// a separate engine without the system MediaQuery, so the bubble would
+  /// otherwise ignore the user's text size (or clip text measured smaller).
+  final double textScaleFactor;
+
   const BubblePayload({
     required this.previous,
     required this.current,
@@ -73,18 +78,22 @@ class BubblePayload {
     this.activeIndex,
     this.positionMs,
     this.sampledAtMs,
+    this.textScaleFactor = 1.0,
   });
 
   /// Nothing to sing: the bubble stays up, showing only the note.
-  const BubblePayload.idle(this.lines, {this.widthDp = 120})
-    : previous = '',
-      current = kBubbleIdle,
-      next = '',
-      songId = '',
-      timedLines = const [],
-      activeIndex = null,
-      positionMs = null,
-      sampledAtMs = null;
+  const BubblePayload.idle(
+    this.lines, {
+    this.widthDp = 120,
+    this.textScaleFactor = 1.0,
+  })  : previous = '',
+        current = kBubbleIdle,
+        next = '',
+        songId = '',
+        timedLines = const [],
+        activeIndex = null,
+        positionMs = null,
+        sampledAtMs = null;
 
   /// Builds what to show from the texts of the timed lines and the index the
   /// player says is active.
@@ -101,8 +110,15 @@ class BubblePayload {
     List<TimedLineJson> timedLines = const [],
     int? positionMs,
     int? sampledAtMs,
+    double textScaleFactor = 1.0,
   }) {
-    if (texts.isEmpty) return BubblePayload.idle(lines, widthDp: widthDp);
+    if (texts.isEmpty) {
+      return BubblePayload.idle(
+        lines,
+        widthDp: widthDp,
+        textScaleFactor: textScaleFactor,
+      );
+    }
 
     String at(int i) => i >= 0 && i < texts.length ? texts[i].trim() : '';
 
@@ -118,6 +134,7 @@ class BubblePayload {
         activeIndex: null,
         positionMs: positionMs,
         sampledAtMs: sampledAtMs,
+        textScaleFactor: textScaleFactor,
       );
     }
 
@@ -134,6 +151,7 @@ class BubblePayload {
       activeIndex: activeIndex,
       positionMs: positionMs,
       sampledAtMs: sampledAtMs,
+      textScaleFactor: textScaleFactor,
     );
   }
 
@@ -148,6 +166,7 @@ class BubblePayload {
     'a': activeIndex,
     'pos': positionMs,
     'sat': sampledAtMs,
+    'tsf': textScaleFactor,
   });
 
   /// Null for anything that is not a payload (the overlay also receives plain
@@ -179,6 +198,8 @@ class BubblePayload {
         activeIndex: (map['a'] as num?)?.toInt(),
         positionMs: (map['pos'] as num?)?.toInt(),
         sampledAtMs: (map['sat'] as num?)?.toInt(),
+        textScaleFactor:
+            ((map['tsf'] as num?)?.toDouble() ?? 1.0).clamp(0.5, 3.0),
       );
     } on FormatException {
       return null;
