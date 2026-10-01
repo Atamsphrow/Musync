@@ -284,23 +284,39 @@ class DebugLog extends ChangeNotifier {
     // in the meantime is merged in front of what comes back.
     unawaited(instance._restore());
 
+    // One uncaught async error can surface twice: the framework reports it
+    // through FlutterError, and the zone reports it through the dispatcher.
+    // Log the object once — the second sighting is the same failure.
+    final seen = <int>{};
+    bool fresh(Object? error) {
+      if (error == null) return true;
+      final id = identityHashCode(error);
+      if (!seen.add(id)) return false;
+      if (seen.length > 128) seen.remove(seen.first);
+      return true;
+    }
+
     final previous = FlutterError.onError;
     FlutterError.onError = (details) {
-      instance.error(
-        'Flutter',
-        details.exceptionAsString(),
-        stackTrace: details.stack,
-      );
+      if (fresh(details.exception)) {
+        instance.error(
+          'Flutter',
+          details.exceptionAsString(),
+          stackTrace: details.stack,
+        );
+      }
       previous?.call(details);
     };
 
     PlatformDispatcher.instance.onError = (error, stack) {
-      instance.error(
-        'Dart',
-        'Exception non capturée',
-        error: error,
-        stackTrace: stack,
-      );
+      if (fresh(error)) {
+        instance.error(
+          'Dart',
+          'Exception non capturée',
+          error: error,
+          stackTrace: stack,
+        );
+      }
       // False: the error is recorded, not handled. Swallowing it here would
       // hide it from anything else watching.
       return false;
