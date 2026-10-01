@@ -1,18 +1,32 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
+import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/settings/providers/playback_settings_provider.dart';
 
+/// Lyrics for the current song, tagged with the song they were read for.
+///
+/// The tag is what keeps the floating bubble honest at track changes: while
+/// the next track's lyrics load, this provider still exposes the previous
+/// track's value, and only the tag tells the two apart. Sampling the old
+/// song's lines with the new position is what pinned the bubble on the old
+/// song's last line forever.
 final currentLyricsProvider =
-    FutureProvider<({SyncedLyrics? synced, UnsyncedLyrics? unsynced})>((
+    FutureProvider<({Song? song, SyncedLyrics? synced, UnsyncedLyrics? unsynced})>((
       ref,
     ) async {
       final currentSong = ref.watch(currentSongProvider);
       if (currentSong == null) {
-        return (synced: null, unsynced: null);
+        return (song: null, synced: null, unsynced: null);
       }
-      return await Id3Reader.readLyrics(currentSong.filePath);
+      // Frame-walking: the tag's artwork is skipped, not loaded.
+      final lyrics = await Id3Reader.readLyricsFrames(currentSong.filePath);
+      return (
+        song: currentSong,
+        synced: lyrics.synced,
+        unsynced: lyrics.unsynced,
+      );
     });
 
 /// How often the active line is recomputed while a track plays.
@@ -42,7 +56,12 @@ const Duration lineRefreshInterval = Duration(milliseconds: 16);
 /// Emits only when the index actually changes, so the sixty samples a second
 /// cost one binary search each and rebuild nothing in between.
 final currentLineIndexProvider = StreamProvider.autoDispose<int?>((ref) {
-  final synced = ref.watch(currentLyricsProvider).valueOrNull?.synced;
+  // Song-tagged like the bubble: while the next track's lyrics load, the
+  // provider above still holds the previous track's, and ticking the old
+  // lines with the new position would light the wrong line.
+  final song = ref.watch(currentSongProvider);
+  final pair = ref.watch(currentLyricsProvider).valueOrNull;
+  final synced = pair?.song?.id == song?.id ? pair?.synced : null;
   if (synced == null || synced.isEmpty) return Stream.value(null);
 
   final service = ref.watch(audioPlayerServiceProvider);
