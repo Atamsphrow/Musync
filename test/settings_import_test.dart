@@ -211,16 +211,16 @@ void main() {
         () async {
       await put(support, 'ai_providers.json', jsonEncode({
         'providers': [
-          {'id': 'p1', 'name': 'DeepSeek', 'apiKey': 'real-key-1'},
-          {'id': 'p2', 'name': 'OpenAI', 'apiKey': 'real-key-2'},
+          {'id': 'p1', 'name': 'DeepSeek', 'kind': 'openAiCompatible', 'apiKey': 'real-key-1'},
+          {'id': 'p2', 'name': 'OpenAI', 'kind': 'openAiCompatible', 'apiKey': 'real-key-2'},
         ],
         'instruction': 'old',
       }));
       final bundle = await importer.parse(await bundleFile(validBundle(files: {
         'ai_providers.json': {
           'providers': [
-            {'id': 'p1', 'name': 'DeepSeek renommé', 'apiKey': ''},
-            {'id': 'p3', 'name': 'Nouveau', 'apiKey': ''},
+            {'id': 'p1', 'name': 'DeepSeek renommé', 'kind': 'openAiCompatible', 'apiKey': ''},
+            {'id': 'p3', 'name': 'Nouveau', 'kind': 'gemini', 'apiKey': ''},
           ],
           'instruction': 'new',
         },
@@ -245,13 +245,13 @@ void main() {
         () async {
       await put(support, 'ai_providers.json', jsonEncode({
         'providers': [
-          {'id': 'p1', 'name': 'DeepSeek', 'apiKey': 'old-key'},
+          {'id': 'p1', 'name': 'DeepSeek', 'kind': 'openAiCompatible', 'apiKey': 'old-key'},
         ],
       }));
       final bundle = await importer.parse(await bundleFile(validBundle(files: {
         'ai_providers.json': {
           'providers': [
-            {'id': 'p1', 'name': 'DeepSeek', 'apiKey': 'new-key'},
+            {'id': 'p1', 'name': 'DeepSeek', 'kind': 'openAiCompatible', 'apiKey': 'new-key'},
           ],
         },
       })));
@@ -273,6 +273,7 @@ void main() {
           {
             'id': 'p1',
             'name': 'Custom',
+            'kind': 'openAiCompatible',
             'auth': {'token': 'stored-token'}
           },
         ],
@@ -283,6 +284,7 @@ void main() {
             {
               'id': 'p1',
               'name': 'Custom',
+              'kind': 'openAiCompatible',
               'auth': {'token': ''}
             },
           ],
