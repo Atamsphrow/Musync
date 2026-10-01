@@ -119,10 +119,19 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
     }
     final idx = next.activeIndex;
     _shownIndex = idx;
-    _anchorMs = idx != null && idx >= 0 && idx < _timed.length
-        ? (_timed[idx]['ms'] as int? ?? 0)
-        : 0;
-    _anchorTime = DateTime.now();
+    final posMs = next.positionMs;
+    final satMs = next.sampledAtMs;
+    if (posMs != null && satMs != null) {
+      // Real audio position, extrapolated to now: the shareData flight time
+      // no longer makes the bubble lag behind the sound on track change.
+      _anchorMs = posMs;
+      _anchorTime = DateTime.fromMillisecondsSinceEpoch(satMs);
+    } else {
+      _anchorMs = idx != null && idx >= 0 && idx < _timed.length
+          ? (_timed[idx]['ms'] as int? ?? 0)
+          : 0;
+      _anchorTime = DateTime.now();
+    }
   }
 
   /// Advances the shown line on the overlay's own clock. Only moves forward
