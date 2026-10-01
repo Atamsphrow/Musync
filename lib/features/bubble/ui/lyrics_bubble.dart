@@ -28,6 +28,47 @@ class LyricsBubbleApp extends StatelessWidget {
   }
 }
 
+/// Anchor (position in ms, wall-clock time) the overlay ticker should run
+/// from for [payload], given the timed lines it carries.
+///
+/// The payload's own active line is the floor: when the sampled position is
+/// older than that line's timestamp (a stale sample), the anchor is raised
+/// to the line's timestamp instead of letting the ticker briefly show the
+/// previous line before catching up — the flicker. The ticker may still run
+/// ahead on its own clock afterwards; that is what keeps the bubble moving
+/// when the main isolate is gone.
+///
+/// Pure on purpose: the flicker regression is covered by unit tests.
+({int anchorMs, DateTime anchorTime}) bubbleAnchorFor(
+  BubblePayload payload,
+  List<TimedLineJson> timed, {
+  DateTime? now,
+}) {
+  final at = now ?? DateTime.now();
+  final posMs = payload.positionMs;
+  final satMs = payload.sampledAtMs;
+  if (posMs == null || satMs == null) {
+    final idx = payload.activeIndex;
+    final anchorMs = idx != null && idx >= 0 && idx < timed.length
+        ? (timed[idx]['ms'] as int? ?? 0)
+        : 0;
+    return (anchorMs: anchorMs, anchorTime: at);
+  }
+  // Real audio position, extrapolated to now: the shareData flight time no
+  // longer makes the bubble lag behind the sound on track change.
+  var anchorMs = posMs;
+  var anchorTime = DateTime.fromMillisecondsSinceEpoch(satMs);
+  final idx = payload.activeIndex;
+  if (idx != null && idx >= 0 && idx < timed.length) {
+    final lineMs = timed[idx]['ms'] as int? ?? 0;
+    if (anchorMs < lineMs) {
+      anchorMs = lineMs;
+      anchorTime = at;
+    }
+  }
+  return (anchorMs: anchorMs, anchorTime: anchorTime);
+}
+
 class _LyricsBubble extends StatefulWidget {
   const _LyricsBubble();
 
@@ -119,19 +160,9 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
     }
     final idx = next.activeIndex;
     _shownIndex = idx;
-    final posMs = next.positionMs;
-    final satMs = next.sampledAtMs;
-    if (posMs != null && satMs != null) {
-      // Real audio position, extrapolated to now: the shareData flight time
-      // no longer makes the bubble lag behind the sound on track change.
-      _anchorMs = posMs;
-      _anchorTime = DateTime.fromMillisecondsSinceEpoch(satMs);
-    } else {
-      _anchorMs = idx != null && idx >= 0 && idx < _timed.length
-          ? (_timed[idx]['ms'] as int? ?? 0)
-          : 0;
-      _anchorTime = DateTime.now();
-    }
+    final anchor = bubbleAnchorFor(next, _timed);
+    _anchorMs = anchor.anchorMs;
+    _anchorTime = anchor.anchorTime;
   }
 
   /// Advances the shown line on the overlay's own clock. Only moves forward
