@@ -4,6 +4,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:musync/core/router/app_router.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/lyrics/providers/batch_provider.dart';
 import 'package:musync/features/lyrics/ui/embed_lyrics_action.dart';
@@ -31,7 +32,7 @@ class BatchScreen extends ConsumerStatefulWidget {
   ConsumerState<BatchScreen> createState() => _BatchScreenState();
 }
 
-class _BatchScreenState extends ConsumerState<BatchScreen> {
+class _BatchScreenState extends ConsumerState<BatchScreen> with RouteAware {
   /// Tracks left alone because they already had timed lyrics.
   ///
   /// Kept on the screen rather than in the batch state: it describes one press
@@ -48,6 +49,27 @@ class _BatchScreenState extends ConsumerState<BatchScreen> {
   /// keeping the `ref` is not.
   late final BatchNotifier _batch;
 
+  /// Publishes whether this screen is the current route, so the batch
+  /// notifier knows when a finished search needs a notification.
+  StateController<bool>? _batchVisible;
+  bool _routeSubscribed = false;
+
+  void _publishBatchVisible(bool visible) {
+    _batchVisible?.state = visible;
+  }
+
+  @override
+  void didPush() => _publishBatchVisible(true);
+
+  @override
+  void didPop() => _publishBatchVisible(false);
+
+  @override
+  void didPushNext() => _publishBatchVisible(false);
+
+  @override
+  void didPopNext() => _publishBatchVisible(true);
+
   @override
   void initState() {
     super.initState();
@@ -55,6 +77,29 @@ class _BatchScreenState extends ConsumerState<BatchScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _batch.start(widget.songs, filenameFirst: widget.filenameFirst);
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // ref.read is legal here; it will not be in dispose().
+    _batchVisible ??= ref.read(batchScreenVisibleProvider.notifier);
+    final route = ModalRoute.of(context);
+    if (route != null && !_routeSubscribed) {
+      appRouteObserver.subscribe(this, route);
+      _routeSubscribed = true;
+      _publishBatchVisible(route.isCurrent);
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_routeSubscribed) {
+      _publishBatchVisible(false);
+      appRouteObserver.unsubscribe(this);
+      _routeSubscribed = false;
+    }
+    super.dispose();
   }
 
   // No dispose override on purpose.
