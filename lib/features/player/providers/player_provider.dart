@@ -42,6 +42,15 @@ final playerStateProvider = StreamProvider<PlayerState>((ref) {
 /// then: the screen already shows the synced lyrics.
 final playerScreenVisibleProvider = StateProvider<bool>((ref) => false);
 
+/// True while the app is in the foreground (`AppLifecycleState.resumed`),
+/// published by the root widget's lifecycle observer.
+///
+/// Pressing HOME from the now-playing screen does not change the route, so
+/// [playerScreenVisibleProvider] alone would keep the bubble hidden forever.
+/// The bubble treats the screen as visible only when the app is foregrounded
+/// too: backgrounded, the bubble comes back.
+final appForegroundProvider = StateProvider<bool>((ref) => true);
+
 final positionProvider = StreamProvider<Duration>((ref) {
   final service = ref.watch(audioPlayerServiceProvider);
   return service.positionStream;
