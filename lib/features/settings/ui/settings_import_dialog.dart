@@ -158,6 +158,13 @@ class _ImportConfirmDialog extends StatelessWidget {
             ),
           const SizedBox(height: 8),
           Text('Contenu : ${contents.join(', ')}.'),
+          if (bundle.ignoredFiles.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Ignoré (non reconnu) : ${bundle.ignoredFiles.join(', ')}.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
           const SizedBox(height: 8),
           Text(
             bundle.includesSecrets
