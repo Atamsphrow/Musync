@@ -158,20 +158,26 @@ abstract final class MediaStore {
     _channel.setMethodCallHandler(null);
   }
 
-  static Future<List<String>> takeSharedAudio() async {
-    if (!Platform.isAndroid) return const <String>[];
+  /// Drains the native share queue.
+  ///
+  /// Returns the resolved file paths and how many shared URIs could not be
+  /// resolved to files (e.g. content:// from a third-party app).
+  static Future<({List<String> paths, int dropped})> takeSharedAudio() async {
+    if (!Platform.isAndroid) return (paths: const <String>[], dropped: 0);
 
     try {
-      final paths = await _channel
-          .invokeListMethod<String>('takeSharedAudio')
+      final result = await _channel
+          .invokeMapMethod<String, Object>('takeSharedAudio')
           .timeout(_timeout);
-      return paths ?? const <String>[];
+      final paths = (result?['paths'] as List?)?.cast<String>() ?? const <String>[];
+      final dropped = (result?['dropped'] as int?) ?? 0;
+      return (paths: paths, dropped: dropped);
     } on TimeoutException {
-      return const <String>[];
+      return (paths: const <String>[], dropped: 0);
     } on MissingPluginException {
-      return const <String>[];
+      return (paths: const <String>[], dropped: 0);
     } on PlatformException {
-      return const <String>[];
+      return (paths: const <String>[], dropped: 0);
     }
   }
 }
