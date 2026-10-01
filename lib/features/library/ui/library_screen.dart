@@ -371,6 +371,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     navigator.popUntil((route) => route.settings.name != AppRoutes.player);
 
     if (needSearch.isEmpty) {
+      // The player screen is about to open: hide the floating bubble right
+      // now instead of waiting for the route callbacks, so a share never
+      // leaves the bubble sitting on top of "Lecture en cours".
+      ref.read(playerScreenVisibleProvider.notifier).state = true;
       // All shared tracks already have synced lyrics. If several were shared,
       // queue them up instead of silently dropping all but the first.
       if (songs.length == 1) {
