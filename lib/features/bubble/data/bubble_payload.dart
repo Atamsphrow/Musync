@@ -18,6 +18,11 @@ int bubbleHeightFor(int lines) => switch (lines) {
   _ => 172,
 };
 
+/// One timed line, as the overlay needs it: milliseconds since track start
+/// and the text to show. Plain maps keep the JSON small and the class
+/// importable from both isolates without Flutter.
+typedef TimedLineJson = Map<String, Object>;
+
 class BubblePayload {
   final String previous;
   final String current;
@@ -34,19 +39,39 @@ class BubblePayload {
   /// at its opening width.
   final int widthDp;
 
+  /// Identifies the track these lines belong to. The overlay uses it to tell
+  /// a new song's payload from a correction for the current one.
+  final String songId;
+
+  /// Every timed line of the track: `{'ms': int, 't': String}`. The overlay
+  /// runs its own ticker over these, so the lines keep advancing even when
+  /// the main isolate is dead or its updates stop arriving in background.
+  final List<TimedLineJson> timedLines;
+
+  /// The line the main isolate computed as active, or null before the first
+  /// line. The overlay anchors its own clock to this line's timestamp, so a
+  /// correction from the main isolate re-syncs it instead of fighting it.
+  final int? activeIndex;
+
   const BubblePayload({
     required this.previous,
     required this.current,
     required this.next,
     required this.lines,
     required this.widthDp,
+    this.songId = '',
+    this.timedLines = const [],
+    this.activeIndex,
   });
 
   /// Nothing to sing: the bubble stays up, showing only the note.
   const BubblePayload.idle(this.lines, {this.widthDp = 120})
     : previous = '',
       current = kBubbleIdle,
-      next = '';
+      next = '',
+      songId = '',
+      timedLines = const [],
+      activeIndex = null;
 
   /// Builds what to show from the texts of the timed lines and the index the
   /// player says is active.
@@ -59,6 +84,8 @@ class BubblePayload {
     int? activeIndex,
     int lines, {
     required int widthDp,
+    String songId = '',
+    List<TimedLineJson> timedLines = const [],
   }) {
     if (texts.isEmpty) return BubblePayload.idle(lines, widthDp: widthDp);
 
@@ -71,6 +98,9 @@ class BubblePayload {
         next: at(0),
         lines: lines,
         widthDp: widthDp,
+        songId: songId,
+        timedLines: timedLines,
+        activeIndex: null,
       );
     }
 
@@ -82,6 +112,9 @@ class BubblePayload {
       next: at(activeIndex + 1),
       lines: lines,
       widthDp: widthDp,
+      songId: songId,
+      timedLines: timedLines,
+      activeIndex: activeIndex,
     );
   }
 
@@ -91,6 +124,9 @@ class BubblePayload {
     'n': next,
     'l': lines,
     'w': widthDp,
+    's': songId,
+    't': timedLines,
+    'a': activeIndex,
   });
 
   /// Null for anything that is not a payload (the overlay also receives plain
@@ -100,6 +136,7 @@ class BubblePayload {
     try {
       final map = jsonDecode(raw);
       if (map is! Map) return null;
+      final timed = map['t'];
       return BubblePayload(
         previous: '${map['p'] ?? ''}',
         current: '${map['c'] ?? kBubbleIdle}',
@@ -107,6 +144,18 @@ class BubblePayload {
         lines: ((map['l'] as num?)?.toInt() ?? 2).clamp(1, 3),
         // Same default as the const constructor above: 120 dp.
         widthDp: (map['w'] as num?)?.toInt() ?? 120,
+        songId: '${map['s'] ?? ''}',
+        timedLines: timed is List
+            ? [
+                for (final e in timed)
+                  if (e is Map)
+                    {
+                      'ms': (e['ms'] as num?)?.toInt() ?? 0,
+                      't': '${e['t'] ?? ''}',
+                    },
+              ]
+            : const [],
+        activeIndex: (map['a'] as num?)?.toInt(),
       );
     } on FormatException {
       return null;
