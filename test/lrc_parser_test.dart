@@ -346,5 +346,13 @@ Une note de bas de page
     test('a line that opens with words is not timed at all', () {
       expect(LrcParser.parse('Sans heure [00:05.00]').isEmpty, isTrue);
     });
+
+    test('a leading BOM does not eat the first line', () {
+      final lyrics = LrcParser.parse('\uFEFF[00:01.00]Première');
+
+      expect(lyrics.length, 1);
+      expect(lyrics.lines.single.text, 'Première');
+      expect(LrcParser.stripTimestamps('\uFEFF[00:01.00]Première'), 'Première');
+    });
   });
 }
