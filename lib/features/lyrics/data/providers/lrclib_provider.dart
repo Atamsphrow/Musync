@@ -89,45 +89,51 @@ class LrclibSource extends LyricsSource {
       }
     }
 
-    // 1. Exact lookup. Only possible with a duration, and 404 simply means
-    //    LRCLIB has nothing for this exact recording — not an error.
+    // The two endpoints are independent, so they run in parallel: running
+    // them one after the other doubled the worst case (two timeouts plus a
+    // retry each, ~50 s) for no reason. The exact lookup's failure is kept
+    // for the error message when both fail.
     //
-    //    A failure here does not end the search. The two endpoints are used
-    //    together on purpose, and letting this one throw meant a single slow
-    //    exact lookup failed the source outright — even though the broad search
-    //    below would have answered. The reason is kept in case *both* fail.
+    // 404 on `/get` simply means LRCLIB has nothing for this exact recording
+    // — an outcome, not an error — and a failure there does not end the
+    // search: the broad search below may still answer.
+    final exactFuture = (durationMs != null && durationMs > 0)
+        ? _getJson(
+            Uri.parse('$baseUrl/get').replace(
+              queryParameters: {
+                'artist_name': artist,
+                'track_name': title,
+                if (album != null && album.isNotEmpty) 'album_name': album,
+                'duration': (durationMs ~/ 1000).toString(),
+              },
+            ),
+          ).then<Object?>((v) => v, onError: (Object e) => e)
+        : Future<Object?>.value(null);
+    final broadFuture = _getJson(
+      Uri.parse('$baseUrl/search').replace(
+        queryParameters: {'artist_name': artist, 'track_name': title},
+      ),
+    ).then<Object?>((v) => v, onError: (Object e) => e);
+
+    final settled = await Future.wait([exactFuture, broadFuture]);
+    final exact = settled[0];
+    final found = settled[1];
+
     LyricsSourceException? exactFailure;
-    if (durationMs != null && durationMs > 0) {
-      try {
-        final exact = await _getJson(
-          Uri.parse('$baseUrl/get').replace(
-            queryParameters: {
-              'artist_name': artist,
-              'track_name': title,
-              if (album != null && album.isNotEmpty) 'album_name': album,
-              'duration': (durationMs ~/ 1000).toString(),
-            },
-          ),
-        );
-        if (exact is Map<String, dynamic>) collect(exact, 1.0);
-      } on LyricsSourceException catch (e) {
-        exactFailure = e;
-      }
+    if (exact is LyricsSourceException) {
+      exactFailure = exact;
+    } else if (exact is Map<String, dynamic>) {
+      collect(exact, 1.0);
+    } else if (exact != null) {
+      exactFailure =
+          LyricsSourceException(name, 'LRCLIB ne répond pas.', exact);
     }
 
-    // 2. Broad search, to cover files whose tags don't line up with LRCLIB's.
-    final Object? found;
-    try {
-      found = await _getJson(
-        Uri.parse('$baseUrl/search').replace(
-          queryParameters: {'artist_name': artist, 'track_name': title},
-        ),
-      );
-    } on LyricsSourceException catch (e) {
+    if (found is LyricsSourceException) {
       // Both endpoints failed, so the source really is unusable. The exact
       // lookup's reason comes first when there is one: it was the earlier
       // failure, and the two are almost always the same cause anyway.
-      throw exactFailure ?? e;
+      throw exactFailure ?? found;
     }
 
     if (found is List) {
