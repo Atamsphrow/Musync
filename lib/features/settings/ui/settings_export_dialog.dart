@@ -50,6 +50,12 @@ Future<void> exportSettings(BuildContext context) async {
       now: moment,
     );
     final unreadable = (bundle['unreadable'] as List?)?.cast<String>() ?? const [];
+    final tagBackups = bundle['tagBackups'] as Map?;
+    final backupCount = (tagBackups?['index'] as List?)?.length ?? 0;
+    final backupMissing =
+        (tagBackups?['missing'] as List?)?.cast<String>() ?? const [];
+    final backupUnreadable =
+        (tagBackups?['unreadable'] as List?)?.cast<String>() ?? const [];
 
     final savedUri = await FilePicker.saveFile(
       dialogTitle: 'Enregistrer l\u2019export Musync',
@@ -65,11 +71,21 @@ Future<void> exportSettings(BuildContext context) async {
     if (!context.mounted) return;
     final savedPath = savedUri.toString();
 
-    final message = unreadable.isEmpty
-        ? 'Exporté : ${_shortPath(savedPath)}'
-        : 'Exporté : ${_shortPath(savedPath)} '
-            '(${unreadable.length} réglage(s) illisible(s) non inclus : '
-            '${unreadable.join(', ')})';
+    final problems = [
+      if (unreadable.isNotEmpty)
+        '${unreadable.length} réglage(s) illisible(s) non inclus : '
+            '${unreadable.join(', ')}',
+      if (backupMissing.isNotEmpty || backupUnreadable.isNotEmpty)
+        '${backupMissing.length + backupUnreadable.length} sauvegarde(s) '
+            "d'historique manquante(s)",
+    ];
+    final history = backupCount == 0
+        ? 'sans historique'
+        : 'avec $backupCount sauvegarde(s) d’historique';
+    final message = problems.isEmpty
+        ? 'Exporté ($history) : ${_shortPath(savedPath)}'
+        : 'Exporté ($history) : ${_shortPath(savedPath)} '
+            '(${problems.join(' ; ')})';
     messenger.showOnly(
       SnackBar(
         duration: const Duration(seconds: 6),
@@ -118,7 +134,9 @@ class _ExportDialogState extends State<_ExportDialog> {
         children: [
           const Text(
             'Crée un fichier JSON dans Téléchargements/Musync avec la lecture, '
-            'les sources de paroles, les fournisseurs IA et la bulle flottante.',
+            "les sources de paroles, les fournisseurs IA, la bulle flottante "
+            "et l'historique des sauvegardes de tags (pour annuler une "
+            'écriture après réinstallation).',
           ),
           const SizedBox(height: 8),
           CheckboxListTile(
