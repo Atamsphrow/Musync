@@ -96,11 +96,29 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     }
   }
 
+  /// Serialises start/stop: the permission request is async, so a second tap
+  /// while the first is still asking must not interleave a stop into a
+  /// half-started bubble (or vice versa). Rapid taps resolve in order, and
+  /// the last one wins.
+  Future<void> _toggleQueue = Future.value();
+
   /// Enables the bubble, asking for the "display over other apps" permission
   /// first. Called only from the button. The window itself appears only when
   /// the visibility rules allow it — never on the now-playing screen, never
   /// while paused.
-  Future<BubbleStart> start() async {
+  Future<BubbleStart> start() {
+    final next = _toggleQueue.then((_) => _startNow());
+    _toggleQueue = next.then((_) {}, onError: (_) {});
+    return next;
+  }
+
+  Future<void> stop() {
+    final next = _toggleQueue.then((_) => _stopNow());
+    _toggleQueue = next.then((_) {}, onError: (_) {});
+    return next;
+  }
+
+  Future<BubbleStart> _startNow() async {
     if (state.active) return BubbleStart.started;
     try {
       var granted = await FlutterOverlayWindow.isPermissionGranted();
@@ -125,7 +143,7 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     return BubbleStart.started;
   }
 
-  Future<void> stop() async {
+  Future<void> _stopNow() async {
     _detach();
     state = state.copyWith(active: false);
     _syncOverlayVisibility();
@@ -323,22 +341,42 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   BubblePayload _payload() {
     final screenWidth = _screenWidthDp();
     // Only fresh data. While the next track's lyrics load — or when the load
-    // failed — the provider still exposes the previous track's value, and
-    // sampling it with the new position pins the bubble on the old song's
+    // failed — the provider still exposes the previous track's value, and the
+    // song tag is the only thing that tells them apart. Sampling the old
+    // song's lines with the new position pins the bubble on the old song's
     // last line forever. Stale is worse than empty: show the idle note.
+    final song = ref.read(currentSongProvider);
     final lyrics = ref.read(currentLyricsProvider);
-    final synced = (!lyrics.isLoading && !lyrics.hasError)
+    final synced =
+        (!lyrics.isLoading &&
+            !lyrics.hasError &&
+            lyrics.valueOrNull?.song?.id == song?.id)
         ? lyrics.valueOrNull?.synced
         : null;
     // One steady width, whatever the line (see bubble_sizing.dart).
     final widthDp = bubbleFixedWidth(screenWidth);
+    // Timed lines for the overlay's own ticker: it advances them on its own
+    // clock, so the bubble keeps moving even when this isolate is dead or
+    // its updates stop arriving in background.
+    final timedLines = synced == null || synced.isEmpty
+        ? const <TimedLineJson>[]
+        : [
+            for (final line in synced.lines)
+              {
+                'ms': line.timestamp?.inMilliseconds ?? 0,
+                't': line.text,
+              },
+          ];
+    final activeIndex = ref.read(currentLineIndexProvider).valueOrNull;
     final base = synced == null || synced.isEmpty
         ? BubblePayload.idle(state.lines)
         : BubblePayload.fromLines(
             [for (final line in synced.lines) line.text],
-            ref.read(currentLineIndexProvider).valueOrNull,
+            activeIndex,
             state.lines,
             widthDp: 0, // Replaced by the fixed width below.
+            songId: '${song?.id ?? 0}',
+            timedLines: timedLines,
           );
     return BubblePayload(
       previous: base.previous,
@@ -346,6 +384,9 @@ class LyricsBubbleController extends Notifier<BubbleState> {
       next: base.next,
       lines: base.lines,
       widthDp: widthDp,
+      songId: base.songId,
+      timedLines: base.timedLines,
+      activeIndex: base.activeIndex,
     );
   }
 
