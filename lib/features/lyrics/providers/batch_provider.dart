@@ -13,6 +13,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/media_store.dart';
@@ -23,6 +24,7 @@ import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 import 'package:musync/features/lyrics/providers/search_provider.dart';
+import 'package:musync/features/player/providers/player_provider.dart';
 
 enum BatchPhase { idle, searching, review, writing, done }
 
@@ -103,12 +105,19 @@ class BatchState {
   /// Written successfully during the writing phase.
   final int written;
 
+  /// True while a write loop owns the batch. The loop lives in the screen's
+  /// state, so leaving the screen abandons it with the phase still `writing`:
+  /// the screen uses this to tell "running" from "abandoned" and offer to
+  /// resume instead of bricking the batch.
+  final bool writeLoopRunning;
+
   const BatchState({
     this.phase = BatchPhase.idle,
     this.candidates = const [],
     this.done = 0,
     this.total = 0,
     this.written = 0,
+    this.writeLoopRunning = false,
   });
 
   BatchState copyWith({
@@ -117,12 +126,14 @@ class BatchState {
     int? done,
     int? total,
     int? written,
+    bool? writeLoopRunning,
   }) => BatchState(
     phase: phase ?? this.phase,
     candidates: candidates ?? this.candidates,
     done: done ?? this.done,
     total: total ?? this.total,
     written: written ?? this.written,
+    writeLoopRunning: writeLoopRunning ?? this.writeLoopRunning,
   );
 
   Iterable<BatchCandidate> get found => candidates.where((c) => c.hasMatch);
@@ -138,6 +149,15 @@ final batchProvider = NotifierProvider<BatchNotifier, BatchState>(
 /// when the user leaves the page; the notifier uses this to decide whether a
 /// completion notification is needed.
 final batchScreenVisibleProvider = StateProvider<bool>((ref) => false);
+
+/// Whether the batch-done notification should fire.
+///
+/// Notify when the batch screen is not the visible route, or when the app
+/// itself is backgrounded (HOME leaves the route current, so the screen
+/// flag alone would wrongly suppress the notification).
+@visibleForTesting
+bool shouldNotifyBatchDone(bool screenVisible, bool appForeground) =>
+    !screenVisible || !appForeground;
 
 class BatchNotifier extends Notifier<BatchState> {
   /// Set by [cancel], read between batches. A search already in flight is
@@ -237,6 +257,7 @@ class BatchNotifier extends Notifier<BatchState> {
     if (state.phase != BatchPhase.idle && holdsSameBatch(songs)) return;
 
     _cancelled = false;
+    _failedPaths.clear();
     _nextSlot = DateTime.fromMillisecondsSinceEpoch(0);
     final run = ++_generation;
 
@@ -263,6 +284,11 @@ class BatchNotifier extends Notifier<BatchState> {
     // two of them finished while the third still had a hundred to go.
     var next = 0;
     var completed = 0;
+    // Throttle for the candidate list below: republishing it on every track
+    // is an O(n) copy plus a full list rebuild per track — O(n^2) on a
+    // 300-track batch. The progress counter stays real-time; the list
+    // refreshes at ~4 Hz and once more at the end.
+    var lastCandidatesPublishMs = 0;
 
     Future<void> work() async {
       while (true) {
@@ -285,20 +311,36 @@ class BatchNotifier extends Notifier<BatchState> {
 
         candidates[index] = result;
         completed++;
-        state = state.copyWith(
-          candidates: List.of(candidates),
-          done: completed,
-        );
+        final nowMs = DateTime.now().millisecondsSinceEpoch;
+        if (completed >= songs.length ||
+            nowMs - lastCandidatesPublishMs >= 250) {
+          lastCandidatesPublishMs = nowMs;
+          state = state.copyWith(
+            candidates: List.of(candidates),
+            done: completed,
+          );
+        } else {
+          state = state.copyWith(done: completed);
+        }
       }
     }
 
     await Future.wait([for (var i = 0; i < _concurrency; i++) work()]);
 
     if (run != _generation) return;
-    state = state.copyWith(phase: BatchPhase.review);
+    state = state.copyWith(
+      phase: BatchPhase.review,
+      candidates: List.of(candidates),
+      done: completed,
+    );
     // The user left the page while the search ran in background: tell them
-    // it's ready for review.
-    if (!(ref.read(batchScreenVisibleProvider))) {
+    // it's ready for review. RouteAware alone misses HOME — the batch route
+    // is still current while the app is backgrounded — so the foreground
+    // state counts too.
+    if (shouldNotifyBatchDone(
+      ref.read(batchScreenVisibleProvider),
+      ref.read(appForegroundProvider),
+    )) {
       final found = state.candidates.where((c) => c.match != null).length;
       final total = state.candidates.length;
       unawaited(
@@ -460,6 +502,10 @@ class BatchNotifier extends Notifier<BatchState> {
   /// stopping early should still leave something worth reviewing.
   void cancel() {
     _cancelled = true;
+    // Retire the in-flight run: without this, the tail of start() would still
+    // fire the "recherche terminée" notification for a search the user
+    // explicitly stopped.
+    _generation++;
     if (state.phase == BatchPhase.searching) {
       state = state.copyWith(phase: BatchPhase.review);
     }
@@ -498,7 +544,21 @@ class BatchNotifier extends Notifier<BatchState> {
     );
   }
 
-  void beginWriting() => state = state.copyWith(phase: BatchPhase.writing);
+  /// Paths whose write failed in this run, in order. Shown on the summary so
+  /// failures are not silently swallowed by the written count.
+  final List<String> _failedPaths = [];
+  List<String> get failedPaths => List.unmodifiable(_failedPaths);
+
+  void beginWriting() {
+    state = state.copyWith(phase: BatchPhase.writing, writeLoopRunning: true);
+  }
+
+  /// A track whose write failed (permission, unsupported tag, disk error).
+  /// The reason was already shown when it happened; this keeps the list for
+  /// the summary.
+  void recordFailed(String filePath) {
+    if (!_failedPaths.contains(filePath)) _failedPaths.add(filePath);
+  }
 
   /// Records a track as written, and refuses to count it twice.
   ///
@@ -513,7 +573,16 @@ class BatchNotifier extends Notifier<BatchState> {
       .where((c) => _writtenPaths.contains(c.song.filePath))
       .length;
 
-  void finish() => state = state.copyWith(phase: BatchPhase.done);
+  /// Ends the write loop. When [completed] is false the loop was abandoned
+  /// (the screen went away mid-write): the phase stays `writing` and the
+  /// screen offers to resume where it stopped instead of bricking the batch.
+  void endWriting({required bool completed}) {
+    if (completed) {
+      state = state.copyWith(phase: BatchPhase.done, writeLoopRunning: false);
+    } else {
+      state = state.copyWith(writeLoopRunning: false);
+    }
+  }
 
   /// Clears everything and abandons any run in flight.
   ///
@@ -525,6 +594,7 @@ class BatchNotifier extends Notifier<BatchState> {
     _cancelled = true;
     _generation++;
     _writtenPaths.clear();
+    _failedPaths.clear();
     state = const BatchState();
   }
 }
