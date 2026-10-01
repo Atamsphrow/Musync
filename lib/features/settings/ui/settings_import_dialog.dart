@@ -112,6 +112,14 @@ String _summary(ImportReport report) {
     if (report.appliedPreferences.contains('last_song_path')) 'Dernier morceau',
   ];
   var text = 'Importé : ${parts.join(', ')}.';
+  if (report.tagBackupsRestored > 0) {
+    text +=
+        ' ${_plural(report.tagBackupsRestored, 'sauvegarde d’historique restaurée', 'sauvegardes d’historique restaurées')}.';
+  }
+  if (report.tagBackupsSkipped.isNotEmpty) {
+    text +=
+        ' ${report.tagBackupsSkipped.length} sauvegarde(s) sans contenu ignorée(s).';
+  }
   if (report.secretsApplied > 0) {
     text +=
         ' ${_plural(report.secretsApplied, 'clé API appliquée', 'clés API appliquées')}.';
@@ -131,12 +139,16 @@ class _ImportConfirmDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final history = bundle.tagBackups;
     final contents = [
       for (final file in bundle.files.keys) _fileLabels[file] ?? file,
       for (final entry in bundle.preferences.entries)
         if (entry.key == 'bubble_lines')
           'Bulle flottante : ${entry.value} lignes',
       if (bundle.preferences.containsKey('last_song_path')) 'Dernier morceau',
+      if (history != null)
+        'Historique : ${history.entries.length} sauvegarde(s)'
+        '${history.skipped.isEmpty ? '' : ' (${history.skipped.length} sans contenu)'}',
     ];
     return AlertDialog(
       title: const Text('Importer les paramètres'),
@@ -174,7 +186,8 @@ class _ImportConfirmDialog extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           const Text(
-            'Les réglages actuels seront remplacés.',
+            "Les réglages actuels seront remplacés ; l'historique des "
+            'sauvegardes aussi, quand le fichier en contient un.',
             style: TextStyle(fontWeight: FontWeight.bold),
           ),
         ],
