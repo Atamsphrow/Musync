@@ -74,4 +74,42 @@ void main() {
       expect(bubbleHeightFor(2) < bubbleHeightFor(3), isTrue);
     });
   });
+  group('timed lines for the overlay ticker', () {
+    test('encode/decode round-trips the song id, timed lines and index', () {
+      final p = BubblePayload.fromLines(
+        texts,
+        1,
+        3,
+        widthDp: 200,
+        songId: '42',
+        timedLines: [
+          {'ms': 0, 't': 'Une'},
+          {'ms': 5000, 't': 'Deux'},
+          {'ms': 10000, 't': 'Trois'},
+        ],
+      );
+      final back = BubblePayload.tryDecode(p.encode())!;
+      expect(back.songId, '42');
+      expect(back.activeIndex, 1);
+      expect(back.timedLines.length, 3);
+      expect(back.timedLines[1]['ms'], 5000);
+      expect(back.timedLines[1]['t'], 'Deux');
+    });
+
+    test('old payloads without timed lines still decode', () {
+      final back = BubblePayload.tryDecode(
+        '{"p":"","c":"Une","n":"Deux","l":2,"w":200}',
+      )!;
+      expect(back.songId, '');
+      expect(back.timedLines, isEmpty);
+      expect(back.activeIndex, isNull);
+    });
+
+    test('idle carries no timed lines', () {
+      const p = BubblePayload.idle(2);
+      final back = BubblePayload.tryDecode(p.encode())!;
+      expect(back.timedLines, isEmpty);
+      expect(back.songId, '');
+    });
+  });
 }
