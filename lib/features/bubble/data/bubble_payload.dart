@@ -53,6 +53,15 @@ class BubblePayload {
   /// correction from the main isolate re-syncs it instead of fighting it.
   final int? activeIndex;
 
+  /// Audio position in milliseconds when the payload was built, and the wall
+  /// clock (DateTime.now().millisecondsSinceEpoch) at that moment. The
+  /// overlay extrapolates `positionMs + (now - sampledAtMs)` instead of
+  /// anchoring to the active line's timestamp, so the shareData transmission
+  /// delay no longer makes the bubble lag behind the sound on track change.
+  /// Null when the position was unknown (idle payload).
+  final int? positionMs;
+  final int? sampledAtMs;
+
   const BubblePayload({
     required this.previous,
     required this.current,
@@ -62,6 +71,8 @@ class BubblePayload {
     this.songId = '',
     this.timedLines = const [],
     this.activeIndex,
+    this.positionMs,
+    this.sampledAtMs,
   });
 
   /// Nothing to sing: the bubble stays up, showing only the note.
@@ -71,7 +82,9 @@ class BubblePayload {
       next = '',
       songId = '',
       timedLines = const [],
-      activeIndex = null;
+      activeIndex = null,
+      positionMs = null,
+      sampledAtMs = null;
 
   /// Builds what to show from the texts of the timed lines and the index the
   /// player says is active.
@@ -86,6 +99,8 @@ class BubblePayload {
     required int widthDp,
     String songId = '',
     List<TimedLineJson> timedLines = const [],
+    int? positionMs,
+    int? sampledAtMs,
   }) {
     if (texts.isEmpty) return BubblePayload.idle(lines, widthDp: widthDp);
 
@@ -101,6 +116,8 @@ class BubblePayload {
         songId: songId,
         timedLines: timedLines,
         activeIndex: null,
+        positionMs: positionMs,
+        sampledAtMs: sampledAtMs,
       );
     }
 
@@ -115,6 +132,8 @@ class BubblePayload {
       songId: songId,
       timedLines: timedLines,
       activeIndex: activeIndex,
+      positionMs: positionMs,
+      sampledAtMs: sampledAtMs,
     );
   }
 
@@ -127,6 +146,8 @@ class BubblePayload {
     's': songId,
     't': timedLines,
     'a': activeIndex,
+    'pos': positionMs,
+    'sat': sampledAtMs,
   });
 
   /// Null for anything that is not a payload (the overlay also receives plain
@@ -156,6 +177,8 @@ class BubblePayload {
               ]
             : const [],
         activeIndex: (map['a'] as num?)?.toInt(),
+        positionMs: (map['pos'] as num?)?.toInt(),
+        sampledAtMs: (map['sat'] as num?)?.toInt(),
       );
     } on FormatException {
       return null;
