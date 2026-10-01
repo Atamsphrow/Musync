@@ -15,6 +15,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/debug_log.dart';
+import 'package:musync/core/services/media_store.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/data/music_scanner.dart';
 import 'package:musync/core/utils/text_search.dart';
@@ -132,6 +133,11 @@ class BatchState {
 final batchProvider = NotifierProvider<BatchNotifier, BatchState>(
   BatchNotifier.new,
 );
+
+/// True while the batch screen is the current route. The batch keeps running
+/// when the user leaves the page; the notifier uses this to decide whether a
+/// completion notification is needed.
+final batchScreenVisibleProvider = StateProvider<bool>((ref) => false);
 
 class BatchNotifier extends Notifier<BatchState> {
   /// Set by [cancel], read between batches. A search already in flight is
@@ -290,6 +296,19 @@ class BatchNotifier extends Notifier<BatchState> {
 
     if (run != _generation) return;
     state = state.copyWith(phase: BatchPhase.review);
+    // The user left the page while the search ran in background: tell them
+    // it's ready for review.
+    if (!(ref.read(batchScreenVisibleProvider))) {
+      final found = state.candidates.where((c) => c.match != null).length;
+      final total = state.candidates.length;
+      unawaited(
+        MediaStore.showNotification(
+          title: 'Recherche par lot terminée',
+          body: '$found paroles trouvées sur $total morceaux. '
+              'Touchez pour vérifier avant d\'écrire.',
+        ),
+      );
+    }
   }
 
   Future<BatchCandidate> _searchOne(
