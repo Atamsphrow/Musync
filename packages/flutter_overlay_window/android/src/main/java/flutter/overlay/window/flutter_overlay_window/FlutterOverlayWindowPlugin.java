@@ -44,6 +44,9 @@ public class FlutterOverlayWindowPlugin implements
     private BasicMessageChannel<Object> messenger;
     private Result pendingResult;
     final int REQUEST_CODE_FOR_OVERLAY_PERMISSION = 1248;
+    // Musync: held so onDetachedFromActivity can unregister the listener —
+    // the detach callback does not receive the binding.
+    private ActivityPluginBinding lastBinding;
 
     @Override
     public void onAttachedToEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
@@ -59,11 +62,14 @@ public class FlutterOverlayWindowPlugin implements
     @RequiresApi(api = Build.VERSION_CODES.N)
     @Override
     public void onMethodCall(@NonNull MethodCall call, @NonNull Result result) {
-        pendingResult = result;
+        // Musync: pendingResult is only ever for requestPermission — the
+        // old code overwrote it for every method, so a permission result
+        // could complete the wrong Dart await.
         if (call.method.equals("checkPermission")) {
             result.success(checkOverlayPermission());
         } else if (call.method.equals("requestPermission")) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                pendingResult = result;
                 Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION);
                 intent.setData(Uri.parse("package:" + mActivity.getPackageName()));
                 mActivity.startActivityForResult(intent, REQUEST_CODE_FOR_OVERLAY_PERMISSION);
@@ -150,6 +156,10 @@ public class FlutterOverlayWindowPlugin implements
     @Override
     public void onAttachedToActivity(@NonNull ActivityPluginBinding binding) {
         mActivity = binding.getActivity();
+        lastBinding = binding;
+        // Musync: register as ActivityResultListener so the overlay
+        // permission result actually reaches onActivityResult.
+        binding.addActivityResultListener(this);
         // Musync: only the MAIN engine ever attaches to an activity — the
         // overlay engine lives in the service and never reaches this callback.
         // Registering the static here (and not in onAttachedToEngine, where
@@ -170,15 +180,29 @@ public class FlutterOverlayWindowPlugin implements
 
     @Override
     public void onDetachedFromActivityForConfigChanges() {
+        // Musync: mirror the listener registration across config changes.
+        // (The binding is going away; the reattach re-adds it.)
     }
 
     @Override
     public void onReattachedToActivityForConfigChanges(@NonNull ActivityPluginBinding binding) {
         this.mActivity = binding.getActivity();
+        lastBinding = binding;
+        binding.addActivityResultListener(this);
     }
 
     @Override
     public void onDetachedFromActivity() {
+        // Musync: unregister to avoid leaking the plugin on the binding.
+        // The binding object is passed only to the attach callbacks, so the
+        // removal has to go through the activity's registry via the plugin
+        // binding held at detach time — but the API only gives us the binding
+        // on attach. We keep the last binding to remove from.
+        if (lastBinding != null) {
+            lastBinding.removeActivityResultListener(this);
+            lastBinding = null;
+        }
+        mActivity = null;
     }
 
     @Override
