@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:musync/core/services/audio_backend_check.dart';
@@ -25,6 +26,9 @@ class AudioPlayerService {
   /// Held so it can be cancelled before the controller closes — see [dispose].
   late final StreamSubscription<int?> _indexSubscription;
 
+  /// Periodic position checkpoints; kept so it can be cancelled in [dispose].
+  StreamSubscription<Duration>? _positionSubscription;
+
   /// How often the current position is persisted while playing, so the
   /// next launch resumes where the track actually stopped — not where the
   /// previous track change left it.
@@ -43,7 +47,7 @@ class AudioPlayerService {
     // Periodic checkpoint of the position. Track changes alone persist too
     // early (the new track's position, near zero); this keeps the stored
     // position close to where playback really is.
-    _player.positionStream.listen((position) {
+    _positionSubscription = _player.positionStream.listen((position) {
       final song = _currentSong;
       if (song == null || !_player.playing || position <= Duration.zero) {
         return;
@@ -75,10 +79,12 @@ class AudioPlayerService {
     // Persisted so the next launch can re-open this track (#4). Best-effort: a
     // failed write costs the next launch resuming from no track, which is
     // exactly what the app did before this.
+    //
+    // The new track is saved with an explicit zero position: `_player.position`
+    // is still the previous track's position when this runs, so persisting it
+    // here would resume the new track from the old one's spot.
     if (song != null) {
-      unawaited(
-        LastSongStore().save(song.filePath, _player.position),
-      );
+      unawaited(LastSongStore().save(song.filePath, Duration.zero));
     }
   }
 
@@ -97,11 +103,28 @@ class AudioPlayerService {
   Stream<bool> get shuffleModeEnabledStream => _player.shuffleModeEnabledStream;
   Stream<LoopMode> get loopModeStream => _player.loopModeStream;
 
+  /// Serializes overlapping [playSong] calls (double-tap, fast list taps).
+  ///
+  /// Each call waits for the previous one to finish before rebuilding the
+  /// queue, so two quick taps can never interleave a stale queue rebuild with
+  /// a newer one and leave the player on the wrong track. The gate itself is
+  /// error-proofed, so one failed call does not wedge every later call; the
+  /// caller's own future still reports its error.
+  Future<void>? _playSongGate;
+
   /// Starts [song], optionally replacing the queue around it.
   ///
   /// Rebuilding the audio source is expensive and restarts playback, so a call
   /// that only re-selects a song already in the current queue seeks instead.
-  Future<void> playSong(Song song, {List<Song>? queue, int? index}) async {
+  Future<void> playSong(Song song, {List<Song>? queue, int? index}) {
+    final previous = _playSongGate;
+    final task = (previous ?? Future.value())
+        .then((_) => _playSong(song, queue: queue, index: index));
+    _playSongGate = task.then<void>((_) {}, onError: (_) {});
+    return task;
+  }
+
+  Future<void> _playSong(Song song, {List<Song>? queue, int? index}) async {
     final newQueue =
         queue ?? (_queue.contains(song) ? _queue : [..._queue, song]);
     final resolvedIndex = _resolveIndex(newQueue, song, index);
@@ -146,7 +169,12 @@ class AudioPlayerService {
     // each before a single note sounds would take seconds. So a window, and a
     // small one — the cache keys by album, so an album queue costs exactly one
     // read and a shuffled one costs at most [_artworkLookahead].
-    await _warmArtwork(resolvedIndex);
+    //
+    // Deliberately not awaited: the first note must not wait on artwork
+    // extraction. The covers land in the cache for the notification and for
+    // automatic advances; the MediaItem tags carry whatever is cached by the
+    // time the source is built.
+    unawaited(_warmArtwork(resolvedIndex));
 
     await _player.setAudioSource(
       ConcatenatingAudioSource(
@@ -211,10 +239,11 @@ class AudioPlayerService {
 
   Future<void> pause() async {
     // Checkpoint: the app can be killed while paused, and the periodic save
-    // only runs while playing.
+    // only runs while playing. Awaited before pausing, so a kill during the
+    // pause transition cannot lose the position.
     final song = _currentSong;
     if (song != null) {
-      unawaited(LastSongStore().save(song.filePath, _player.position));
+      await LastSongStore().save(song.filePath, _player.position);
     }
     await _player.pause();
   }
@@ -265,15 +294,41 @@ class AudioPlayerService {
   Future<void> togglePlayPause() =>
       _player.playing ? pause() : _player.play();
 
+  /// How far short of the track end a forward seek is allowed to land.
+  ///
+  /// Seeking to exactly the duration completes the track in just_audio, so a
+  /// +5 s jump near the end would skip to the next song instead of landing
+  /// near the end of this one.
+  static const Duration _endOfTrackMargin = Duration(milliseconds: 250);
+
+  /// Pure clamp used by [seekBy], exposed for tests.
+  ///
+  /// A target at or past the duration lands on `duration - margin` rather than
+  /// on the duration itself; a negative target lands on zero.
+  @visibleForTesting
+  static Duration clampSeekBy({
+    required Duration position,
+    required Duration delta,
+    required Duration? duration,
+  }) {
+    final target = position + delta;
+    if (target.isNegative) return Duration.zero;
+    if (duration != null && target >= duration) {
+      final clamped = duration - _endOfTrackMargin;
+      return clamped.isNegative ? Duration.zero : clamped;
+    }
+    return target;
+  }
+
   /// Seeks by [delta], clamped to the track — seeking past the end would skip
   /// to the next song, which is never what a ±5 s button means.
-  Future<void> seekBy(Duration delta) {
-    final target = _player.position + delta;
-    final end = _player.duration;
-    if (target.isNegative) return _player.seek(Duration.zero);
-    if (end != null && target > end) return _player.seek(end);
-    return _player.seek(target);
-  }
+  Future<void> seekBy(Duration delta) => _player.seek(
+    clampSeekBy(
+      position: _player.position,
+      delta: delta,
+      duration: _player.duration,
+    ),
+  );
 
   Future<void> next() async {
     if (_player.hasNext) await _player.seekToNext();
@@ -306,6 +361,8 @@ class AudioPlayerService {
   /// on it and threw `Cannot add new events after calling close` from inside a
   /// stream callback, where nothing was waiting to catch it.
   Future<void> dispose() async {
+    await _positionSubscription?.cancel();
+    _positionSubscription = null;
     await _indexSubscription.cancel();
     await _player.dispose();
     await _currentSongController.close();
