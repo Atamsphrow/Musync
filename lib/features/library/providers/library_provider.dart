@@ -24,6 +24,14 @@ final songListProvider = AsyncNotifierProvider<SongListNotifier, List<Song>>(
   SongListNotifier.new,
 );
 
+/// Files the last library scan left out, with the reason each was skipped.
+/// Rebuilds with the song list so it always describes the latest scan. Empty
+/// when everything was kept — the common case shows nothing.
+final ignoredFilesProvider = Provider<List<IgnoredFile>>((ref) {
+  ref.watch(songListProvider);
+  return ref.watch(musicScannerProvider).lastIgnored;
+});
+
 class SongListNotifier extends AsyncNotifier<List<Song>> {
   @override
   Future<List<Song>> build() async {
