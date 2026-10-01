@@ -180,4 +180,20 @@ abstract final class MediaStore {
       return (paths: const <String>[], dropped: 0);
     }
   }
+
+  /// Shows a plain Android notification. Used for background completions the
+  /// user left the screen for, e.g. a finished batch lyrics search.
+  static Future<void> showNotification({
+    required String title,
+    required String body,
+  }) async {
+    try {
+      await _channel.invokeMethod('showNotification', {
+        'title': title,
+        'body': body,
+      });
+    } catch (_) {
+      // A notification is a courtesy, never a failure.
+    }
+  }
 }
