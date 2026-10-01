@@ -42,15 +42,21 @@ const double _kBubbleTextChrome = 64;
 /// Two is the default look (the height the bubble opens with); a very long
 /// line grows the bubble instead of being squeezed, up to five lines. The
 /// width never moves — only the height adapts.
-int bubbleActiveLinesFor(String text, double widthDp) {
+int bubbleActiveLinesFor(
+  String text,
+  double widthDp, {
+  double textScaleFactor = 1.0,
+}) {
+  final scaler = TextScaler.linear(textScaleFactor);
   final lineHeight =
       kBubbleActiveStyle.fontSize! * (kBubbleActiveStyle.height ?? 1.0);
   final painter = TextPainter(
     text: TextSpan(text: text, style: kBubbleActiveStyle),
     textDirection: TextDirection.ltr,
+    textScaler: scaler,
     maxLines: 99,
   )..layout(maxWidth: widthDp - _kBubbleTextChrome);
-  return (painter.height / lineHeight).ceil().clamp(2, 5);
+  return (painter.height / (lineHeight * textScaleFactor)).ceil().clamp(2, 5);
 }
 
 /// Extra height, in dp, for an active line that needs more than the default
@@ -60,6 +66,11 @@ const int _kBubbleExtraLineHeight = 22;
 /// The bubble's height in dp for a payload showing [lines] (the 1/2/3 setting)
 /// whose active line needs [activeLines] visual lines. Two visual lines keep
 /// the current default height; longer lines grow it.
-int bubbleHeightForActiveLines(int lines, int activeLines) =>
+int bubbleHeightForActiveLines(
+  int lines,
+  int activeLines, {
+  double textScaleFactor = 1.0,
+}) =>
     bubbleHeightFor(lines) +
-    (activeLines.clamp(2, 5) - 2) * _kBubbleExtraLineHeight;
+    ((activeLines.clamp(2, 5) - 2) * _kBubbleExtraLineHeight * textScaleFactor)
+        .round();
