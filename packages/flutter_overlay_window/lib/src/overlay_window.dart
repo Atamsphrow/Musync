@@ -179,9 +179,4 @@ class FlutterOverlayWindow {
     final bool? res = await _channel.invokeMethod<bool?>('isOverlayActive');
     return res ?? false;
   }
-
-  /// Dispose overlay stream
-  static void disposeOverlayListener() {
-    _controller.close();
-  }
 }
