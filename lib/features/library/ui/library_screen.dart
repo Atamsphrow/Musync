@@ -100,6 +100,24 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // Cheap when there is nothing waiting: the platform hands back an empty
     // list, and this returns immediately.
     unawaited(_openSharedAudio());
+    // The user may have granted the audio permission in the system settings
+    // while away: re-check quietly and clear the blocked screen if so, without
+    // popping another permission dialog.
+    if (ref.read(libraryPermissionDeniedProvider) != null) {
+      unawaited(_recheckPermissionOnReturn());
+    }
+  }
+
+  /// Quiet re-check after a trip to the system settings: if audio access is
+  /// granted now, take the same path as a granted startup request.
+  Future<void> _recheckPermissionOnReturn() async {
+    if (!await PermissionService.hasAudioAccess()) return;
+    if (!mounted) return;
+    ref.read(libraryPermissionDeniedProvider.notifier).state = null;
+    ref.invalidate(songListProvider);
+    _restoreAttempted = false;
+    unawaited(_restoreLastPlayed());
+    await _openSharedAudio();
   }
 
   @override
@@ -249,6 +267,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // on the first `resumed`. The platform queue drains on the first read, but
     // overlapping runs would still race on the lookup below.
     if (_handlingShare) return;
+    // Never drain the native share queue while the library is unreadable: the
+    // first `resumed` fires before the permission grant, and draining now would
+    // consume the share only to report "not found" — losing it for good. The
+    // post-grant call and later resumes drain normally.
+    if (!await PermissionService.hasAudioAccess()) return;
     _handlingShare = true;
 
     List<Song> songs;
@@ -265,6 +288,20 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// Turns the drained share queue into library tracks.
   Future<List<Song>> _resolveSharedSongs() async {
     final (paths: paths, dropped: dropped) = await MediaStore.takeSharedAudio();
+    // URIs that couldn't be resolved to files (e.g. from a third-party app's
+    // private storage). Reported here — before the early return — so a share
+    // with *only* unreadable files still tells the user, instead of the
+    // counter surfacing with the next share.
+    if (dropped > 0 && mounted) {
+      ScaffoldMessenger.of(context).showOnly(
+        SnackBar(
+          content: Text(
+            '$dropped fichier(s) partagé(s) illisible(s) : '
+            'format non pris en charge ou accès refusé.',
+          ),
+        ),
+      );
+    }
     if (paths.isEmpty || !mounted) return const [];
 
     final found = <Song>[];
@@ -280,11 +317,17 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
     if (unknown.isNotEmpty) {
       // Shared from outside the indexed library — ask MediaStore to look at
-      // the files, then scan once more before giving up on them.
-      for (final path in unknown) {
-        await MediaStore.rescan(path);
+      // the files, then scan once more before giving up on them. Rescans run
+      // in parallel batches: sequential with a 5s timeout each, a 500-file
+      // share would stall here for tens of minutes with zero feedback.
+      for (var i = 0; i < unknown.length; i += 8) {
+        final batch = unknown.sublist(
+          i,
+          (i + 8).clamp(0, unknown.length),
+        );
+        await Future.wait(batch.map(MediaStore.rescan));
+        if (!mounted) return const [];
       }
-      if (!mounted) return const [];
       await ref.read(songListProvider.notifier).refresh();
 
       final missing = <String>[];
@@ -315,19 +358,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           ),
         );
       }
-    }
-
-    // URIs that couldn't be resolved to files (e.g. from a third-party app's
-    // private storage). Tell the user instead of silently dropping them.
-    if (dropped > 0 && mounted) {
-      ScaffoldMessenger.of(context).showOnly(
-        SnackBar(
-          content: Text(
-            '$dropped fichier(s) partagé(s) illisible(s) : '
-            'format non pris en charge ou accès refusé.',
-          ),
-        ),
-      );
     }
 
     return found;
@@ -439,7 +469,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   Widget build(BuildContext context) {
     final songsAsync = ref.watch(filteredSongsProvider);
     final permissionIssue = ref.watch(libraryPermissionDeniedProvider);
-    final hasCurrentSong = ref.watch(currentSongProvider) != null;
+    final hasCurrentSong =
+        ref.watch(currentSongProvider.select((s) => s != null));
     final tab = ref.watch(libraryTabProvider);
     // Read from the provider, not from the controller: the provider is what
     // actually drove this rebuild, so the controller could still be a frame
@@ -545,7 +576,8 @@ class _DockedMiniPlayer extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final hasSong = ref.watch(currentSongProvider) != null;
+    final hasSong =
+        ref.watch(currentSongProvider.select((s) => s != null));
 
     return AnimatedSize(
       duration: const Duration(milliseconds: 250),
