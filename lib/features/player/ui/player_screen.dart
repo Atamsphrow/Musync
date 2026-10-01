@@ -129,9 +129,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with RouteAware {
     if (args is! SongRouteArgs) return;
 
     if (ref.read(currentSongProvider) != args.song) {
-      ref
-          .read(audioPlayerServiceProvider)
-          .playSong(args.song, queue: args.queue, index: args.index);
+      // Fire-and-forget, but a corrupt or missing file must not fail
+      // silently: surface it instead of opening a mute player.
+      ref.read(audioPlayerServiceProvider).playSong(
+        args.song,
+        queue: args.queue,
+        index: args.index,
+      ).catchError((Object e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showOnly(
+            const SnackBar(
+              content: Text(
+                'Fichier illisible ou corrompu : impossible de le lire.',
+              ),
+            ),
+          );
+        }
+      });
     }
     // The floating bubble hides while this screen is visible (RouteAware
     // callbacks below publish the changes). subscribe() does not replay the
@@ -588,7 +602,17 @@ class _SeekBarState extends ConsumerState<_SeekBar> {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
 
-    final position = ref.watch(positionProvider).valueOrNull ?? Duration.zero;
+    // Rounded to ~100 ms: positionProvider ticks up to 60 Hz, and rebuilding
+    // the slider that often is pure waste — a tenth of a second is invisible
+    // on a seek bar.
+    final position =
+        ref.watch(
+          positionProvider.select(
+            (p) => Duration(
+              milliseconds: (p.valueOrNull?.inMilliseconds ?? 0) ~/ 100 * 100,
+            ),
+          ),
+        );
     final duration =
         ref.watch(durationProvider).valueOrNull ??
         widget.song?.durationValue ??
