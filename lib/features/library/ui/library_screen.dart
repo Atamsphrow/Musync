@@ -264,7 +264,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   /// Turns the drained share queue into library tracks.
   Future<List<Song>> _resolveSharedSongs() async {
-    final paths = await MediaStore.takeSharedAudio();
+    final (paths: paths, dropped: dropped) = await MediaStore.takeSharedAudio();
     if (paths.isEmpty || !mounted) return const [];
 
     final found = <Song>[];
@@ -299,16 +299,37 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
       if (!mounted) return const [];
       if (missing.isNotEmpty) {
+        // Show all missing files, not just the first — the user shared them
+        // all and deserves to know which ones didn't make it.
+        final names = missing
+            .map((p) => p.split(Platform.pathSeparator).last)
+            .take(3)
+            .join(', ');
+        final more = missing.length > 3 ? ' (+${missing.length - 3} autres)' : '';
         ScaffoldMessenger.of(context).showOnly(
           SnackBar(
             content: Text(
-              'Ce fichier n\'est pas dans la bibliothèque : '
-              '${missing.first.split(Platform.pathSeparator).last}',
+              '${missing.length} fichier(s) non trouvé(s) dans la bibliothèque : '
+              '$names$more',
             ),
           ),
         );
       }
     }
+
+    // URIs that couldn't be resolved to files (e.g. from a third-party app's
+    // private storage). Tell the user instead of silently dropping them.
+    if (dropped > 0 && mounted) {
+      ScaffoldMessenger.of(context).showOnly(
+        SnackBar(
+          content: Text(
+            '$dropped fichier(s) partagé(s) illisible(s) : '
+            'format non pris en charge ou accès refusé.',
+          ),
+        ),
+      );
+    }
+
     return found;
   }
 
@@ -350,11 +371,31 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     navigator.popUntil((route) => route.settings.name != AppRoutes.player);
 
     if (needSearch.isEmpty) {
-      await Navigator.pushNamed(
-        context,
-        AppRoutes.player,
-        arguments: SongRouteArgs(song: songs.first),
-      );
+      // All shared tracks already have synced lyrics. If several were shared,
+      // queue them up instead of silently dropping all but the first.
+      if (songs.length == 1) {
+        await Navigator.pushNamed(
+          context,
+          AppRoutes.player,
+          arguments: SongRouteArgs(song: songs.first),
+        );
+      } else {
+        await Navigator.pushNamed(
+          context,
+          AppRoutes.player,
+          arguments: SongRouteArgs(song: songs.first, queue: songs.skip(1).toList()),
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showOnly(
+            SnackBar(
+              content: Text(
+                '${songs.length} morceaux partagés : lecture du premier, '
+                'les autres sont en file d\u2019attente.',
+              ),
+            ),
+          );
+        }
+      }
       return;
     }
     await _startBatch(needSearch, filenameFirst: true);
