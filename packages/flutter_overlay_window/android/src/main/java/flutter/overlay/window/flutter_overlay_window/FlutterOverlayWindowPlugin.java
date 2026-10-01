@@ -54,9 +54,6 @@ public class FlutterOverlayWindowPlugin implements
         messenger = new BasicMessageChannel(flutterPluginBinding.getBinaryMessenger(), OverlayConstants.MESSENGER_TAG,
                 JSONMessageCodec.INSTANCE);
         messenger.setMessageHandler(this);
-
-        WindowSetup.messenger = messenger;
-        WindowSetup.messenger.setMessageHandler(this);
     }
 
     @RequiresApi(api = Build.VERSION_CODES.N)
@@ -141,12 +138,26 @@ public class FlutterOverlayWindowPlugin implements
     @Override
     public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
         channel.setMethodCallHandler(null);
-        WindowSetup.messenger.setMessageHandler(null);
+        // Musync: only clear the shared static when it is ours. The overlay
+        // engine also runs this plugin; clearing unconditionally would mute
+        // the main engine's handler on its behalf.
+        if (WindowSetup.messenger == messenger) {
+            WindowSetup.messenger.setMessageHandler(null);
+            WindowSetup.messenger = null;
+        }
     }
 
     @Override
     public void onAttachedToActivity(@NonNull ActivityPluginBinding binding) {
         mActivity = binding.getActivity();
+        // Musync: only the MAIN engine ever attaches to an activity — the
+        // overlay engine lives in the service and never reaches this callback.
+        // Registering the static here (and not in onAttachedToEngine, where
+        // the overlay engine would overwrite it) keeps overlay->app messages
+        // (the bubble's 'closed'/'ready') routed to the app. Routing them to
+        // the overlay itself is what left the x toggle on forever.
+        WindowSetup.messenger = messenger;
+        WindowSetup.messenger.setMessageHandler(this);
         if (FlutterEngineCache.getInstance().get(OverlayConstants.CACHED_TAG) == null) {
             FlutterEngineGroup enn = new FlutterEngineGroup(context);
             DartExecutor.DartEntrypoint dEntry = new DartExecutor.DartEntrypoint(
