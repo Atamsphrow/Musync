@@ -113,11 +113,9 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
       }
     });
     // Own clock for the lines: 5 ticks a second is plenty for text, and
-    // keeps the bubble moving when the main isolate is gone.
-    _ticker = Timer.periodic(
-      const Duration(milliseconds: 200),
-      (_) => _tick(),
-    );
+    // keeps the bubble moving when the main isolate is gone. Armed lazily by
+    // _adoptPayload — no timed lines, no wakeups.
+    _armTickerIfNeeded();
     // Tells the app the engine is up, so it sends the current line now instead
     // of guessing how long the start takes.
     _signal('ready');
@@ -147,6 +145,7 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
       _activeLines = bubbleActiveLinesFor(
         next.current,
         next.widthDp.toDouble(),
+        textScaleFactor: next.textScaleFactor,
       );
     });
     unawaited(_applySize(next, _activeLines));
@@ -158,11 +157,27 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
       _timed = const [];
       _timedSongId = next.songId;
     }
+    _armTickerIfNeeded();
     final idx = next.activeIndex;
     _shownIndex = idx;
     final anchor = bubbleAnchorFor(next, _timed);
     _anchorMs = anchor.anchorMs;
     _anchorTime = anchor.anchorTime;
+  }
+
+  /// Starts the 200 ms line ticker when timed lines exist, stops it when
+  /// they don't. Five wakeups a second saved for every track without synced
+  /// lyrics.
+  void _armTickerIfNeeded() {
+    if (_timed.isNotEmpty && _ticker == null) {
+      _ticker = Timer.periodic(
+        const Duration(milliseconds: 200),
+        (_) => _tick(),
+      );
+    } else if (_timed.isEmpty) {
+      _ticker?.cancel();
+      _ticker = null;
+    }
   }
 
   /// Advances the shown line on the overlay's own clock. Only moves forward
@@ -194,6 +209,7 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
       _activeLines = bubbleActiveLinesFor(
         next.current,
         next.widthDp.toDouble(),
+        textScaleFactor: next.textScaleFactor,
       );
     });
     unawaited(_applySize(next, _activeLines));
@@ -246,7 +262,11 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
     try {
       await FlutterOverlayWindow.resizeOverlay(
         p.widthDp,
-        bubbleHeightForActiveLines(p.lines, activeLines),
+        bubbleHeightForActiveLines(
+          p.lines,
+          activeLines,
+          textScaleFactor: p.textScaleFactor,
+        ),
         true,
       );
       _appliedWidth = p.widthDp;
@@ -285,6 +305,7 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
     Widget line(String text, {required bool active}) => Text(
       text,
       textAlign: TextAlign.center,
+      textScaler: TextScaler.linear(p.textScaleFactor),
       // The active line may take as many visual lines as it needs; the
       // bubble grows with it. Neighbours stay on one.
       maxLines: active ? _activeLines : 1,
