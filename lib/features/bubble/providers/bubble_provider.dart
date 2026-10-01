@@ -381,9 +381,18 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     // extrapolates positionMs + (now - sampledAtMs), which cancels the
     // shareData transmission delay that made the bubble lag behind the sound
     // on track change.
-    final position = ref.read(positionProvider).valueOrNull;
+    //
+    // Sampled from the same synchronous getter the line stream uses
+    // (AudioPlayerService.position extrapolates with the wall clock), NOT
+    // from positionProvider: just_audio's positionStream ticks at only
+    // 200 ms on long tracks, so a payload built on a line change mixed a
+    // fresh line index (sampled every 16 ms) with a stale position. The
+    // overlay re-anchored its ticker to that stale position and briefly
+    // showed the previous line again before catching up — the abrupt
+    // flicker. Same source, same instant: the two can no longer disagree.
+    final positionMs =
+        ref.read(audioPlayerServiceProvider).position.inMilliseconds;
     final sampledAt = DateTime.now().millisecondsSinceEpoch;
-    final positionMs = position?.inMilliseconds;
     final base = synced == null || synced.isEmpty
         ? BubblePayload.idle(state.lines)
         : BubblePayload.fromLines(
@@ -394,7 +403,7 @@ class LyricsBubbleController extends Notifier<BubbleState> {
             songId: '${song?.id ?? 0}',
             timedLines: timedLines,
             positionMs: positionMs,
-            sampledAtMs: positionMs == null ? null : sampledAt,
+            sampledAtMs: sampledAt,
           );
     return BubblePayload(
       previous: base.previous,
