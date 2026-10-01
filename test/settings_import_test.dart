@@ -106,6 +106,43 @@ void main() {
       expect(bundle.ignoredFiles, ['evil.sh']);
     });
 
+    test('rejects a lyrics_sources.json that is not a list', () async {
+      final bundle = await importer.parse(await bundleFile(validBundle(
+        files: {
+          'playback_settings.json': {'lyricsOffsetMs': 40},
+          'lyrics_sources.json': {'id': 'lrclib'},
+        },
+      )));
+      final prefs = await SharedPreferences.getInstance();
+
+      expect(
+        () => importer.apply(bundle, prefs),
+        throwsA(isA<ImportFormatException>()),
+      );
+    });
+
+    test('tolerates malformed entries inside lyrics_sources.json', () async {
+      // Mirrors LyricsSourceStore.load: bad entries are skipped one by one,
+      // only a file that is not a list at all fails the import.
+      final bundle = await importer.parse(await bundleFile(validBundle(
+        files: {
+          'lyrics_sources.json': [
+            {'id': 'lrclib', 'name': 'LRCLIB'},
+            'not-a-source',
+            {'id': 'broken'},
+          ],
+        },
+      )));
+      final prefs = await SharedPreferences.getInstance();
+
+      final report = await importer.apply(bundle, prefs);
+      expect(report.appliedFiles, ['lyrics_sources.json']);
+      final written = jsonDecode(await File(
+              '${documents.path}${Platform.pathSeparator}lyrics_sources.json')
+          .readAsString());
+      expect(written, hasLength(3));
+    });
+
     test('drops invalid preferences', () async {
       for (final bad in [0, 4, '3', 2.5, null]) {
         final bundle = await importer.parse(
