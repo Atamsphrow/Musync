@@ -57,7 +57,12 @@ dependencies:
   path_provider: ^2.1.5
   path: ^1.9.1
   shared_preferences: ^2.3.0
-  flutter_overlay_window: ^0.5.0
+  # Vendored copy of flutter_overlay_window 0.5.0 with Musync fixes, see
+  # packages/flutter_overlay_window: the bubble closes itself from its own
+  # isolate, drags/moves/resizes are clamped to the screen, and the
+  # overlay<->app message bridge answers both ways.
+  flutter_overlay_window:
+    path: packages/flutter_overlay_window
 
   # Picking a settings export back from the Downloads folder (system picker,
   # no storage permission needed).
