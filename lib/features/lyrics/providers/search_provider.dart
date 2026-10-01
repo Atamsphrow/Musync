@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/debug_log.dart';
+import 'package:musync/core/services/shared_http_client.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_ovh_provider.dart';
@@ -15,19 +16,21 @@ import 'package:musync/features/settings/providers/settings_provider.dart';
 /// a search launched immediately on startup working.
 final lyricsRepositoryProvider = Provider<LyricsRepository>((ref) {
   final configs = ref.watch(lyricsSourcesProvider).valueOrNull;
-  if (configs == null) return LyricsRepository();
+  final client = ref.watch(sharedHttpClientProvider);
+  if (configs == null) return LyricsRepository(sources: [LrclibSource(client: client)]);
 
   return LyricsRepository(
     sources: [
       for (final config in configs.where((c) => c.enabled))
         switch (config.kind) {
-          LyricsSourceKind.lyricsOvh => LyricsOvhSource(),
+          LyricsSourceKind.lyricsOvh => LyricsOvhSource(client: client),
           LyricsSourceKind.lrclib =>
             config.isBuiltIn
-                ? LrclibSource()
+                ? LrclibSource(client: client)
                 : LrclibSource.custom(
                     name: config.name,
                     baseUrl: config.baseUrl,
+                    client: client,
                   ),
         },
     ],
@@ -39,6 +42,12 @@ final lyricsSearchResultsProvider = StateProvider<List<LyricsSearchResult>>(
 );
 final lyricsSearchLoadingProvider = StateProvider<bool>((ref) => false);
 final lyricsSearchErrorProvider = StateProvider<String?>((ref) => null);
+
+/// Which search is the latest one. Two searches launched in quick succession
+/// (a corrected query, a double tap) overlap in flight, and the older one may
+/// finish last — without this, its stale results would overwrite the newer
+/// ones on screen. Only the latest generation may write to the state.
+int _searchGeneration = 0;
 
 Future<void> performLyricsSearch(
   WidgetRef ref, {
@@ -64,21 +73,27 @@ Future<void> performLyricsSearch(
   final results = ref.read(lyricsSearchResultsProvider.notifier);
   final repository = ref.read(lyricsRepositoryProvider);
 
+  final generation = ++_searchGeneration;
   loading.state = true;
   error.state = null;
   results.state = [];
 
+  // A newer search started while this one was in flight: its results are
+  // stale, drop them instead of flashing them over the newer ones.
+  bool isStale() => generation != _searchGeneration;
+
   try {
-    results.state = await repository.searchAll(
+    final found = await repository.searchAll(
       title: title,
       artist: artist,
       album: album,
       durationMs: durationMs,
     );
+    if (!isStale()) results.state = found;
   } on LyricsSourceException catch (e) {
     // The source already phrased this for the user; `toString()` would put the
     // class name and the source id in front of it.
-    error.state = e.message;
+    if (!isStale()) error.state = e.message;
   } catch (e, stack) {
     DebugLog.instance.error(
       'Recherche',
@@ -86,8 +101,8 @@ Future<void> performLyricsSearch(
       error: e,
       stackTrace: stack,
     );
-    error.state = 'Erreur inattendue : $e';
+    if (!isStale()) error.state = 'Erreur inattendue : $e';
   } finally {
-    loading.state = false;
+    if (!isStale()) loading.state = false;
   }
 }
