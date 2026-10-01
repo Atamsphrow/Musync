@@ -36,10 +36,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with RouteAware {
   /// Whether this route is registered with the app's route observer.
   bool _routeSubscribed = false;
 
+  /// Captured while the element is alive: `ref.read` is forbidden once the
+  /// element starts unmounting, so `dispose()` must not go through `ref`.
+  /// The provider is not autoDispose, so this never goes stale.
+  StateController<bool>? _playerVisible;
+
   /// The floating bubble hides while this screen is visible: it already
   /// shows the synced lyrics itself.
   void _publishPlayerVisible(bool visible) {
-    ref.read(playerScreenVisibleProvider.notifier).state = visible;
+    _playerVisible?.state = visible;
   }
 
   @override
@@ -115,6 +120,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with RouteAware {
     // restart the track.
     if (_started) return;
     _started = true;
+
+    // Before anything publishes: ref.read is still legal here, it will not
+    // be in dispose().
+    _playerVisible ??= ref.read(playerScreenVisibleProvider.notifier);
 
     final args = ModalRoute.of(context)?.settings.arguments;
     if (args is! SongRouteArgs) return;
