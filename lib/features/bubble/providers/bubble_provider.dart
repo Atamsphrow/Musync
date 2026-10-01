@@ -52,9 +52,6 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   StreamSubscription<dynamic>? _fromOverlay;
   String? _lastSent;
 
-  /// Width the overlay window has now, in dp.
-  int _width = kBubbleMinWidth;
-
   /// Whether the overlay window is up, tracked locally. The × on the bubble
   /// closes it natively (see the vendored plugin) and reports back through
   /// 'closed', so this is re-synced there too.
@@ -217,15 +214,13 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     unawaited(shouldShow ? _openOverlay() : _closeOverlayNow());
   }
 
-  /// Opens the overlay window at the width of what is being sung right now,
-  /// so it does not start wide and shrink — centered on the screen, where it
-  /// stays: the vendored plugin clamps every drag, move and resize.
+  /// Opens the overlay window: a steady full-width pill near the top of the
+  /// screen, horizontally centered, the lyric centered inside it. The
+  /// vendored plugin clamps every drag, move and resize, so it stays there.
   Future<void> _openOverlay() async {
     try {
       final screenWidth = _screenWidthDp();
-      final screenHeight = _screenHeightDp();
-      // Opened at the width of what is being sung right now.
-      _width = _payload().widthDp;
+      final width = bubbleFixedWidth(screenWidth);
       final height = bubbleHeightFor(state.lines);
 
       // flutter_overlay_window reads the width/height given here as raw
@@ -233,12 +228,12 @@ class LyricsBubbleController extends Notifier<BubbleState> {
       // postage stamp), while moveOverlay/resizeOverlay do convert dp to px.
       // So the initial size is sent pre-converted to pixels, and the position
       // is given explicitly in dp with a top-left gravity, making it literal:
-      // true center of the screen.
+      // centered horizontally, just under the status bar.
       final density = _screenDensity();
-      final xDp = (screenWidth - _width) / 2;
-      final yDp = (screenHeight - height) / 2;
+      final xDp = (screenWidth - width) / 2;
+      final yDp = _statusBarHeightDp() + 12;
       await FlutterOverlayWindow.showOverlay(
-        width: (_width * density).round(),
+        width: (width * density).round(),
         height: (height * density).round(),
         alignment: OverlayAlignment.topLeft,
         enableDrag: true,
@@ -293,22 +288,22 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     final synced = (!lyrics.isLoading && !lyrics.hasError)
         ? lyrics.valueOrNull?.synced
         : null;
-    // The width is measured here, from the same texts the bubble draws, and
-    // travels inside the payload: the overlay isolate applies it itself.
+    // One steady width, whatever the line (see bubble_sizing.dart).
+    final widthDp = bubbleFixedWidth(screenWidth);
     final base = synced == null || synced.isEmpty
         ? BubblePayload.idle(state.lines)
         : BubblePayload.fromLines(
             [for (final line in synced.lines) line.text],
             ref.read(currentLineIndexProvider).valueOrNull,
             state.lines,
-            widthDp: 0, // Replaced by the measurement below.
+            widthDp: 0, // Replaced by the fixed width below.
           );
     return BubblePayload(
       previous: base.previous,
       current: base.current,
       next: base.next,
       lines: base.lines,
-      widthDp: bubbleWidthFor(base, screenWidth),
+      widthDp: widthDp,
     );
   }
 
@@ -337,12 +332,12 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     return view.physicalSize.width / view.devicePixelRatio;
   }
 
-  /// Height of the screen in dp, for the centered opening position.
-  double _screenHeightDp() {
+  /// Status bar height in dp, so the bubble opens just under it.
+  double _statusBarHeightDp() {
     final views = PlatformDispatcher.instance.views;
-    if (views.isEmpty) return 640;
+    if (views.isEmpty) return 24;
     final view = views.first;
-    return view.physicalSize.height / view.devicePixelRatio;
+    return view.padding.top / view.devicePixelRatio;
   }
 
   /// Screen density. Only the initial overlay size goes through as raw
