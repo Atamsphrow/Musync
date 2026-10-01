@@ -30,8 +30,29 @@ class PlayerScreen extends ConsumerStatefulWidget {
   ConsumerState<PlayerScreen> createState() => _PlayerScreenState();
 }
 
-class _PlayerScreenState extends ConsumerState<PlayerScreen> {
+class _PlayerScreenState extends ConsumerState<PlayerScreen> with RouteAware {
   bool _showLyrics = false;
+
+  /// Whether this route is registered with the app's route observer.
+  bool _routeSubscribed = false;
+
+  /// The floating bubble hides while this screen is visible: it already
+  /// shows the synced lyrics itself.
+  void _publishPlayerVisible(bool visible) {
+    ref.read(playerScreenVisibleProvider.notifier).state = visible;
+  }
+
+  @override
+  void didPush() => _publishPlayerVisible(true);
+
+  @override
+  void didPop() => _publishPlayerVisible(false);
+
+  @override
+  void didPushNext() => _publishPlayerVisible(false);
+
+  @override
+  void didPopNext() => _publishPlayerVisible(true);
 
   void _toggleLyrics() => setState(() => _showLyrics = !_showLyrics);
 
@@ -77,6 +98,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   bool _started = false;
 
   @override
+  void dispose() {
+    if (_routeSubscribed) {
+      _publishPlayerVisible(false);
+      appRouteObserver.unsubscribe(this);
+      _routeSubscribed = false;
+    }
+    super.dispose();
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     // Route arguments aren't readable until the route is in the tree, and this
@@ -93,6 +124,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           .read(audioPlayerServiceProvider)
           .playSong(args.song, queue: args.queue, index: args.index);
     }
+    // The floating bubble hides while this screen is visible (RouteAware
+    // callbacks below publish the changes). subscribe() does not replay the
+    // push, so the already-here route is published explicitly.
+    final route = ModalRoute.of(context);
+    if (route != null && !_routeSubscribed) {
+      appRouteObserver.subscribe(this, route);
+      _routeSubscribed = true;
+      _publishPlayerVisible(route.isCurrent);
+    }
+
   }
 
   @override
