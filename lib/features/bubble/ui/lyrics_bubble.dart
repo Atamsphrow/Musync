@@ -37,12 +37,17 @@ class _LyricsBubble extends StatefulWidget {
 
 class _LyricsBubbleState extends State<_LyricsBubble> {
   BubblePayload _payload = const BubblePayload.idle(2);
+
+  /// How many visual lines the active lyric needs; long lines grow the
+  /// bubble instead of being squeezed into two.
+  int _activeLines = 2;
   StreamSubscription<dynamic>? _events;
 
-  /// Last (width, lines) the window was actually sized to. -1 forces the
-  /// first payload through.
+  /// Last (width, lines, active lines) the window was actually sized to.
+  /// -1 forces the first payload through.
   int _appliedWidth = -1;
   int _appliedLines = -1;
+  int _appliedActiveLines = -1;
 
   @override
   void initState() {
@@ -50,8 +55,14 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
     _events = FlutterOverlayWindow.overlayListener.listen((event) {
       final next = BubblePayload.tryDecode(event);
       if (next != null && mounted) {
-        setState(() => _payload = next);
-        unawaited(_applySize(next));
+        setState(() {
+          _payload = next;
+          _activeLines = bubbleActiveLinesFor(
+            next.current,
+            next.widthDp.toDouble(),
+          );
+        });
+        unawaited(_applySize(next, _activeLines));
       }
     });
     // Tells the app the engine is up, so it sends the current line now instead
@@ -83,18 +94,23 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
   /// purpose: the plugin's `resizeOverlay` handler lives on the overlay
   /// engine's channel, so calling it from the main isolate throws
   /// `MissingPluginException` and the bubble would keep its opening width
-  /// forever. The width is fixed (one steady pill); only the height moves,
-  /// when the line count changes.
-  Future<void> _applySize(BubblePayload p) async {
-    if (p.widthDp == _appliedWidth && p.lines == _appliedLines) return;
+  /// forever. The width is fixed (one steady pill); the height grows when a
+  /// long active line needs more than the default two visual lines.
+  Future<void> _applySize(BubblePayload p, int activeLines) async {
+    if (p.widthDp == _appliedWidth &&
+        p.lines == _appliedLines &&
+        activeLines == _appliedActiveLines) {
+      return;
+    }
     try {
       await FlutterOverlayWindow.resizeOverlay(
         p.widthDp,
-        bubbleHeightFor(p.lines),
+        bubbleHeightForActiveLines(p.lines, activeLines),
         true,
       );
       _appliedWidth = p.widthDp;
       _appliedLines = p.lines;
+      _appliedActiveLines = activeLines;
     } catch (_) {
       // The next line will try again; the text is already showing.
     }
@@ -128,7 +144,9 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
     Widget line(String text, {required bool active}) => Text(
       text,
       textAlign: TextAlign.center,
-      maxLines: active ? 2 : 1,
+      // The active line may take as many visual lines as it needs; the
+      // bubble grows with it. Neighbours stay on one.
+      maxLines: active ? _activeLines : 1,
       overflow: TextOverflow.ellipsis,
       // The very styles the width was measured with (bubble_sizing.dart).
       style: (active ? kBubbleActiveStyle : kBubbleNeighbourStyle).copyWith(
