@@ -56,6 +56,12 @@ public class OverlayService extends Service implements View.OnTouchListener {
 
     private static OverlayService instance;
     public static boolean isRunning = false;
+    /**
+     * Musync: set when a close/stop was requested. A start request arriving
+     * while it is true is refused so a stale showOverlay cannot resurrect
+     * the bubble right after stopSelf(). Reset on every clean start.
+     */
+    static boolean isStopping = false;
     private WindowManager windowManager = null;
     private FlutterView flutterView;
     private MethodChannel flutterChannel;
@@ -82,42 +88,61 @@ public class OverlayService extends Service implements View.OnTouchListener {
     @Override
     public void onDestroy() {
         Log.d("OverLay", "Destroying the overlay window service");
-        if (windowManager != null) {
-            windowManager.removeView(flutterView);
-            windowManager = null;
-            flutterView.detachFromFlutterEngine();
-            flutterView = null;
+        // Musync: cancel the tray animation timer — it would otherwise keep
+        // posting layout updates to a dead window.
+        if (mTrayTimerTask != null) {
+            mTrayTimerTask.cancel();
+            mTrayTimerTask = null;
         }
+        if (mTrayAnimationTimer != null) {
+            mTrayAnimationTimer.cancel();
+            mTrayAnimationTimer.purge();
+            mTrayAnimationTimer = null;
+        }
+        mAnimationHandler.removeCallbacksAndMessages(null);
+        safeRemoveView();
         isRunning = false;
         NotificationManager notificationManager = (NotificationManager) getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
-        notificationManager.cancel(OverlayConstants.NOTIFICATION_ID);
+        if (notificationManager != null) {
+            notificationManager.cancel(OverlayConstants.NOTIFICATION_ID);
+        }
         instance = null;
     }
 
     @RequiresApi(api = Build.VERSION_CODES.JELLY_BEAN_MR1)
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // Musync: never dereference a null intent. The system can redeliver
+        // onStartCommand with a null intent; the old code crashed on it, and
+        // START_STICKY then recreated the service in a loop — the ghost
+        // full-screen bubble. START_NOT_STICKY: do not resurrect us.
+        if (intent == null) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         mResources = getApplicationContext().getResources();
         int startX = intent.getIntExtra("startX", OverlayConstants.DEFAULT_XY);
         int startY = intent.getIntExtra("startY", OverlayConstants.DEFAULT_XY);
         boolean isCloseWindow = intent.getBooleanExtra(INTENT_EXTRA_IS_CLOSE_WINDOW, false);
         if (isCloseWindow) {
-            if (windowManager != null) {
-                windowManager.removeView(flutterView);
-                windowManager = null;
-                flutterView.detachFromFlutterEngine();
-                stopSelf();
-            }
+            // Musync: explicit close — mark stopping so a racing showOverlay
+            // cannot bring the bubble back to life.
+            isStopping = true;
+            safeRemoveView();
             isRunning = false;
-            return START_STICKY;
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+        if (isStopping) {
+            // Musync: a close is in flight; refuse to (re)create the window.
+            return START_NOT_STICKY;
         }
         if (windowManager != null) {
-            windowManager.removeView(flutterView);
-            windowManager = null;
-            flutterView.detachFromFlutterEngine();
+            safeRemoveView();
             stopSelf();
         }
         isRunning = true;
+        isStopping = false;
         Log.d("onStartCommand", "Service started");
         FlutterEngine engine = FlutterEngineCache.getInstance().get(OverlayConstants.CACHED_TAG);
         engine.getLifecycleChannel().appIsResumed();
@@ -154,7 +179,9 @@ public class OverlayService extends Service implements View.OnTouchListener {
             // Musync: forward the reply as well, and never crash when the
             // main engine is gone. The stock code dropped the reply, so every
             // overlay->app `shareData` hung forever on the overlay side.
-            if (WindowSetup.messenger != null) {
+            // Never forward JNI payloads once the bubble is closed/destroyed.
+            if (isRunning && windowManager != null && flutterView != null
+                    && WindowSetup.messenger != null) {
                 WindowSetup.messenger.send(message, reply);
             } else {
                 reply.reply(null);
@@ -162,15 +189,7 @@ public class OverlayService extends Service implements View.OnTouchListener {
         });
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB) {
-            windowManager.getDefaultDisplay().getSize(szWindow);
-        } else {
-            DisplayMetrics displaymetrics = new DisplayMetrics();
-            windowManager.getDefaultDisplay().getMetrics(displaymetrics);
-            int w = displaymetrics.widthPixels;
-            int h = displaymetrics.heightPixels;
-            szWindow.set(w, h);
-        }
+        refreshScreenSize();
         int dx = startX == OverlayConstants.DEFAULT_XY ? 0 : startX;
         int dy = startY == OverlayConstants.DEFAULT_XY ? -statusBarHeightPx() : startY;
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(
@@ -190,9 +209,85 @@ public class OverlayService extends Service implements View.OnTouchListener {
         }
         params.gravity = WindowSetup.gravity;
         flutterView.setOnTouchListener(this);
-        windowManager.addView(flutterView, params);
+        safeAddView(flutterView, params);
         moveOverlay(dx, dy, null);
-        return START_STICKY;
+        return START_NOT_STICKY;
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // Musync: a rotation changes the screen size — recompute it and pull
+        // the bubble back on screen instead of stranding it off-screen.
+        refreshScreenSize();
+        if (windowManager != null && flutterView != null) {
+            WindowManager.LayoutParams params = (WindowManager.LayoutParams) flutterView.getLayoutParams();
+            clampToScreen(params);
+            safeUpdateViewLayout(params);
+        }
+    }
+
+    /**
+     * Musync: (re)reads the current display size. Called at creation, on
+     * rotation and before every reposition so szWindow never goes stale.
+     */
+    private void refreshScreenSize() {
+        if (windowManager == null) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB) {
+            windowManager.getDefaultDisplay().getSize(szWindow);
+        } else {
+            DisplayMetrics displaymetrics = new DisplayMetrics();
+            windowManager.getDefaultDisplay().getMetrics(displaymetrics);
+            szWindow.set(displaymetrics.widthPixels, displaymetrics.heightPixels);
+        }
+    }
+
+    /**
+     * Musync: WindowManager calls throw SecurityException when the user
+     * revokes "draw over other apps" while the bubble is visible, and
+     * IllegalArgumentException for a stale view. Never let that crash the
+     * service — log and continue.
+     */
+    private void safeAddView(View view, WindowManager.LayoutParams params) {
+        try {
+            if (windowManager != null && view != null) {
+                windowManager.addView(view, params);
+            }
+        } catch (SecurityException | IllegalArgumentException e) {
+            Log.w("OverLay", "addView failed (overlay permission revoked?)", e);
+        }
+    }
+
+    private void safeUpdateViewLayout(WindowManager.LayoutParams params) {
+        try {
+            if (windowManager != null && flutterView != null) {
+                windowManager.updateViewLayout(flutterView, params);
+            }
+        } catch (SecurityException | IllegalArgumentException e) {
+            Log.w("OverLay", "updateViewLayout failed (overlay permission revoked?)", e);
+        }
+    }
+
+    private void safeRemoveView() {
+        try {
+            if (windowManager != null && flutterView != null) {
+                windowManager.removeView(flutterView);
+            }
+        } catch (SecurityException | IllegalArgumentException e) {
+            Log.w("OverLay", "removeView failed", e);
+        } finally {
+            if (flutterView != null) {
+                try {
+                    flutterView.detachFromFlutterEngine();
+                } catch (Exception e) {
+                    Log.w("OverLay", "detachFromFlutterEngine failed", e);
+                }
+                flutterView = null;
+            }
+            windowManager = null;
+        }
     }
 
 
@@ -248,7 +343,7 @@ public class OverlayService extends Service implements View.OnTouchListener {
             } else {
                 params.alpha = 1;
             }
-            windowManager.updateViewLayout(flutterView, params);
+            safeUpdateViewLayout(params);
             result.success(true);
         } else {
             result.success(false);
@@ -257,13 +352,19 @@ public class OverlayService extends Service implements View.OnTouchListener {
 
     private void resizeOverlay(int width, int height, boolean enableDrag, MethodChannel.Result result) {
         if (windowManager != null) {
+            refreshScreenSize();
             WindowManager.LayoutParams params = (WindowManager.LayoutParams) flutterView.getLayoutParams();
             params.width = (width == -1999 || width == -1) ? -1 : dpToPx(width);
-            params.height = (height != 1999 || height != -1) ? dpToPx(height) : height;
+            // Musync: the stock `(height != 1999 || height != -1)` was a
+            // tautology — always true — so sentinels were converted with
+            // dpToPx() into garbage sizes. Refuse the sentinel values
+            // (-1999 = full screen, -1 = keep) instead; note the stock code
+            // also wrote 1999 where every other call site uses -1999.
+            params.height = (height != -1999 && height != -1) ? dpToPx(height) : height;
             WindowSetup.enableDrag = enableDrag;
             // Musync: a wider bubble must not push its right edge off screen.
             clampToScreen(params);
-            windowManager.updateViewLayout(flutterView, params);
+            safeUpdateViewLayout(params);
             result.success(true);
         } else {
             result.success(false);
@@ -272,12 +373,13 @@ public class OverlayService extends Service implements View.OnTouchListener {
 
     private void moveOverlay(int x, int y, MethodChannel.Result result) {
         if (windowManager != null) {
+            refreshScreenSize();
             WindowManager.LayoutParams params = (WindowManager.LayoutParams) flutterView.getLayoutParams();
             params.x = (x == -1999 || x == -1) ? -1 : dpToPx(x);
             params.y = dpToPx(y);
             // Musync: never park the bubble off screen.
             clampToScreen(params);
-            windowManager.updateViewLayout(flutterView, params);
+            safeUpdateViewLayout(params);
             if (result != null)
                 result.success(true);
         } else {
@@ -292,14 +394,9 @@ public class OverlayService extends Service implements View.OnTouchListener {
      * user tapped the bubble's own close button twice).
      */
     private void closeOverlayNow() {
-        if (windowManager != null && flutterView != null) {
-            windowManager.removeView(flutterView);
-        }
-        windowManager = null;
-        if (flutterView != null) {
-            flutterView.detachFromFlutterEngine();
-            flutterView = null;
-        }
+        // Musync: a showOverlay racing this close must be refused.
+        isStopping = true;
+        safeRemoveView();
         isRunning = false;
         NotificationManager notificationManager = (NotificationManager) getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
         if (notificationManager != null) {
@@ -337,12 +434,13 @@ public class OverlayService extends Service implements View.OnTouchListener {
     public static boolean moveOverlay(int x, int y) {
         if (instance != null && instance.flutterView != null) {
             if (instance.windowManager != null) {
+                instance.refreshScreenSize();
                 WindowManager.LayoutParams params = (WindowManager.LayoutParams) instance.flutterView.getLayoutParams();
                 params.x = (x == -1999 || x == -1) ? -1 : instance.dpToPx(x);
                 params.y = instance.dpToPx(y);
                 // Musync: never move the bubble off screen.
                 instance.clampToScreen(params);
-                instance.windowManager.updateViewLayout(instance.flutterView, params);
+                instance.safeUpdateViewLayout(params);
                 return true;
             } else {
                 return false;
@@ -355,6 +453,9 @@ public class OverlayService extends Service implements View.OnTouchListener {
 
     @Override
     public void onCreate() {
+        // Musync: a fresh service creation is always a clean start — a
+        // previous close in the same process must not block it.
+        isStopping = false;
         // Get the cached FlutterEngine
         FlutterEngine flutterEngine = FlutterEngineCache.getInstance().get(OverlayConstants.CACHED_TAG);
 
@@ -380,7 +481,15 @@ public class OverlayService extends Service implements View.OnTouchListener {
         }
 
         createNotificationChannel();
-        Intent notificationIntent = new Intent(this, FlutterOverlayWindowPlugin.class);
+        // Musync: the old code built a PendingIntent targeting
+        // FlutterOverlayWindowPlugin.class — which is not an Activity, so the
+        // tap did nothing (or worse). Point it at the app's own launcher.
+        Intent notificationIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        if (notificationIntent == null) {
+            notificationIntent = new Intent(Intent.ACTION_MAIN);
+            notificationIntent.setPackage(getPackageName());
+            notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
         int pendingFlags;
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
             pendingFlags = PendingIntent.FLAG_IMMUTABLE;
@@ -396,6 +505,9 @@ public class OverlayService extends Service implements View.OnTouchListener {
                 .setSmallIcon(notifyIcon == 0 ? R.drawable.notification_icon : notifyIcon)
                 .setContentIntent(pendingIntent)
                 .setVisibility(WindowSetup.notificationVisibility)
+                // Musync: the foreground notification must stay silent — the
+                // user does not want an alert every time the bubble opens.
+                .setOnlyAlertOnce(true)
                 .build();
         startForeground(OverlayConstants.NOTIFICATION_ID, notification);
         instance = this;
@@ -403,13 +515,22 @@ public class OverlayService extends Service implements View.OnTouchListener {
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager == null) {
+                return;
+            }
+            // Musync: devices that ran an older build already have this
+            // channel registered with IMPORTANCE_DEFAULT. Android keeps the
+            // original channel settings, so LOW would never take effect
+            // without deleting it first. Same id → the user's other channel
+            // preferences are preserved where the system allows.
+            manager.deleteNotificationChannel(OverlayConstants.CHANNEL_ID);
             NotificationChannel serviceChannel = new NotificationChannel(
                     OverlayConstants.CHANNEL_ID,
                     "Foreground Service Channel",
-                    NotificationManager.IMPORTANCE_DEFAULT
+                    NotificationManager.IMPORTANCE_LOW
             );
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            assert manager != null;
+            serviceChannel.setSound(null, null);
             manager.createNotificationChannel(serviceChannel);
         }
     }
@@ -461,9 +582,7 @@ public class OverlayService extends Service implements View.OnTouchListener {
                     params.y = yy;
                     // Musync: a drag can no longer push the bubble off screen.
                     clampToScreen(params);
-                    if (windowManager != null) {
-                        windowManager.updateViewLayout(flutterView, params);
-                    }
+                    safeUpdateViewLayout(params);
                     dragging = true;
                     break;
                 case MotionEvent.ACTION_UP:
@@ -471,7 +590,7 @@ public class OverlayService extends Service implements View.OnTouchListener {
                     lastYPosition = params.y;
                     if (!WindowSetup.positionGravity.equals("none")) {
                         if (windowManager == null) return false;
-                        windowManager.updateViewLayout(flutterView, params);
+                        safeUpdateViewLayout(params);
                         mTrayTimerTask = new TrayAnimationTimerTask();
                         mTrayAnimationTimer = new Timer();
                         mTrayAnimationTimer.schedule(mTrayTimerTask, 0, 25);
@@ -515,12 +634,12 @@ public class OverlayService extends Service implements View.OnTouchListener {
             mAnimationHandler.post(() -> {
                 params.x = (2 * (params.x - mDestX)) / 3 + mDestX;
                 params.y = (2 * (params.y - mDestY)) / 3 + mDestY;
-                if (windowManager != null) {
-                    windowManager.updateViewLayout(flutterView, params);
-                }
+                safeUpdateViewLayout(params);
                 if (Math.abs(params.x - mDestX) < 2 && Math.abs(params.y - mDestY) < 2) {
                     TrayAnimationTimerTask.this.cancel();
-                    mTrayAnimationTimer.cancel();
+                    if (mTrayAnimationTimer != null) {
+                        mTrayAnimationTimer.cancel();
+                    }
                 }
             });
         }
