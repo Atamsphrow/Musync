@@ -82,6 +82,7 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
         settings: settings,
         fileName: widget.song.filePath.split(RegExp(r'[/\\]')).last,
       );
+      if (!mounted) return;
       // Feeds the per-provider indicators in Paramètres › IA, so the answer to
       // "which of my keys works" lives next to the keys.
       statuses.recordAttempts(resolution.attempts);
