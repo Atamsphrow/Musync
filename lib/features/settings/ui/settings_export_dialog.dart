@@ -1,8 +1,8 @@
 /// The "Exporter les paramètres" action of the Settings screen.
 library;
 
-import 'dart:io';
-
+import 'dart:convert';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/utils/snackbar.dart';
@@ -20,6 +20,11 @@ const List<String> _exportedPreferences = [
 ];
 
 /// Asks what to include, writes the file and says where it went.
+///
+/// The save goes through the Storage Access Framework (the system file
+/// picker), not a hard-coded `/Download` path: on Android 11+ an app cannot
+/// write to the shared Downloads folder directly, so the old path failed
+/// there. The picker works on every version and needs no permission.
 Future<void> exportSettings(BuildContext context) async {
   final includeSecrets = await showDialog<bool>(
     context: context,
@@ -35,18 +40,40 @@ Future<void> exportSettings(BuildContext context) async {
       supportDir: await getApplicationSupportDirectory(),
       documentsDir: await getApplicationDocumentsDirectory(),
     );
-    final file = await exporter.exportTo(
-      await _targetDir(),
+    final moment = DateTime.now();
+    final bundle = await exporter.build(
       includeSecrets: includeSecrets,
       preferences: {
         for (final key in _exportedPreferences)
           if (prefs.containsKey(key)) key: prefs.get(key),
       },
+      now: moment,
     );
+    final unreadable = (bundle['unreadable'] as List?)?.cast<String>() ?? const [];
+
+    final savedUri = await FilePicker.saveFile(
+      dialogTitle: 'Enregistrer l\u2019export Musync',
+      fileName: 'musync-export-${_exportStamp(moment)}.json',
+      mimeType: 'application/json',
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+      bytes: utf8.encode(
+        const JsonEncoder.withIndent('  ').convert(bundle),
+      ),
+    );
+    if (savedUri == null) return; // User cancelled the picker.
+    if (!context.mounted) return;
+    final savedPath = savedUri.toString();
+
+    final message = unreadable.isEmpty
+        ? 'Exporté : ${_shortPath(savedPath)}'
+        : 'Exporté : ${_shortPath(savedPath)} '
+            '(${unreadable.length} réglage(s) illisible(s) non inclus : '
+            '${unreadable.join(', ')})';
     messenger.showOnly(
       SnackBar(
         duration: const Duration(seconds: 6),
-        content: Text('Exporté : ${_shortPath(file.path)}'),
+        content: Text(message),
       ),
     );
   } catch (error, stack) {
@@ -56,21 +83,16 @@ Future<void> exportSettings(BuildContext context) async {
       error: error,
       stackTrace: stack,
     );
+    if (!context.mounted) return;
     messenger.showOnly(
       const SnackBar(content: Text('Export impossible. Voir le Journal.')),
     );
   }
 }
 
-/// The public Downloads folder, where a file can be found from any file
-/// manager. Falls back to the app's own external folder when it is not there.
-Future<Directory> _targetDir() async {
-  final downloads = Directory('/storage/emulated/0/Download');
-  if (await downloads.exists()) {
-    return Directory('${downloads.path}/Musync');
-  }
-  final external = await getExternalStorageDirectory();
-  return external ?? await getApplicationDocumentsDirectory();
+String _exportStamp(DateTime t) {
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${t.year}${two(t.month)}${two(t.day)}-${two(t.hour)}${two(t.minute)}${two(t.second)}';
 }
 
 String _shortPath(String path) =>
