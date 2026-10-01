@@ -141,11 +141,45 @@ Future<void> _start() async {
   );
 }
 
-class MusyncApp extends ConsumerWidget {
+class MusyncApp extends ConsumerStatefulWidget {
   const MusyncApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MusyncApp> createState() => _MusyncAppState();
+}
+
+class _MusyncAppState extends ConsumerState<MusyncApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // HOME from Lecture en cours changes no route, so without this the
+    // bubble would stay hidden; returning must hide it again. A resume also
+    // re-checks the real overlay state, in case the x was tapped while its
+    // 'closed' message could not reach us.
+    final foreground = state == AppLifecycleState.resumed;
+    final holder = ref.read(appForegroundProvider.notifier);
+    if (holder.state != foreground) {
+      holder.state = foreground;
+      if (foreground) {
+        unawaited(ref.read(lyricsBubbleProvider.notifier).reconcile());
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     // Read once at startup so a bubble left open by a previous run is picked
     // up again and fed, instead of sitting frozen until the player is opened.
     ref.read(lyricsBubbleProvider);
