@@ -191,14 +191,21 @@ class SettingsImporter {
   ///
   /// Files are written atomically, like the stores do themselves. For the AI
   /// providers, blank secrets keep the stored values (see the library doc).
+  ///
+  /// The whole file set is applied atomically: every current file is read
+  /// first, and if any write fails the ones already replaced are restored,
+  /// so a failed import never leaves half the settings from the bundle and
+  /// half from before.
   Future<ImportReport> apply(ImportBundle bundle, SharedPreferences prefs) async {
     final appliedFiles = <String>[];
     var secretsKept = 0;
     var secretsApplied = 0;
 
+    // Resolve every target and prepare every new content before touching
+    // the disk, so a validation failure cannot leave partial writes behind.
+    final pending = <({File file, String content, String name})>[];
     for (final entry in bundle.files.entries) {
-      final dir =
-          _knownFiles[entry.key]! ? documentsDir : supportDir;
+      final dir = _knownFiles[entry.key]! ? documentsDir : supportDir;
       var content = entry.value;
       if (entry.key == _aiProvidersFile) {
         final merged = await _mergeSecrets(entry.key, dir, content);
@@ -206,12 +213,47 @@ class SettingsImporter {
         secretsKept += merged.kept;
         secretsApplied += merged.applied;
       }
-      final file = File('${dir.path}${Platform.pathSeparator}${entry.key}');
-      await AtomicFile.writeString(
-        file,
-        const JsonEncoder.withIndent('  ').convert(content),
+      _validateSettingsFile(entry.key, content);
+      pending.add((
+        file: File('${dir.path}${Platform.pathSeparator}${entry.key}'),
+        content: const JsonEncoder.withIndent('  ').convert(content),
+        name: entry.key,
+      ));
+    }
+
+    // Back up what is there now, so a failed write can be rolled back.
+    final backups = <File, String?>{};
+    for (final p in pending) {
+      try {
+        backups[p.file] =
+            await p.file.exists() ? await p.file.readAsString() : null;
+      } catch (_) {
+        backups[p.file] = null;
+      }
+    }
+
+    try {
+      for (final p in pending) {
+        await AtomicFile.writeString(p.file, p.content);
+        appliedFiles.add(p.name);
+      }
+    } catch (e) {
+      // Roll back: restore every file to what it was before the import.
+      for (final entry in backups.entries) {
+        try {
+          final previous = entry.value;
+          if (previous == null) {
+            if (await entry.key.exists()) await entry.key.delete();
+          } else {
+            await AtomicFile.writeString(entry.key, previous);
+          }
+        } catch (_) {
+          // Best effort — the original error is the one that matters.
+        }
+      }
+      throw ImportFormatException(
+        "L'import a échoué et les réglages ont été restaurés.",
       );
-      appliedFiles.add(entry.key);
     }
 
     final appliedPrefs = <String>[];
@@ -233,6 +275,48 @@ class SettingsImporter {
       secretsKept: secretsKept,
       secretsApplied: secretsApplied,
     );
+  }
+
+  /// Rejects a settings file whose structure the app cannot read back.
+  ///
+  /// A hand-edited or corrupted export must fail loudly here rather than
+  /// silently wiping the user's providers with a file the store will parse
+  /// as "no valid providers".
+  void _validateSettingsFile(String name, Object? content) {
+    if (name == _aiProvidersFile) {
+      if (content is! Map) {
+        throw const ImportFormatException(
+          'Le fichier des fournisseurs IA est illisible.',
+        );
+      }
+      final providers = content['providers'];
+      if (providers is! List) {
+        throw const ImportFormatException(
+          'Le fichier des fournisseurs IA est illisible.',
+        );
+      }
+      const validKinds = {'gemini', 'openAiCompatible'};
+      for (final p in providers) {
+        if (p is! Map) {
+          throw const ImportFormatException(
+            'Le fichier des fournisseurs IA contient un fournisseur illisible.',
+          );
+        }
+        final id = p['id'];
+        final providerName = p['name'];
+        final kind = p['kind'];
+        if (id is! String ||
+            id.isEmpty ||
+            providerName is! String ||
+            providerName.isEmpty ||
+            kind is! String ||
+            !validKinds.contains(kind)) {
+          throw const ImportFormatException(
+            'Le fichier des fournisseurs IA contient un fournisseur illisible.',
+          );
+        }
+      }
+    }
   }
 
   /// The AI providers file with blank secrets filled back from the stored
