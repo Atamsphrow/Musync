@@ -75,6 +75,22 @@ enum AiModelCheck {
   unknown,
 }
 
+/// What a response test found.
+enum AiModelPing {
+  /// The model answered the test prompt.
+  answered,
+
+  /// The key was refused, so nothing can be said about the model.
+  keyRejected,
+
+  /// The model did not answer usefully: empty reply, or an HTTP error that
+  /// is not the key.
+  noAnswer,
+
+  /// The test could not be made — no network.
+  unknown,
+}
+
 class AiFilenameReader {
   final http.Client _client;
 
@@ -139,6 +155,43 @@ class AiFilenameReader {
     return models.any((m) => m == wanted)
         ? AiModelCheck.present
         : AiModelCheck.missing;
+  }
+
+  /// Asks the model itself a trivial question and reports whether it answers.
+  ///
+  /// Complements [checkModel]: a model can be listed yet not answer (quota
+  /// exhausted, model overloaded, wrong endpoint). Sends the smallest
+  /// possible prompt — "Réponds uniquement : OK" — and accepts any non-empty
+  /// reply as proof of life.
+  ///
+  /// Never throws. A test that cannot be made answers [AiModelPing.unknown].
+  Future<AiModelPing> pingModel(AiProviderConfig provider) async {
+    try {
+      final answer = switch (provider.kind) {
+        AiProviderKind.gemini => await _askGemini(
+          provider,
+          'Réponds uniquement : OK',
+          'ping',
+        ),
+        AiProviderKind.openAiCompatible => await _askOpenAi(
+          provider,
+          'Réponds uniquement : OK',
+          'ping',
+        ),
+      };
+      return answer.trim().isNotEmpty
+          ? AiModelPing.answered
+          : AiModelPing.noAnswer;
+    } on AiReaderException catch (e) {
+      if (e.statusCode == 401 || e.statusCode == 403) {
+        return AiModelPing.keyRejected;
+      }
+      // "Le modèle n'a rien répondu." / "Réponse vide du modèle." — the
+      // model was reached but gave nothing usable.
+      return AiModelPing.noAnswer;
+    } catch (_) {
+      return AiModelPing.unknown;
+    }
   }
 
   /// The model identifiers [provider] admits to having.
