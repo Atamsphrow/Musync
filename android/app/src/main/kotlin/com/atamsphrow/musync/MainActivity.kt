@@ -230,7 +230,14 @@ class MainActivity : AudioServiceActivity() {
 
         val uris: List<Uri> = when (intent.action) {
             Intent.ACTION_SEND ->
-                listOfNotNull(intent.getParcelableExtra(Intent.EXTRA_STREAM))
+                // A buggy sender can put something else than a Uri in
+                // EXTRA_STREAM (a String, …). The unchecked cast inside
+                // getParcelableExtra must not crash Musync on receive.
+                try {
+                    listOfNotNull(intent.getParcelableExtra(Intent.EXTRA_STREAM))
+                } catch (_: Exception) {
+                    emptyList()
+                }
             Intent.ACTION_SEND_MULTIPLE ->
                 getParcelableArrayListCompat(intent, Intent.EXTRA_STREAM)
             Intent.ACTION_VIEW ->
@@ -241,14 +248,21 @@ class MainActivity : AudioServiceActivity() {
         }
 
         var resolved = 0
-        uris.mapNotNull(::resolveToFilePath).forEach {
-            if (!pendingSharedAudio.contains(it)) {
-                pendingSharedAudio.add(it)
-                resolved++
+        var dropped = 0
+        for (uri in uris) {
+            val path = resolveToFilePath(uri)
+            when {
+                path == null -> dropped++
+                !pendingSharedAudio.contains(path) -> {
+                    pendingSharedAudio.add(path)
+                    resolved++
+                }
+                // else: same file shared twice before Dart drained the queue.
+                // Already pending — neither a success nor a drop.
             }
         }
         // Track how many were dropped so Dart can tell the user.
-        pendingSharedDropped += uris.size - resolved
+        pendingSharedDropped += dropped
     }
 
     /// API 33+ deprecated the generic getParcelableArrayListExtra; the new
@@ -305,6 +319,13 @@ class MainActivity : AudioServiceActivity() {
             }
         } catch (_: SecurityException) {
             // A provider that won't grant us a look. Nothing to do but decline.
+            null
+        } catch (_: IllegalArgumentException) {
+            // A malformed URI from a buggy sender. Decline, don't crash.
+            null
+        } catch (_: UnsupportedOperationException) {
+            // An exotic provider that refuses query() outright.
+            // Decline, don't crash.
             null
         }
     }
