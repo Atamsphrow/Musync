@@ -155,8 +155,11 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
       // ignore synchronised frames, so both are written together.
       synced: state.asSyncedLyrics,
       unsynced: state.asUnsyncedLyrics,
-      successMessage:
-          '${state.asSyncedLyrics.length} lignes calées enregistrées.',
+      // Simple mode saves plain text, not timings — the message must say
+      // what was actually written, not count synced lines that don't exist.
+      successMessage: state.mode == SyncMode.simple
+          ? 'Texte enregistré.'
+          : '${state.asSyncedLyrics.length} lignes calées enregistrées.',
       // The editor owns this track's whole lyric state, clearing a
       // timing included, so it is the one caller allowed to replace.
       onPlainOverSynced: PlainOverSynced.replace,
