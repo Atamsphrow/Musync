@@ -57,6 +57,10 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   /// 'closed', so this is re-synced there too.
   bool _overlayUp = false;
 
+  /// When the overlay was last brought up. Guards [reconcile]: a bubble that
+  /// is still opening must not be mistaken for a bubble that is gone.
+  DateTime? _overlayUpSince;
+
   @override
   BubbleState build() {
     ref.onDispose(_detach);
@@ -72,14 +76,16 @@ class LyricsBubbleController extends Notifier<BubbleState> {
         state = state.copyWith(lines: saved.clamp(1, 3));
       }
       // The bubble outlives the screen that opened it: found again after the
-      // app was reopened, it is picked back up rather than orphaned — unless
-      // the visibility rules say it should not be up, in which case the sync
-      // below closes it.
+      // app was reopened, it is picked back up rather than orphaned. The
+      // player-state feed attached below drives the first visibility sync
+      // once just_audio reports in — syncing now would read "not playing"
+      // from a provider that has not loaded yet and pointlessly close and
+      // reopen the bubble.
       if (await FlutterOverlayWindow.isActive()) {
         state = state.copyWith(active: true);
         _overlayUp = true;
+        _overlayUpSince = DateTime.now();
         _attach();
-        _syncOverlayVisibility();
       }
     } catch (error) {
       DebugLog.instance.warning(
@@ -123,6 +129,31 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     _detach();
     state = state.copyWith(active: false);
     _syncOverlayVisibility();
+  }
+
+  /// Re-checks the real overlay state against what this controller believes.
+  /// Called when the app comes back to the foreground: the × may have been
+  /// tapped while the 'closed' message could not reach the main isolate
+  /// (backgrounded engine, lost message), which would leave the Lecture en
+  /// cours toggle on for a bubble that is gone.
+  Future<void> reconcile() async {
+    if (!_overlayUp) return;
+    // A bubble that is still opening must not be mistaken for one that is
+    // gone: the check would run while the window is not up yet and kill it.
+    final since = _overlayUpSince;
+    if (since != null &&
+        DateTime.now().difference(since) < const Duration(seconds: 5)) {
+      return;
+    }
+    try {
+      if (!await FlutterOverlayWindow.isActive()) {
+        _overlayUp = false;
+        _overlayUpSince = null;
+        await stop();
+      }
+    } catch (_) {
+      // A failed check keeps the current state: never close on a guess.
+    }
   }
 
   Future<void> setLines(int lines) async {
@@ -173,6 +204,11 @@ class LyricsBubbleController extends Notifier<BubbleState> {
         (_, _) => _syncOverlayVisibility(),
       ),
     );
+    // Backgrounding the app does not change the route: HOME from Lecture en
+    // cours must bring the bubble back, and returning must hide it again.
+    _feeds.add(
+      ref.listen(appForegroundProvider, (_, _) => _syncOverlayVisibility()),
+    );
     _fromOverlay = FlutterOverlayWindow.overlayListener.listen(_onOverlay);
   }
 
@@ -194,6 +230,7 @@ class LyricsBubbleController extends Notifier<BubbleState> {
       // plugin answers on the overlay's own channel); this just syncs the
       // state so the toggle and the visibility rules agree.
       _overlayUp = false;
+      _overlayUpSince = null;
       unawaited(stop());
     }
   }
@@ -203,7 +240,9 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   bool get _playing =>
       ref.read(playerStateProvider).valueOrNull?.playing ?? false;
 
-  bool get _playerVisible => ref.read(playerScreenVisibleProvider);
+  bool get _playerVisible =>
+      ref.read(playerScreenVisibleProvider) &&
+      ref.read(appForegroundProvider);
 
   /// Opens or closes the overlay window so that it matches the rules: shown
   /// only when enabled, playing, and away from the now-playing screen.
@@ -211,6 +250,7 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     final shouldShow = state.active && _playing && !_playerVisible;
     if (shouldShow == _overlayUp) return;
     _overlayUp = shouldShow;
+    if (!shouldShow) _overlayUpSince = null;
     unawaited(shouldShow ? _openOverlay() : _closeOverlayNow());
   }
 
@@ -244,6 +284,7 @@ class LyricsBubbleController extends Notifier<BubbleState> {
       );
     } catch (error, stack) {
       _overlayUp = false;
+      _overlayUpSince = null;
       DebugLog.instance.error(
         'Bulle',
         'Ouverture de la bulle impossible',
@@ -252,6 +293,7 @@ class LyricsBubbleController extends Notifier<BubbleState> {
       );
       return;
     }
+    _overlayUpSince = DateTime.now();
     // The overlay announces itself once its engine is up ('ready'), which is
     // the reliable moment to send the first line. This is the fallback for a
     // message that got lost.
