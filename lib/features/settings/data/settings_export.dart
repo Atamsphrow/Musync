@@ -1,9 +1,13 @@
 /// Export of the app's settings and configuration to a single JSON file.
 ///
 /// The bundle holds the settings stores as they are on disk (playback, lyrics
-/// sources, AI providers) plus the few values kept in SharedPreferences. It does
-/// not hold tag backups (audio bytes, large, and tied to files on this phone),
-/// the debug journal, or caches that rebuild themselves.
+/// sources, AI providers), the few values kept in SharedPreferences, and the
+/// tag-backup history (`tag_backups/`): the index plus every referenced backup,
+/// base64-encoded. The backups only make sense on the phone whose files they
+/// belong to — restoring them elsewhere would point at tracks that are not
+/// there — but they are exactly what a reinstall wipes, so they travel along.
+/// The bundle does not hold the debug journal or caches that rebuild
+/// themselves.
 ///
 /// Secrets — API keys and tokens — are blanked unless the caller asks for them:
 /// the file lands in a folder every app can read, and is the kind of thing that
@@ -14,11 +18,23 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:musync/core/app_info.dart';
+import 'package:musync/core/id3/tag_backup.dart';
 import 'package:musync/core/utils/atomic_file.dart';
 
 /// Value a blanked secret is replaced with. The key stays, so the export still
 /// shows that a provider was configured.
 const String kExportRedacted = '';
+
+/// A `storedAs` that may name a file inside `tag_backups/`.
+///
+/// Plain file name only — no separators, no parent references. Both sides of
+/// the history transfer enforce this: the bundle must never be a vehicle for
+/// writing outside the backup directory.
+bool isSafeBackupName(String name) =>
+    name.isNotEmpty &&
+    name.length <= 128 &&
+    RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]*$').hasMatch(name) &&
+    !name.contains('..');
 
 /// Field names taken for secrets, wherever they appear in the JSON.
 ///
@@ -89,6 +105,74 @@ class SettingsExporter {
       'includesSecrets': includeSecrets,
       'files': files,
       'preferences': preferences,
+      'tagBackups': await _exportTagBackups(),
+      if (unreadable.isNotEmpty) 'unreadable': unreadable,
+    };
+  }
+
+  /// The whole tag-backup history: the index plus every backup it references,
+  /// base64-encoded so the bundle stays one JSON file.
+  ///
+  /// Backups the index references but whose file is gone (or unreadable) do
+  /// not fail the export: they are listed under `missing` / `unreadable` and
+  /// the rest travels. A `storedAs` that is not a plain file name is never
+  /// read — the bundle must not be a vehicle for path traversal, even from
+  /// this phone's own index.
+  Future<Map<String, Object?>> _exportTagBackups() async {
+    final dir = Directory(
+      '${supportDir.path}${Platform.pathSeparator}tag_backups',
+    );
+    final index = <Map<String, Object?>>[];
+    final files = <String, String>{};
+    final missing = <String>[];
+    final unreadable = <String>[];
+
+    final indexFile = File(
+      '${dir.path}${Platform.pathSeparator}index.json',
+    );
+    if (!await indexFile.exists()) {
+      return {'index': index, 'files': files};
+    }
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(await indexFile.readAsString());
+    } catch (_) {
+      return {
+        'index': index,
+        'files': files,
+        'unreadable': ['index.json'],
+      };
+    }
+    if (decoded is! List) {
+      return {
+        'index': index,
+        'files': files,
+        'unreadable': ['index.json'],
+      };
+    }
+
+    for (final raw in decoded) {
+      final entry = TagBackup.fromJson(raw);
+      if (entry == null) continue;
+      index.add(entry.toJson());
+      final storedAs = entry.storedAs;
+      if (!isSafeBackupName(storedAs)) continue;
+      final file = File('${dir.path}${Platform.pathSeparator}$storedAs');
+      if (!await file.exists()) {
+        missing.add(storedAs);
+        continue;
+      }
+      try {
+        files[storedAs] = base64Encode(await file.readAsBytes());
+      } catch (_) {
+        unreadable.add(storedAs);
+      }
+    }
+
+    return {
+      'index': index,
+      'files': files,
+      if (missing.isNotEmpty) 'missing': missing,
       if (unreadable.isNotEmpty) 'unreadable': unreadable,
     };
   }
