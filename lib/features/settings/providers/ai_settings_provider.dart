@@ -112,6 +112,43 @@ class AiProviderStatusNotifier extends Notifier<Map<String, AiProviderStatus>> {
       ),
     });
   }
+
+  /// Sends the model a trivial prompt and reports whether it answers.
+  ///
+  /// Complements [check]: a model can exist in the provider's list yet not
+  /// answer (quota épuisé, modèle surchargé, mauvais point d'accès).
+  Future<void> ping(AiProviderConfig provider) async {
+    if (!provider.isUsable) {
+      _set(
+        provider.id,
+        const AiProviderStatus(ok: false, detail: 'Désactivé, ou sans clé.'),
+      );
+      return;
+    }
+
+    _set(provider.id, const AiProviderStatus(checking: true));
+    final result = await ref.read(aiFilenameReaderProvider).pingModel(provider);
+
+    _set(provider.id, switch (result) {
+      AiModelPing.answered => AiProviderStatus(
+        ok: true,
+        detail: 'Le modèle ${provider.model} répond.',
+      ),
+      AiModelPing.keyRejected => const AiProviderStatus(
+        ok: false,
+        detail: 'Clé refusée.',
+      ),
+      AiModelPing.noAnswer => AiProviderStatus(
+        ok: false,
+        detail:
+            'Le modèle ${provider.model} ne répond pas (réponse vide ou '
+            'erreur). Vérifiez le quota ou le point d\'accès.',
+      ),
+      AiModelPing.unknown => const AiProviderStatus(
+        detail: 'Test impossible — pas de réseau.',
+      ),
+    });
+  }
 }
 
 final aiSettingsProvider =
