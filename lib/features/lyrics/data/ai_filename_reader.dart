@@ -39,7 +39,18 @@ class AiReaderException implements Exception {
   /// whole diagnosis.
   final String? model;
 
-  const AiReaderException(this.message, {this.statusCode, this.model});
+  /// True when the provider was reached but the model gave nothing usable
+  /// (empty candidates, empty parts). Distinct from a null [statusCode],
+  /// which also covers timeouts and unreachable hosts - a caller must be
+  /// able to tell "the model did not answer" from "the test never ran".
+  final bool noAnswer;
+
+  const AiReaderException(
+    this.message, {
+    this.statusCode,
+    this.model,
+    this.noAnswer = false,
+  });
 
   /// One line for the log, with everything needed to act on it.
   String get detail {
@@ -186,9 +197,15 @@ class AiFilenameReader {
       if (e.statusCode == 401 || e.statusCode == 403) {
         return AiModelPing.keyRejected;
       }
-      // "Le modèle n'a rien répondu." / "Réponse vide du modèle." — the
-      // model was reached but gave nothing usable.
-      return AiModelPing.noAnswer;
+      if (e.statusCode != null || e.noAnswer) {
+        // An HTTP error, or the model reached but answering nothing
+        // usable: the model was contacted and did not answer.
+        return AiModelPing.noAnswer;
+      }
+      // No HTTP response at all - timeout, unreachable host: the test
+      // could not be made. Reporting noAnswer here would be the confident
+      // wrong answer "your model is silent" when the phone is offline.
+      return AiModelPing.unknown;
     } catch (_) {
       return AiModelPing.unknown;
     }
@@ -323,11 +340,11 @@ class AiFilenameReader {
 
     final candidates = body['candidates'];
     if (candidates is! List || candidates.isEmpty) {
-      throw const AiReaderException('Le modèle n\'a rien répondu.');
+      throw const AiReaderException('Le modèle n\'a rien répondu.', noAnswer: true);
     }
     final parts = (candidates.first as Map?)?['content']?['parts'];
     if (parts is! List || parts.isEmpty) {
-      throw const AiReaderException('Réponse vide du modèle.');
+      throw const AiReaderException('Réponse vide du modèle.', noAnswer: true);
     }
     return '${(parts.first as Map?)?['text'] ?? ''}';
   }
@@ -362,7 +379,7 @@ class AiFilenameReader {
 
     final choices = body['choices'];
     if (choices is! List || choices.isEmpty) {
-      throw const AiReaderException('Le modèle n\'a rien répondu.');
+      throw const AiReaderException('Le modèle n\'a rien répondu.', noAnswer: true);
     }
     return '${(choices.first as Map?)?['message']?['content'] ?? ''}';
   }
@@ -429,7 +446,10 @@ class AiFilenameReader {
       // Falls through to the same message: the body could hold anything, and
       // quoting it back would be noise at best.
     }
-    throw AiReaderException('Réponse illisible de ${provider.name}.');
+    throw AiReaderException(
+      'Réponse illisible de ${provider.name}.',
+      noAnswer: true,
+    );
   }
 
   /// Pulls `{"artist": ..., "title": ...}` out of whatever came back.
