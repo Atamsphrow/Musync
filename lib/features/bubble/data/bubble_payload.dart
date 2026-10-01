@@ -26,11 +26,12 @@ class BubblePayload {
   /// 1, 2 or 3: which of the three texts are drawn.
   final int lines;
 
-  /// Width the overlay window should be for these lines, in dp. Computed in
-  /// the main isolate (which owns the sizing) and applied by the overlay
-  /// isolate itself: `resizeOverlay` only reaches the plugin from the overlay
-  /// side, a call from the main isolate throws `MissingPluginException` and
-  /// silently leaves the bubble at its opening width.
+  /// Width the overlay window should be, in dp. One steady full-width pill,
+  /// whatever the line — the lyric is centered inside it. Computed in the
+  /// main isolate and applied by the overlay isolate itself: `resizeOverlay`
+  /// only reaches the plugin from the overlay side, a call from the main
+  /// isolate throws `MissingPluginException` and silently leaves the bubble
+  /// at its opening width.
   final int widthDp;
 
   const BubblePayload({
@@ -42,9 +43,6 @@ class BubblePayload {
   });
 
   /// Nothing to sing: the bubble stays up, showing only the note.
-  ///
-  /// The default width matches [kBubbleMinWidth] in `bubble_sizing.dart`,
-  /// written out here so this file stays free of Flutter imports.
   const BubblePayload.idle(this.lines, {this.widthDp = 120})
     : previous = '',
       current = kBubbleIdle,
