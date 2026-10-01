@@ -37,6 +37,11 @@ final playerStateProvider = StreamProvider<PlayerState>((ref) {
   return service.playerStateStream;
 });
 
+/// True while the now-playing screen is the visible route, published by the
+/// screen itself through the app's route observer. The floating bubble hides
+/// then: the screen already shows the synced lyrics.
+final playerScreenVisibleProvider = StateProvider<bool>((ref) => false);
+
 final positionProvider = StreamProvider<Duration>((ref) {
   final service = ref.watch(audioPlayerServiceProvider);
   return service.positionStream;
