@@ -77,6 +77,16 @@ class Id3Writer {
     }
 
     final tag = Id3Tag.parse(bytes) ?? Id3Tag.empty();
+    // A truncated file can declare a tag bigger than itself: trusting
+    // declaredSize would then allocate hundreds of MB for the fast path
+    // and bloat the file to match. Refusing is honest — the audio is
+    // damaged too.
+    if (tag.audioOffset > bytes.length) {
+      throw Id3WriteException(
+        'Tag ID3 corrompu (fichier tronqué) : '
+        'impossible d\'y écrire des paroles.',
+      );
+    }
     if (!tag.isSupported) {
       throw Id3WriteException(
         'Tag ID3v2.${tag.majorVersion} non pris en charge. Réencoder le fichier '
