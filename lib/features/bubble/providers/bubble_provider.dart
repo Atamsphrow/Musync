@@ -199,7 +199,7 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   // ---- feed -------------------------------------------------------------
 
   void _attach() {
-    if (_feeds.isNotEmpty) return;
+    if (_feeds.isNotEmpty || _fromOverlay != null) return;
     // The same providers the now-playing screen watches. Listening keeps the
     // autoDispose line stream alive for as long as the bubble is up.
     _feeds.add(
@@ -213,19 +213,28 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     // still holds the previous track's value, and without this the bubble
     // would sit frozen on the old song's last line.
     _feeds.add(ref.listen(currentSongProvider, (_, _) => _forcePush()));
+    // Deferred via microtask: running synchronously inside Riverpod's
+    // notification cycle can trigger "Concurrent modification during
+    // iteration" when the visibility sync touches provider state.
     _feeds.add(
-      ref.listen(playerStateProvider, (_, _) => _syncOverlayVisibility()),
+      ref.listen(
+        playerStateProvider,
+        (_, _) => Future.microtask(_syncOverlayVisibility),
+      ),
     );
     _feeds.add(
       ref.listen(
         playerScreenVisibleProvider,
-        (_, _) => _syncOverlayVisibility(),
+        (_, _) => Future.microtask(_syncOverlayVisibility),
       ),
     );
     // Backgrounding the app does not change the route: HOME from Lecture en
     // cours must bring the bubble back, and returning must hide it again.
     _feeds.add(
-      ref.listen(appForegroundProvider, (_, _) => _syncOverlayVisibility()),
+      ref.listen(
+        appForegroundProvider,
+        (_, _) => Future.microtask(_syncOverlayVisibility),
+      ),
     );
     _fromOverlay = FlutterOverlayWindow.overlayListener.listen(_onOverlay);
   }
