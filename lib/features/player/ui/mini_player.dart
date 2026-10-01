@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:on_audio_query/on_audio_query.dart';
 import 'package:musync/core/router/app_router.dart';
@@ -135,7 +136,9 @@ class _MiniPlayPauseButton extends ConsumerWidget {
         isPlaying ? Icons.pause : Icons.play_arrow,
         color: scheme.onSurface,
       ),
+      tooltip: isPlaying ? 'Pause' : 'Lecture',
       onPressed: () {
+        HapticFeedback.lightImpact();
         final service = ref.read(audioPlayerServiceProvider);
         unawaited(isPlaying ? service.pause() : service.play());
       },
