@@ -8,7 +8,10 @@ import 'package:flutter_overlay_window/src/overlay_config.dart';
 class FlutterOverlayWindow {
   FlutterOverlayWindow._();
 
-  static final StreamController _controller = StreamController();
+  // Musync: broadcast, so the main isolate can stop and restart the bubble
+  // without tripping "Stream has already been listened to" on the second
+  // listen. The stock single-subscription controller crashed every re-open.
+  static final StreamController _controller = StreamController.broadcast();
   static const MethodChannel _channel =
       MethodChannel("x-slayer/overlay_channel");
   static const MethodChannel _overlayChannel =
