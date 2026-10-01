@@ -83,7 +83,8 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
   /// purpose: the plugin's `resizeOverlay` handler lives on the overlay
   /// engine's channel, so calling it from the main isolate throws
   /// `MissingPluginException` and the bubble would keep its opening width
-  /// forever.
+  /// forever. The width is fixed (one steady pill); only the height moves,
+  /// when the line count changes.
   Future<void> _applySize(BubblePayload p) async {
     if (p.widthDp == _appliedWidth && p.lines == _appliedLines) return;
     try {
@@ -100,16 +101,23 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
   }
 
   Future<void> _close() async {
-    // The vendored plugin answers `closeOverlay` on the overlay engine's own
-    // channel, so the bubble closes itself deterministically — no more
-    // hoping a message reaches the main isolate.
+    // Tell the main isolate FIRST, while this engine is still alive: it syncs
+    // its state through 'closed', so the Lecture en cours toggle turns off as
+    // well. Awaited with a timeout — when the app is gone there is nobody to
+    // answer, and the bubble must still close now.
+    try {
+      await FlutterOverlayWindow.shareData('closed').timeout(
+        const Duration(seconds: 1),
+      );
+    } catch (_) {
+      // Best effort only.
+    }
+    // Then close natively on the overlay engine's own channel. This tears the
+    // engine down (the service stops itself), so anything sent after it would
+    // never go out — that was the dead × toggle.
     try {
       await FlutterOverlayWindow.closeOverlayFromOverlay();
-    } catch (_) {
-      // Fall through to the signal below.
-    }
-    // Best effort: tell the main isolate so it syncs its state.
-    _signal('closed');
+    } catch (_) {}
   }
 
   @override
