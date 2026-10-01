@@ -4,6 +4,7 @@ library;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/debug_log.dart';
+import 'package:musync/core/services/shared_http_client.dart';
 import 'package:musync/features/lyrics/data/ai_filename_reader.dart';
 import 'package:musync/features/lyrics/data/ai_filename_resolver.dart';
 import 'package:musync/features/settings/data/ai_provider_config.dart';
@@ -13,7 +14,7 @@ final aiSettingsStoreProvider = Provider<AiSettingsStore>(
 );
 
 final aiFilenameReaderProvider = Provider<AiFilenameReader>(
-  (ref) => AiFilenameReader(),
+  (ref) => AiFilenameReader(client: ref.watch(sharedHttpClientProvider)),
 );
 
 final aiFilenameResolverProvider = Provider<AiFilenameResolver>(
