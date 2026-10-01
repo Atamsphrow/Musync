@@ -20,6 +20,7 @@ dependencies:
   # Audio playback
   just_audio: ^0.9.43
   audio_service: ^0.18.17
+  audio_session: ^0.1.25
   just_audio_background: ^0.0.1-beta.14
 
   # Direct, not transitive, because main.dart names JustAudioPlatform: the one
