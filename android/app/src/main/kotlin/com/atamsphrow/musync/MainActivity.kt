@@ -1,11 +1,17 @@
 package com.atamsphrow.musync
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ContentUris
+import android.content.Context
 import android.content.Intent
 import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import androidx.core.app.NotificationCompat
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -118,6 +124,13 @@ class MainActivity : AudioServiceActivity() {
                         ))
                         pendingSharedAudio.clear()
                         pendingSharedDropped = 0
+                    }
+                    "showNotification" -> {
+                        showBatchNotification(
+                            call.argument<String>("title") ?: "Musync",
+                            call.argument<String>("body") ?: "",
+                            result,
+                        )
                     }
                     else -> result.notImplemented()
                 }
@@ -306,6 +319,47 @@ class MainActivity : AudioServiceActivity() {
     /// player crash-loops, and the entry vanishes and returns once Android
     /// eventually rescans on its own. Players that walk the filesystem instead,
     /// like VLC, never notice. Hence this call, right after every write.
+    /// Shows a simple notification, e.g. when a batch lyrics search finishes
+    /// while the user left the batch screen. Tapping it reopens Musync.
+    private fun showBatchNotification(
+        title: String,
+        body: String,
+        result: MethodChannel.Result,
+    ) {
+        try {
+            val manager =
+                getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val channelId = "musync_batch"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                manager.createNotificationChannel(
+                    NotificationChannel(
+                        channelId,
+                        "Recherche par lot",
+                        NotificationManager.IMPORTANCE_DEFAULT,
+                    ),
+                )
+            }
+            val openIntent = packageManager.getLaunchIntentForPackage(packageName)
+            val pending = PendingIntent.getActivity(
+                this,
+                0,
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val notification = NotificationCompat.Builder(this, channelId)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setContentIntent(pending)
+                .setAutoCancel(true)
+                .build()
+            manager.notify(1001, notification)
+            result.success(null)
+        } catch (e: Exception) {
+            result.error("NOTIFY_FAILED", e.message, null)
+        }
+    }
+
     private fun rescan(path: String?, result: MethodChannel.Result) {
         if (path.isNullOrEmpty()) {
             result.error("no_path", "A file path is required.", null)
