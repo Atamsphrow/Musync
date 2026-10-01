@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
@@ -48,19 +49,25 @@ class PlayerControls extends ConsumerWidget {
           color: scheme.primaryContainer,
           shape: const CircleBorder(),
           clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: () =>
-                isPlaying ? playerService.pause() : playerService.play(),
-            child: SizedBox(
-              width: 68,
-              height: 68,
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 200),
-                child: Icon(
-                  isPlaying ? Icons.pause : Icons.play_arrow,
-                  key: ValueKey<bool>(isPlaying),
-                  size: 34,
-                  color: scheme.onPrimaryContainer,
+          child: Semantics(
+            label: isPlaying ? 'Pause' : 'Lecture',
+            button: true,
+            child: InkWell(
+              onTap: () {
+                HapticFeedback.lightImpact();
+                isPlaying ? playerService.pause() : playerService.play();
+              },
+              child: SizedBox(
+                width: 68,
+                height: 68,
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  child: Icon(
+                    isPlaying ? Icons.pause : Icons.play_arrow,
+                    key: ValueKey<bool>(isPlaying),
+                    size: 34,
+                    color: scheme.onPrimaryContainer,
+                  ),
                 ),
               ),
             ),
