@@ -31,6 +31,14 @@ class LyricsBubbleButton extends ConsumerWidget {
         if (!context.mounted) return;
         switch (result) {
           case BubbleStart.started:
+            // The bubble stays hidden on this screen (it already shows the
+            // synced lyrics): drop straight back to the library so the user
+            // sees what the button just did instead of wondering. Only when
+            // this screen is still on top — a second tap racing the first
+            // must not pop the library underneath.
+            if (context.mounted && ModalRoute.of(context)?.isCurrent == true) {
+              Navigator.of(context).maybePop();
+            }
             break;
           case BubbleStart.permissionDenied:
             ScaffoldMessenger.of(context).showOnly(
