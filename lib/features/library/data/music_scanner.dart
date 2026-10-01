@@ -8,6 +8,14 @@ import 'package:musync/features/library/data/models/song.dart';
 /// MediaStore is queried rather than the filesystem walked: it is already
 /// indexed, it survives scoped storage, and it is the same catalogue every
 /// other music app on the phone sees.
+/// A file MediaStore returned but the library left out, and why.
+class IgnoredFile {
+  final String path;
+  final String reason;
+
+  const IgnoredFile({required this.path, required this.reason});
+}
+
 class MusicScanner {
   final OnAudioQuery _audioQuery;
 
@@ -18,6 +26,11 @@ class MusicScanner {
   /// and voice recordings, none of which belong in a library screen.
   static const int _minDurationMs = 20 * 1000;
 
+  /// Files left out by the last [scanAllSongs], with the reason each was
+  /// skipped. Surfaced in the UI so a missing track can be explained instead
+  /// of silently vanishing.
+  List<IgnoredFile> lastIgnored = const [];
+
   Future<List<Song>> scanAllSongs() async {
     final songs = await _audioQuery.querySongs(
       sortType: SongSortType.TITLE,
@@ -26,23 +39,43 @@ class MusicScanner {
       ignoreCase: true,
     );
 
-    return [
-      for (final s in songs)
-        // isMusic is null on files MediaStore hasn't classified; those are
-        // kept, since excluding them would hide legitimately untagged tracks.
-        if (s.isMusic != false &&
-            (s.duration ?? 0) >= _minDurationMs &&
-            s.data.isNotEmpty)
-          Song(
-            id: s.id,
-            title: s.title.trim().isEmpty ? s.displayNameWOExt : s.title,
-            artist: _orUnknown(s.artist, unknownArtist),
-            album: _orUnknown(s.album, unknownAlbum),
-            albumId: s.albumId,
-            duration: s.duration ?? 0,
-            filePath: s.data,
-          ),
-    ];
+    final ignored = <IgnoredFile>[];
+    final kept = <Song>[];
+    for (final s in songs) {
+      // isMusic is null on files MediaStore hasn't classified; those are
+      // kept, since excluding them would hide legitimately untagged tracks.
+      if (s.isMusic == false) {
+        ignored.add(
+          IgnoredFile(path: s.data, reason: 'Non classé comme musique'),
+        );
+        continue;
+      }
+      if ((s.duration ?? 0) < _minDurationMs) {
+        ignored.add(
+          IgnoredFile(path: s.data, reason: 'Trop court (< 20 s)'),
+        );
+        continue;
+      }
+      if (s.data.isEmpty) {
+        ignored.add(
+          IgnoredFile(path: s.displayNameWOExt, reason: 'Chemin illisible'),
+        );
+        continue;
+      }
+      kept.add(
+        Song(
+          id: s.id,
+          title: s.title.trim().isEmpty ? s.displayNameWOExt : s.title,
+          artist: _orUnknown(s.artist, unknownArtist),
+          album: _orUnknown(s.album, unknownAlbum),
+          albumId: s.albumId,
+          duration: s.duration ?? 0,
+          filePath: s.data,
+        ),
+      );
+    }
+    lastIgnored = List.unmodifiable(ignored);
+    return kept;
   }
 
   /// What an untagged file is shown as.
