@@ -6,7 +6,6 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/audio/mp3_gapless.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
-import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/settings/data/playback_settings.dart';
 
 final playbackSettingsStoreProvider = Provider<PlaybackSettingsStore>(
@@ -38,31 +37,6 @@ class PlaybackSettingsNotifier extends Notifier<PlaybackSettings> {
     // Only if it says something: assigning the default over the default would
     // notify every listener for nothing.
     if (loaded != state) state = loaded;
-  }
-
-  /// Applies the offset immediately and persists it in the background.
-  ///
-  /// The state moves first so the lines follow the slider as it is dragged;
-  /// a failed write costs the setting at the next launch and is logged rather
-  /// than thrown, since the change is already true in the app.
-  Future<void> setLyricsOffsetMs(int milliseconds) async {
-    final clamped = milliseconds.clamp(
-      -PlaybackSettings.maxOffsetMs,
-      PlaybackSettings.maxOffsetMs,
-    );
-    if (clamped == state.lyricsOffsetMs) return;
-
-    state = state.copyWith(lyricsOffsetMs: clamped);
-    try {
-      await ref.read(playbackSettingsStoreProvider).save(state);
-    } catch (error, stack) {
-      DebugLog.instance.error(
-        'Réglages',
-        'Enregistrement du décalage des paroles impossible',
-        error: error,
-        stackTrace: stack,
-      );
-    }
   }
 }
 
