@@ -108,7 +108,20 @@ class SyncEditorNotifier extends StateNotifier<SyncEditorState> {
 
     final synced = pair.synced;
     if (synced != null && synced.isNotEmpty) {
-      state = state.copyWith(lines: synced.lines, isLoading: false);
+      // USLT can carry lines SYLT doesn't — untimed markers like [Refrain],
+      // extra verses. They are not in `synced.lines`, so without this they
+      // vanish from the file on the next save. Keep them as untimed lines:
+      // they stay in the USLT text and out of SYLT.
+      final syncedTexts = {for (final l in synced.lines) l.text};
+      final extra = [
+        for (final l in _linesFromText(pair.unsynced?.text ?? ''))
+          if (l.text.isNotEmpty && !syncedTexts.contains(l.text))
+            l.withoutTimestamp(),
+      ];
+      state = state.copyWith(
+        lines: [...synced.lines, ...extra],
+        isLoading: false,
+      );
       return;
     }
 
