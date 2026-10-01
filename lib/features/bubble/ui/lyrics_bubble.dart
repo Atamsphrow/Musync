@@ -56,7 +56,21 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
     });
     // Tells the app the engine is up, so it sends the current line now instead
     // of guessing how long the start takes.
-    FlutterOverlayWindow.shareData('ready');
+    _signal('ready');
+  }
+
+  /// Fire-and-forget over the message bridge: even though the vendored plugin
+  /// answers both ways now, the app may simply be gone.
+  void _signal(String message) {
+    Future<void> send() async {
+      try {
+        await FlutterOverlayWindow.shareData(message);
+      } catch (_) {
+        // Best effort only.
+      }
+    }
+
+    unawaited(send());
   }
 
   @override
@@ -86,11 +100,16 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
   }
 
   Future<void> _close() async {
-    // Only the main isolate can reach the plugin's closeOverlay — the overlay
-    // engine has no handler for that channel. And the service never replies to
-    // the message, so awaiting it would hang here forever and the tap would do
-    // nothing. Fire the signal and let the main isolate close the window.
-    unawaited(FlutterOverlayWindow.shareData('closed'));
+    // The vendored plugin answers `closeOverlay` on the overlay engine's own
+    // channel, so the bubble closes itself deterministically — no more
+    // hoping a message reaches the main isolate.
+    try {
+      await FlutterOverlayWindow.closeOverlayFromOverlay();
+    } catch (_) {
+      // Fall through to the signal below.
+    }
+    // Best effort: tell the main isolate so it syncs its state.
+    _signal('closed');
   }
 
   @override
