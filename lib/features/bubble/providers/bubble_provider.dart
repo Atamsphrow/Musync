@@ -377,6 +377,13 @@ class LyricsBubbleController extends Notifier<BubbleState> {
               },
           ];
     final activeIndex = ref.read(currentLineIndexProvider).valueOrNull;
+    // The exact audio position right now, with the wall clock. The overlay
+    // extrapolates positionMs + (now - sampledAtMs), which cancels the
+    // shareData transmission delay that made the bubble lag behind the sound
+    // on track change.
+    final position = ref.read(positionProvider).valueOrNull;
+    final sampledAt = DateTime.now().millisecondsSinceEpoch;
+    final positionMs = position?.inMilliseconds;
     final base = synced == null || synced.isEmpty
         ? BubblePayload.idle(state.lines)
         : BubblePayload.fromLines(
@@ -386,6 +393,8 @@ class LyricsBubbleController extends Notifier<BubbleState> {
             widthDp: 0, // Replaced by the fixed width below.
             songId: '${song?.id ?? 0}',
             timedLines: timedLines,
+            positionMs: positionMs,
+            sampledAtMs: positionMs == null ? null : sampledAt,
           );
     return BubblePayload(
       previous: base.previous,
@@ -396,6 +405,8 @@ class LyricsBubbleController extends Notifier<BubbleState> {
       songId: base.songId,
       timedLines: base.timedLines,
       activeIndex: base.activeIndex,
+      positionMs: base.positionMs,
+      sampledAtMs: base.sampledAtMs,
     );
   }
 
