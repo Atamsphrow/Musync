@@ -44,6 +44,11 @@ class MainActivity : AudioServiceActivity() {
     /// them once it has a navigator to act with.
     private val pendingSharedAudio = mutableListOf<String>()
 
+    /// URIs that arrived via share but could not be resolved to file paths
+    /// (e.g. content:// from a third-party provider). Reported to Dart so the
+    /// user knows files were skipped, instead of silently dropping them.
+    private var pendingSharedDropped = 0
+
     /// Held so a later intent can reach Dart without waiting to be asked.
     private var channel: MethodChannel? = null
 
@@ -107,8 +112,12 @@ class MainActivity : AudioServiceActivity() {
                         // Draining is deliberate: a share is a one-shot event,
                         // and re-serving it would reopen the editor on every
                         // resume.
-                        result.success(pendingSharedAudio.toList())
+                        result.success(mapOf(
+                            "paths" to pendingSharedAudio.toList(),
+                            "dropped" to pendingSharedDropped
+                        ))
                         pendingSharedAudio.clear()
+                        pendingSharedDropped = 0
                     }
                     else -> result.notImplemented()
                 }
@@ -210,15 +219,46 @@ class MainActivity : AudioServiceActivity() {
             Intent.ACTION_SEND ->
                 listOfNotNull(intent.getParcelableExtra(Intent.EXTRA_STREAM))
             Intent.ACTION_SEND_MULTIPLE ->
-                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM) ?: emptyList()
+                getParcelableArrayListCompat(intent, Intent.EXTRA_STREAM)
             Intent.ACTION_VIEW ->
-                listOfNotNull(intent.data)
+                // VIEW can carry multiple items via ClipData (e.g. file managers
+                // sharing several files with "open with").
+                listOfNotNull(intent.data) + getClipDataUris(intent)
             else -> emptyList()
         }
 
+        var resolved = 0
         uris.mapNotNull(::resolveToFilePath).forEach {
-            if (!pendingSharedAudio.contains(it)) pendingSharedAudio.add(it)
+            if (!pendingSharedAudio.contains(it)) {
+                pendingSharedAudio.add(it)
+                resolved++
+            }
         }
+        // Track how many were dropped so Dart can tell the user.
+        pendingSharedDropped += uris.size - resolved
+    }
+
+    /// API 33+ deprecated the generic getParcelableArrayListExtra; the new
+    /// overload needs the class explicitly. This handles both.
+    private fun getParcelableArrayListCompat(intent: Intent, name: String): List<Uri> {
+        return try {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                intent.getParcelableArrayListExtra(name, Uri::class.java) ?: emptyList()
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableArrayListExtra<Uri>(name) ?: emptyList()
+            }
+        } catch (_: Exception) {
+            // Some apps put non-Uri parcelables in EXTRA_STREAM; ignore them
+            // rather than crashing the share.
+            emptyList()
+        }
+    }
+
+    /// Extracts URIs from ClipData (used by VIEW intents with multiple items).
+    private fun getClipDataUris(intent: Intent): List<Uri> {
+        val clip = intent.clipData ?: return emptyList()
+        return (0 until clip.itemCount).mapNotNull { clip.getItemAt(it)?.uri }
     }
 
     /// Turns a shared URI into a path `dart:io` can open, or null.
