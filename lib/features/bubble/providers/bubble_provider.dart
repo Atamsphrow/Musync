@@ -3,14 +3,18 @@
 /// The bubble does not compute anything. It is fed, line by line, from
 /// `currentLineIndexProvider` — the stream the now-playing screen reads — so it
 /// cannot run late relative to it. Everything the bubble draws travels through
-/// [FlutterOverlayWindow.shareData] as a small JSON string.
+/// `FlutterOverlayWindow.shareData` as a small JSON string.
 ///
 /// It is only ever started by the user, from the now-playing screen. Leaving
 /// the app never starts it.
+///
+/// Visibility rules: the overlay window itself is shown only while the bubble
+/// is enabled, something is actually playing, and the now-playing screen —
+/// which already shows the synced lyrics — is not visible. Every rule change
+/// funnels through [_syncOverlayVisibility].
 library;
 
 import 'dart:async';
-import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
@@ -19,6 +23,7 @@ import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/bubble/data/bubble_payload.dart';
 import 'package:musync/features/bubble/data/bubble_sizing.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
+import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 enum BubbleStart { started, permissionDenied, failed }
@@ -43,16 +48,17 @@ final lyricsBubbleProvider =
 class LyricsBubbleController extends Notifier<BubbleState> {
   static const String _prefsKey = 'bubble_lines';
 
-  /// Distance from the top of the screen in dp: just below the status bar,
-  /// like the bubble used to sit.
-  static const double _kBubbleTopMarginDp = 28;
-
   final List<ProviderSubscription<Object?>> _feeds = [];
   StreamSubscription<dynamic>? _fromOverlay;
   String? _lastSent;
 
   /// Width the overlay window has now, in dp.
   int _width = kBubbleMinWidth;
+
+  /// Whether the overlay window is up, tracked locally. The × on the bubble
+  /// closes it natively (see the vendored plugin) and reports back through
+  /// 'closed', so this is re-synced there too.
+  bool _overlayUp = false;
 
   @override
   BubbleState build() {
@@ -69,10 +75,14 @@ class LyricsBubbleController extends Notifier<BubbleState> {
         state = state.copyWith(lines: saved.clamp(1, 3));
       }
       // The bubble outlives the screen that opened it: found again after the
-      // app was reopened, it is picked back up rather than orphaned.
+      // app was reopened, it is picked back up rather than orphaned — unless
+      // the visibility rules say it should not be up, in which case the sync
+      // below closes it.
       if (await FlutterOverlayWindow.isActive()) {
         state = state.copyWith(active: true);
+        _overlayUp = true;
         _attach();
+        _syncOverlayVisibility();
       }
     } catch (error) {
       DebugLog.instance.warning(
@@ -83,8 +93,10 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     }
   }
 
-  /// Opens the bubble, asking for the "display over other apps" permission
-  /// first. Called only from the button.
+  /// Enables the bubble, asking for the "display over other apps" permission
+  /// first. Called only from the button. The window itself appears only when
+  /// the visibility rules allow it — never on the now-playing screen, never
+  /// while paused.
   Future<BubbleStart> start() async {
     if (state.active) return BubbleStart.started;
     try {
@@ -94,33 +106,6 @@ class LyricsBubbleController extends Notifier<BubbleState> {
         granted = await FlutterOverlayWindow.requestPermission() ?? false;
       }
       if (!granted) return BubbleStart.permissionDenied;
-
-      // Opened at the width of what is being sung right now, so it does not
-      // start wide and shrink.
-      final screenWidth = _screenWidthDp();
-      _width = _payload().widthDp;
-
-      // flutter_overlay_window 0.5.0 reads the width/height given here as raw
-      // pixels in onStartCommand (dp values would shrink the window to a
-      // postage stamp), while moveOverlay/resizeOverlay do convert dp to px.
-      // So the initial size is sent pre-converted to pixels, and the position
-      // is given explicitly in dp: the default path feeds -statusBarHeightPx()
-      // — already pixels — through dpToPx a second time, which parks the
-      // window fully off-screen with a top alignment. That is why only the
-      // "Paroles flottantes affichées" notification ever appeared, never the
-      // bubble itself.
-      final density = _screenDensity();
-      final xDp = ((screenWidth - _width) / 2).clamp(0.0, screenWidth);
-      await FlutterOverlayWindow.showOverlay(
-        width: (_width * density).round(),
-        height: (bubbleHeightFor(state.lines) * density).round(),
-        alignment: OverlayAlignment.topCenter,
-        enableDrag: true,
-        positionGravity: PositionGravity.none,
-        overlayTitle: 'Musync',
-        overlayContent: 'Paroles flottantes affichées',
-        startPosition: OverlayPosition(xDp, _kBubbleTopMarginDp),
-      );
     } catch (error, stack) {
       DebugLog.instance.error(
         'Bulle',
@@ -133,27 +118,14 @@ class LyricsBubbleController extends Notifier<BubbleState> {
 
     state = state.copyWith(active: true);
     _attach();
-    // The overlay announces itself once its engine is up ('ready'), which is
-    // the reliable moment to send the first line. This is the fallback for a
-    // message that got lost.
-    unawaited(
-      Future<void>.delayed(const Duration(milliseconds: 700), _forcePush),
-    );
+    _syncOverlayVisibility();
     return BubbleStart.started;
   }
 
   Future<void> stop() async {
     _detach();
     state = state.copyWith(active: false);
-    try {
-      await FlutterOverlayWindow.closeOverlay();
-    } catch (error) {
-      DebugLog.instance.warning(
-        'Bulle',
-        'Fermeture de la bulle impossible',
-        error: error,
-      );
-    }
+    _syncOverlayVisibility();
   }
 
   Future<void> setLines(int lines) async {
@@ -190,8 +162,19 @@ class LyricsBubbleController extends Notifier<BubbleState> {
         (_, _) => _push(),
       ),
     );
+    _feeds.add(ref.listen(currentLyricsProvider, (_, _) => _push()));
+    // A new track pushes right away: while its lyrics load, the provider
+    // still holds the previous track's value, and without this the bubble
+    // would sit frozen on the old song's last line.
+    _feeds.add(ref.listen(currentSongProvider, (_, _) => _forcePush()));
     _feeds.add(
-      ref.listen(currentLyricsProvider, (_, _) => _push()),
+      ref.listen(playerStateProvider, (_, _) => _syncOverlayVisibility()),
+    );
+    _feeds.add(
+      ref.listen(
+        playerScreenVisibleProvider,
+        (_, _) => _syncOverlayVisibility(),
+      ),
     );
     _fromOverlay = FlutterOverlayWindow.overlayListener.listen(_onOverlay);
   }
@@ -210,15 +193,106 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     if (event == 'ready') {
       _forcePush();
     } else if (event == 'closed') {
-      // The × on the bubble itself. Only the main isolate can reach the
-      // plugin's closeOverlay, so the overlay just signals and we close here.
+      // The × on the bubble: it already closed itself natively (the vendored
+      // plugin answers on the overlay's own channel); this just syncs the
+      // state so the toggle and the visibility rules agree.
+      _overlayUp = false;
       unawaited(stop());
     }
   }
 
+  // ---- visibility -------------------------------------------------------
+
+  bool get _playing =>
+      ref.read(playerStateProvider).valueOrNull?.playing ?? false;
+
+  bool get _playerVisible => ref.read(playerScreenVisibleProvider);
+
+  /// Opens or closes the overlay window so that it matches the rules: shown
+  /// only when enabled, playing, and away from the now-playing screen.
+  void _syncOverlayVisibility() {
+    final shouldShow = state.active && _playing && !_playerVisible;
+    if (shouldShow == _overlayUp) return;
+    _overlayUp = shouldShow;
+    unawaited(shouldShow ? _openOverlay() : _closeOverlayNow());
+  }
+
+  /// Opens the overlay window at the width of what is being sung right now,
+  /// so it does not start wide and shrink — centered on the screen, where it
+  /// stays: the vendored plugin clamps every drag, move and resize.
+  Future<void> _openOverlay() async {
+    try {
+      final screenWidth = _screenWidthDp();
+      final screenHeight = _screenHeightDp();
+      // Opened at the width of what is being sung right now.
+      _width = _payload().widthDp;
+      final height = bubbleHeightFor(state.lines);
+
+      // flutter_overlay_window reads the width/height given here as raw
+      // pixels in onStartCommand (dp values would shrink the window to a
+      // postage stamp), while moveOverlay/resizeOverlay do convert dp to px.
+      // So the initial size is sent pre-converted to pixels, and the position
+      // is given explicitly in dp with a top-left gravity, making it literal:
+      // true center of the screen.
+      final density = _screenDensity();
+      final xDp = (screenWidth - _width) / 2;
+      final yDp = (screenHeight - height) / 2;
+      await FlutterOverlayWindow.showOverlay(
+        width: (_width * density).round(),
+        height: (height * density).round(),
+        alignment: OverlayAlignment.topLeft,
+        enableDrag: true,
+        positionGravity: PositionGravity.none,
+        overlayTitle: 'Musync',
+        overlayContent: 'Paroles flottantes affichées',
+        startPosition: OverlayPosition(xDp, yDp),
+      );
+    } catch (error, stack) {
+      _overlayUp = false;
+      DebugLog.instance.error(
+        'Bulle',
+        'Ouverture de la bulle impossible',
+        error: error,
+        stackTrace: stack,
+      );
+      return;
+    }
+    // The overlay announces itself once its engine is up ('ready'), which is
+    // the reliable moment to send the first line. This is the fallback for a
+    // message that got lost.
+    unawaited(
+      Future<void>.delayed(const Duration(milliseconds: 700), () {
+        if (_overlayUp) _forcePush();
+      }),
+    );
+  }
+
+  Future<void> _closeOverlayNow() async {
+    try {
+      if (await FlutterOverlayWindow.isActive()) {
+        await FlutterOverlayWindow.closeOverlay();
+      }
+    } catch (error) {
+      DebugLog.instance.warning(
+        'Bulle',
+        'Fermeture de la bulle impossible',
+        error: error,
+      );
+    }
+  }
+
+  // ---- payload ----------------------------------------------------------
+
   BubblePayload _payload() {
-    final synced = ref.read(currentLyricsProvider).valueOrNull?.synced;
     final screenWidth = _screenWidthDp();
+    // Only fresh data. While the next track's lyrics load — or when the load
+    // failed — the provider still exposes the previous track's value, and
+    // sampling it with the new position pins the bubble on the old song's
+    // last line forever. Stale is worse than empty: show the idle note.
+    final lyrics = ref.read(currentLyricsProvider);
+    final synced = (!lyrics.isLoading && !lyrics.hasError)
+        ? lyrics.valueOrNull?.synced
+        : null;
     // The width is measured here, from the same texts the bubble draws, and
     // travels inside the payload: the overlay isolate applies it itself.
     final base = synced == null || synced.isEmpty
@@ -253,35 +327,6 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     _lastSent = data;
 
     unawaited(_send(data));
-    // The bubble is draggable and the plugin lets it wander off the screen.
-    // Pulled back inside on every new line; a drag that stays on screen is
-    // left exactly where the finger put it.
-    unawaited(_keepOnScreen(payload.widthDp, payload.lines));
-  }
-
-  /// Moves the bubble back fully on screen when it drifted (or was dragged)
-  /// past an edge. `moveOverlay`/`getOverlayPosition` are on the plugin's
-  /// main-isolate channel, so this runs here — the overlay could not do it.
-  Future<void> _keepOnScreen(int widthDp, int lines) async {
-    try {
-      final pos = await FlutterOverlayWindow.getOverlayPosition();
-      final maxX = math.max(0.0, _screenWidthDp() - widthDp);
-      final maxY = math.max(
-        0.0,
-        _screenHeightDp() - bubbleHeightFor(lines),
-      );
-      final x = pos.x.clamp(0.0, maxX);
-      final y = pos.y.clamp(0.0, maxY);
-      if (x != pos.x || y != pos.y) {
-        await FlutterOverlayWindow.moveOverlay(OverlayPosition(x, y));
-      }
-    } catch (error) {
-      DebugLog.instance.warning(
-        'Bulle',
-        'Recentrage de la bulle impossible',
-        error: error,
-      );
-    }
   }
 
   /// Width of the screen in dp. The overlay is sized in the same unit.
@@ -292,7 +337,7 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     return view.physicalSize.width / view.devicePixelRatio;
   }
 
-  /// Height of the screen in dp, for keeping the bubble on screen.
+  /// Height of the screen in dp, for the centered opening position.
   double _screenHeightDp() {
     final views = PlatformDispatcher.instance.views;
     if (views.isEmpty) return 640;
@@ -301,7 +346,7 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   }
 
   /// Screen density. Only the initial overlay size goes through as raw
-  /// pixels (see start()); resizes are converted by the plugin itself.
+  /// pixels (see _openOverlay()); resizes are converted by the plugin itself.
   double _screenDensity() {
     final views = PlatformDispatcher.instance.views;
     if (views.isEmpty) return 1;
