@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:musync/core/services/audio_backend_check.dart';
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/data/artwork_cache.dart';
 import 'package:musync/features/player/data/last_song_store.dart';
@@ -28,6 +30,8 @@ class AudioPlayerService {
 
   /// Periodic position checkpoints; kept so it can be cancelled in [dispose].
   StreamSubscription<Duration>? _positionSubscription;
+  StreamSubscription<void>? _noisySubscription;
+  StreamSubscription<AudioInterruptionEvent>? _interruptionSubscription;
 
   /// How often the current position is persisted while playing, so the
   /// next launch resumes where the track actually stopped — not where the
@@ -57,6 +61,33 @@ class AudioPlayerService {
       _lastPositionSave = now;
       unawaited(LastSongStore().save(song.filePath, position));
     });
+    unawaited(_watchBecomingNoisy());
+  }
+
+  /// Headphones unplugged (or Bluetooth dropped) mid-playback: pause at
+  /// once instead of blasting the room on the speaker. Phone calls and other
+  /// audio-focus losses are handled below too (just_audio does not do it).
+  Future<void> _watchBecomingNoisy() async {
+    try {
+      final session = await AudioSession.instance;
+      // Declares music playback to the OS, so calls and other interruptions
+      // are actually reported to us.
+      await session.configure(const AudioSessionConfiguration.music());
+      _noisySubscription = session.becomingNoisyEventStream.listen((_) {
+        if (_player.playing) unawaited(pause());
+      });
+      // just_audio does not handle audio focus itself: without this listener
+      // the music kept playing over phone calls. Pause when the interruption
+      // begins; no auto-resume when it ends — the user decides.
+      _interruptionSubscription =
+          session.interruptionEventStream.listen((event) {
+        if (event.begin && _player.playing) unawaited(pause());
+      });
+    } catch (e) {
+      // Best-effort: playback works without it, but say so — otherwise the
+      // unplug protection is silently absent.
+      DebugLog.instance.warning('Player', 'Écoute du débranchement casque impossible', error: e);
+    }
   }
 
   /// Emits whenever the playing track actually changes.
@@ -118,10 +149,17 @@ class AudioPlayerService {
   /// that only re-selects a song already in the current queue seeks instead.
   Future<void> playSong(Song song, {List<Song>? queue, int? index}) {
     final previous = _playSongGate;
-    final task = (previous ?? Future.value())
+    // The gate serializes the expensive, stateful part: building the audio
+    // source and seeking. Starting playback stays outside it on purpose:
+    // just_audio's play() future resolves only once the platform answers
+    // the play request, which can lag well past the first audible note —
+    // holding the gate that long would wedge every later tap on a song
+    // behind the current one. The caller's future still reports play()
+    // errors.
+    final setup = (previous ?? Future.value())
         .then((_) => _playSong(song, queue: queue, index: index));
-    _playSongGate = task.then<void>((_) {}, onError: (_) {});
-    return task;
+    _playSongGate = setup.then<void>((_) {}, onError: (_) {});
+    return setup.then((_) => _player.play());
   }
 
   Future<void> _playSong(Song song, {List<Song>? queue, int? index}) async {
@@ -139,7 +177,6 @@ class AudioPlayerService {
       // list.
       _setCurrentSong(newQueue.isEmpty ? null : newQueue[resolvedIndex]);
       await _player.seek(Duration.zero, index: resolvedIndex);
-      await _player.play();
       return;
     }
 
@@ -153,6 +190,8 @@ class AudioPlayerService {
     // playback back through audio_service.
     AudioBackendCheck.ensureIntercepted();
 
+    final previousQueue = _queue;
+    final previousSong = _currentSong;
     _queue = List.unmodifiable(newQueue);
     final target = _queue.isEmpty ? null : _queue[resolvedIndex];
     _setCurrentSong(target);
@@ -176,13 +215,26 @@ class AudioPlayerService {
     // time the source is built.
     unawaited(_warmArtwork(resolvedIndex));
 
-    await _player.setAudioSource(
-      ConcatenatingAudioSource(
-        children: [for (final s in _queue) _toSource(s)],
-      ),
-      initialIndex: resolvedIndex,
-    );
-    await _player.play();
+    try {
+      await _player.setAudioSource(
+        ConcatenatingAudioSource(
+          // Lazy preparation: the next track starts loading just before the
+          // current one ends, so automatic advances are gapless instead of
+          // reloading at each boundary — and the stale-position window the
+          // lyrics bubble guards against gets shorter.
+          useLazyPreparation: true,
+          children: [for (final s in _queue) _toSource(s)],
+        ),
+        initialIndex: resolvedIndex,
+      );
+    } catch (_) {
+      // The new queue was announced but never loaded (corrupt/missing file):
+      // put the old state back so the UI, the index subscription and the real
+      // source agree again, then let the caller report the failure.
+      _queue = previousQueue;
+      _setCurrentSong(previousSong);
+      rethrow;
+    }
   }
 
   /// Prefers the caller's index, since a library list can legitimately hold the
@@ -208,7 +260,11 @@ class AudioPlayerService {
   Future<void> _warmArtwork(int from) async {
     final end = (from + _artworkLookahead).clamp(0, _queue.length);
     for (var i = from.clamp(0, _queue.length); i < end; i++) {
-      await _artwork.extract(_queue[i]);
+      try {
+        await _artwork.extract(_queue[i]);
+      } catch (_) {
+        // A corrupt file must not kill the warmup of the rest of the queue.
+      }
     }
   }
 
@@ -240,10 +296,16 @@ class AudioPlayerService {
   Future<void> pause() async {
     // Checkpoint: the app can be killed while paused, and the periodic save
     // only runs while playing. Awaited before pausing, so a kill during the
-    // pause transition cannot lose the position.
+    // pause transition cannot lose the position — but a failing save must
+    // never block the actual pause (e.g. headphones unplugged with a full
+    // disk: the music still has to stop).
     final song = _currentSong;
     if (song != null) {
-      await LastSongStore().save(song.filePath, _player.position);
+      try {
+        await LastSongStore().save(song.filePath, _player.position);
+      } catch (_) {
+        // The checkpoint is best-effort; the pause below is not.
+      }
     }
     await _player.pause();
   }
@@ -363,6 +425,10 @@ class AudioPlayerService {
   Future<void> dispose() async {
     await _positionSubscription?.cancel();
     _positionSubscription = null;
+    await _noisySubscription?.cancel();
+    _noisySubscription = null;
+    await _interruptionSubscription?.cancel();
+    _interruptionSubscription = null;
     await _indexSubscription.cancel();
     await _player.dispose();
     await _currentSongController.close();
