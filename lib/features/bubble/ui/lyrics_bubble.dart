@@ -69,6 +69,29 @@ class LyricsBubbleApp extends StatelessWidget {
   return (anchorMs: anchorMs, anchorTime: anchorTime);
 }
 
+/// Timestamp of the first timed line strictly after [posMs], or null when
+/// [posMs] is past the last line. The timed lines arrive sorted by
+/// timestamp, so this is a binary search.
+///
+/// Pure on purpose: the one-shot ticker below depends on it, and it is
+/// covered by unit tests (see bubble_anchor_test.dart).
+int? bubbleNextChangeAfter(List<TimedLineJson> timed, int posMs) {
+  int low = 0;
+  int high = timed.length - 1;
+  int? result;
+  while (low <= high) {
+    final mid = (low + high) >> 1;
+    final ms = timed[mid]['ms'] as int? ?? 0;
+    if (ms > posMs) {
+      result = ms;
+      high = mid - 1;
+    } else {
+      low = mid + 1;
+    }
+  }
+  return result;
+}
+
 class _LyricsBubble extends StatefulWidget {
   const _LyricsBubble();
 
@@ -157,27 +180,38 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
       _timed = const [];
       _timedSongId = next.songId;
     }
-    _armTickerIfNeeded();
     final idx = next.activeIndex;
     _shownIndex = idx;
     final anchor = bubbleAnchorFor(next, _timed);
     _anchorMs = anchor.anchorMs;
     _anchorTime = anchor.anchorTime;
+    // Armed last: the one-shot delay is computed from the fresh anchor.
+    _armTickerIfNeeded();
   }
 
-  /// Starts the 200 ms line ticker when timed lines exist, stops it when
-  /// they don't. Five wakeups a second saved for every track without synced
-  /// lyrics.
+  /// Wakes the ticker exactly when the next line starts, instead of polling
+  /// every 200 ms. A fixed tick quantizes every line change: each new line —
+  /// including the first line of a new song — appeared up to 200 ms after the
+  /// audio reached it. The sleep is capped at 5 s so a missed timer can never
+  /// leave the bubble stale for long; payloads from the main isolate re-arm
+  /// it anyway. No timed lines, no wakeups at all.
   void _armTickerIfNeeded() {
-    if (_timed.isNotEmpty && _ticker == null) {
-      _ticker = Timer.periodic(
-        const Duration(milliseconds: 200),
-        (_) => _tick(),
-      );
-    } else if (_timed.isEmpty) {
-      _ticker?.cancel();
+    _ticker?.cancel();
+    _ticker = null;
+    if (_timed.isEmpty || !mounted) return;
+    final posMs =
+        _anchorMs + DateTime.now().difference(_anchorTime).inMilliseconds;
+    final nextMs = bubbleNextChangeAfter(_timed, posMs);
+    // Past the last line: nothing left to wait for.
+    if (nextMs == null) return;
+    var delayMs = nextMs - posMs;
+    if (delayMs < 0) delayMs = 0;
+    if (delayMs > 5000) delayMs = 5000;
+    _ticker = Timer(Duration(milliseconds: delayMs), () {
       _ticker = null;
-    }
+      _tick();
+      _armTickerIfNeeded();
+    });
   }
 
   /// Advances the shown line on the overlay's own clock. Only moves forward
