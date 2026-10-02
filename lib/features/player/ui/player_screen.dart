@@ -529,7 +529,11 @@ class _PlainLyrics extends StatelessWidget {
             child: Text(
               text,
               textAlign: TextAlign.center,
-              style: textTheme.bodyLarge?.copyWith(color: scheme.onSurface),
+              style: textTheme.bodyLarge?.copyWith(
+                color: scheme.onSurface,
+                fontFamily: 'serif',
+                fontStyle: FontStyle.italic,
+              ),
             ),
           ),
         ),
