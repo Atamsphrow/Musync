@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:on_audio_query/on_audio_query.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/player/providers/player_provider.dart';
 
-class SongTile extends StatelessWidget {
+class SongTile extends ConsumerWidget {
   final Song song;
   final VoidCallback onTap;
 
@@ -26,9 +28,14 @@ class SongTile extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
+    // Only the null/non-null transition used to rebuild the whole screen;
+    // here only the id match matters, so a track change rebuilds just the
+    // two rows it touches.
+    final isCurrent =
+        ref.watch(currentSongProvider.select((s) => s?.id == song.id));
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
@@ -72,8 +79,10 @@ class SongTile extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: textTheme.bodyLarge?.copyWith(
-                          color: scheme.onSurface,
-                          fontWeight: FontWeight.w500,
+                          color:
+                              isCurrent ? scheme.primary : scheme.onSurface,
+                          fontWeight:
+                              isCurrent ? FontWeight.w700 : FontWeight.w500,
                         ),
                       ),
                       const SizedBox(height: 2),
@@ -91,6 +100,15 @@ class SongTile extends StatelessWidget {
                 if (status != null) ...[
                   const SizedBox(width: 10),
                   _StatusBadge(status: status!),
+                ],
+                if (isCurrent) ...[
+                  const SizedBox(width: 6),
+                  Icon(
+                    Icons.graphic_eq_rounded,
+                    size: 18,
+                    color: scheme.primary,
+                    semanticLabel: 'Lecture en cours',
+                  ),
                 ],
                 const SizedBox(width: 10),
                 Text(
