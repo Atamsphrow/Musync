@@ -28,6 +28,11 @@ class SyncedLyricsView extends ConsumerStatefulWidget {
   ConsumerState<SyncedLyricsView> createState() => _SyncedLyricsViewState();
 }
 
+/// The Musicolet look: italic serif, centered. The system serif keeps the
+/// APK free of a bundled font; on Android it resolves to Noto Serif Italic.
+TextStyle _lyricsTextStyle(TextStyle? base) =>
+    base!.copyWith(fontFamily: 'serif', fontStyle: FontStyle.italic);
+
 class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
   // Measuring every line would mean laying the whole song out up front, so
   // lines are given a fixed extent instead — that also makes centering exact
@@ -62,13 +67,13 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     // active line drifted to the bottom edge and stuck there.
     final target = (index * _lineExtent) + (_lineExtent / 2);
 
-    // One fixed, quick glide per line: 250 ms. The previous version scaled
-    // the duration with the tempo, which left the scroll lagging a full beat
-    // behind on slow songs.
+    // One fixed, quick glide per line: 250 ms, ease-out. Measured
+    // frame-by-frame on Musicolet's lyrics view: the step starts fast and
+    // settles softly, which is ease-out, not ease-in-out.
     _scrollController.animateTo(
       target.clamp(0.0, _scrollController.position.maxScrollExtent),
       duration: const Duration(milliseconds: 250),
-      curve: Curves.easeInOutCubic,
+      curve: Curves.easeOutCubic,
     );
   }
 
@@ -98,16 +103,12 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
           itemBuilder: (context, index) {
             final line = widget.lyrics.lines[index];
             final isCurrent = index == currentIndex;
-            final isPast = currentIndex != null && index < currentIndex;
 
-            final Color color;
-            if (isCurrent) {
-              color = scheme.primary;
-            } else if (isPast) {
-              color = scheme.onSurfaceVariant;
-            } else {
-              color = scheme.onSurfaceVariant.withValues(alpha: 0.45);
-            }
+            // Musicolet: the active line is bold white, everything else the
+            // same dim grey — no past/future split.
+            final Color color = isCurrent
+                ? Colors.white
+                : scheme.onSurfaceVariant.withValues(alpha: 0.55);
 
             return InkWell(
               // Non-null: this view renders SyncedLyrics, which is timed-only.
@@ -132,16 +133,11 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                     // lag. The scroll below keeps its 500 ms — that one is
                     // motion, and motion is allowed to be smooth.
                     duration: const Duration(milliseconds: 120),
-                    style:
-                        (isCurrent
-                                ? textTheme.titleMedium
-                                : textTheme.bodyLarge)!
-                            .copyWith(
-                              color: color,
-                              fontWeight: isCurrent
-                                  ? FontWeight.w700
-                                  : FontWeight.w400,
-                            ),
+                    style: _lyricsTextStyle(textTheme.bodyLarge).copyWith(
+                      color: color,
+                      fontWeight:
+                          isCurrent ? FontWeight.w700 : FontWeight.w400,
+                    ),
                     textAlign: TextAlign.center,
                     child: Text(
                       line.text,
