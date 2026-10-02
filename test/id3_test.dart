@@ -831,6 +831,31 @@ void main() {
       expect(Id3Tag.decodeText([0xE9, 0x74, 0xE9], Id3Encoding.latin1), 'été');
     });
 
+    test('repairs UTF-8 bytes misdeclared as latin-1 (mojibake)', () {
+      // "préféré" encoded as UTF-8 but the frame claims latin-1: the
+      // classic "prÃ©fÃ©rÃ©" mojibake must not survive the decode.
+      final bytes = utf8.encode('préféré');
+      expect(Id3Tag.decodeText(bytes, Id3Encoding.latin1), 'préféré');
+    });
+
+    test('repairs misdeclared UTF-8 with emojis', () {
+      final bytes = utf8.encode('cœur 🎵 à la fête');
+      expect(
+        Id3Tag.decodeText(bytes, Id3Encoding.latin1),
+        'cœur 🎵 à la fête',
+      );
+    });
+
+    test('genuine latin-1 that is not valid UTF-8 still decodes', () {
+      // 0xE9 alone is not a valid UTF-8 sequence: real latin-1.
+      expect(Id3Tag.decodeText([0xE9, 0x74, 0xE9], Id3Encoding.latin1), 'été');
+      expect(Id3Tag.decodeText([0xE0], Id3Encoding.latin1), 'à');
+    });
+
+    test('pure ASCII is identical either way', () {
+      expect(Id3Tag.decodeText('hello'.codeUnits, Id3Encoding.latin1), 'hello');
+    });
+
     test('picks the encoding the tag version allows', () {
       expect(Id3Encoding.unicodeFor(4), Id3Encoding.utf8);
       expect(Id3Encoding.unicodeFor(3), Id3Encoding.utf16WithBom);
