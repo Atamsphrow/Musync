@@ -14,6 +14,39 @@ import 'package:musync/features/settings/providers/playback_settings_provider.da
 /// track's value, and only the tag tells the two apart. Sampling the old
 /// song's lines with the new position is what pinned the bubble on the old
 /// song's last line forever.
+/// Modification time of the current song's file, polled while the song is
+/// current. An external tag edit (Musicolet, a file manager, a download
+/// finishing) changes the mtime, and only a real change is yielded — never
+/// the initial read, which would rebuild the lyrics provider in the middle
+/// of its own first load and orphan the future its callers are awaiting.
+///
+/// Deliberately NOT autoDispose: an autoDispose stream watched from a
+/// FutureProvider can dispose and recreate itself across the FutureProvider's
+/// rebuild, re-yielding and rebuilding in a loop. One stat every two seconds
+/// for the app's lifetime is negligible; the container's disposal still stops
+/// it in tests.
+final _currentSongMtimeProvider = StreamProvider<int>((ref) async* {
+  final song = ref.watch(currentSongProvider);
+  if (song == null) return;
+
+  Future<int> mtime() async {
+    try {
+      return (await File(song.filePath).lastModified()).millisecondsSinceEpoch;
+    } catch (_) {
+      return -1;
+    }
+  }
+
+  var last = await mtime();
+  await for (final _ in Stream.periodic(const Duration(seconds: 2))) {
+    final current = await mtime();
+    if (current != last) {
+      last = current;
+      yield current;
+    }
+  }
+});
+
 final currentLyricsProvider =
     FutureProvider<({Song? song, SyncedLyrics? synced, UnsyncedLyrics? unsynced})>((
       ref,
@@ -22,6 +55,10 @@ final currentLyricsProvider =
       if (currentSong == null) {
         return (song: null, synced: null, unsynced: null);
       }
+      // Follow the file, not the cache: the mtime stream above rebuilds this
+      // provider whenever another app rewrites the tag, so what is shown is
+      // always what is on disk right now.
+      ref.watch(_currentSongMtimeProvider);
       // Frame-walking: the tag's artwork is skipped, not loaded.
       final lyrics = await Id3Reader.readLyricsFrames(currentSong.filePath);
       // Remember when this revision was read: an external rewrite of the tag
