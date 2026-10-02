@@ -43,6 +43,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// the `_dependents.isEmpty` assertion, not a typing bug.
   late final TextEditingController _searchController;
 
+  /// Drives the always-visible, draggable scrollbar: 868 tracks are a long
+  /// way to swipe. Owned here, created once, disposed once.
+  late final ScrollController _scrollController;
+
   /// The last-played track is restored once, when the library first loads —
   /// never on a manual refresh.
   bool _restoreAttempted = false;
@@ -63,6 +67,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   void initState() {
     super.initState();
     _searchController = TextEditingController();
+    _scrollController = ScrollController();
     _tabController = TabController(
       length: LyricsStatus.values.length,
       vsync: this,
@@ -146,6 +151,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     WidgetsBinding.instance.removeObserver(this);
     _tabController.dispose();
     _searchController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -500,8 +506,15 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                 onHorizontalDragEnd: _onHorizontalDragEnd,
                 child: RefreshIndicator(
                   onRefresh: _refreshWithIgnoredNotice,
-                  child: CustomScrollView(
-                    slivers: [
+                  child: Scrollbar(
+                    controller: _scrollController,
+                    // Always visible and draggable: the fast way through a
+                    // thousand-track library.
+                    thumbVisibility: true,
+                    interactive: true,
+                    child: CustomScrollView(
+                      controller: _scrollController,
+                      slivers: [
                       _LibraryAppBar(
                         songsAsync: songsAsync,
                         searchController: _searchController,
@@ -560,6 +573,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                         child: SizedBox(height: hasCurrentSong ? 8 : 24),
                       ),
                     ],
+                    ),
                   ),
                 ),
               ),
