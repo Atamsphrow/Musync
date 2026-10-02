@@ -6,7 +6,7 @@
 library;
 
 import 'package:flutter/material.dart';
-import 'package:musync/features/bubble/ui/lyrics_bubble_button.dart';
+import 'package:musync/features/settings/ui/appearance_tab.dart';
 import 'package:musync/core/utils/snackbar.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -63,6 +63,7 @@ class SettingsScreen extends StatelessWidget {
             tabAlignment: TabAlignment.start,
             tabs: [
               Tab(text: 'Sources', icon: Icon(Icons.travel_explore)),
+              Tab(text: 'Apparence', icon: Icon(Icons.text_fields_outlined)),
               Tab(text: 'IA', icon: Icon(Icons.auto_awesome_outlined)),
               Tab(
                 text: 'Historique',
@@ -73,7 +74,13 @@ class SettingsScreen extends StatelessWidget {
           ),
         ),
         body: const TabBarView(
-          children: [_SourcesTab(), AiTab(), BackupTab(), _DebugTab()],
+          children: [
+            _SourcesTab(),
+            AppearanceTab(),
+            AiTab(),
+            BackupTab(),
+            _DebugTab(),
+          ],
         ),
       ),
     );
@@ -323,11 +330,6 @@ class _SourcesTab extends ConsumerWidget {
             ),
             for (final source in sources)
               _SourceTile(source: source, key: ValueKey(source.id)),
-            const Divider(height: 32),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: _BubbleSetting(),
-            ),
           ],
         ),
       ),
@@ -336,27 +338,6 @@ class _SourcesTab extends ConsumerWidget {
         icon: const Icon(Icons.add),
         label: const Text('Ajouter'),
       ),
-    );
-  }
-}
-
-/// How the floating lyrics bubble looks. Starting it is not here on purpose:
-/// that stays a deliberate tap on the now-playing screen.
-class _BubbleSetting extends StatelessWidget {
-  const _BubbleSetting();
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Bulle de paroles flottante',
-          style: Theme.of(context).textTheme.titleSmall,
-        ),
-        const SizedBox(height: 12),
-        const BubbleLinesSelector(),
-      ],
     );
   }
 }
