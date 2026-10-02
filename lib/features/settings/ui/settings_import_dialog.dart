@@ -16,6 +16,7 @@ import 'package:musync/features/bubble/providers/bubble_provider.dart';
 import 'package:musync/features/settings/data/settings_import.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
 import 'package:musync/features/settings/providers/playback_settings_provider.dart';
+import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 import 'package:musync/features/settings/providers/settings_provider.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -76,7 +77,8 @@ Future<void> importSettings(BuildContext context) async {
     container
       ..invalidate(lyricsSourcesProvider)
       ..invalidate(aiSettingsProvider)
-      ..invalidate(playbackSettingsProvider);
+      ..invalidate(playbackSettingsProvider)
+      ..invalidate(lyricsAppearanceProvider);
     // The bubble reads its line count at start; applying it live too keeps a
     // visible bubble in sync instead of waiting for its next start.
     final lines = report.appliedPreferences.contains('bubble_lines')
