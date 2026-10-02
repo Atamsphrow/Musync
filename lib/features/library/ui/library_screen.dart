@@ -497,6 +497,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         if (!didPop) _confirmExit();
       },
       child: Scaffold(
+        appBar: permissionIssue != null
+            ? null
+            : _LibraryAppBar(
+                songsAsync: songsAsync,
+                searchController: _searchController,
+                tabController: _tabController,
+                onBatch: () => _startBatch(songsAsync.valueOrNull),
+              ),
         body: permissionIssue != null
             ? _PermissionRequired(
                 outcome: permissionIssue,
@@ -506,21 +514,28 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                 onHorizontalDragEnd: _onHorizontalDragEnd,
                 child: RefreshIndicator(
                   onRefresh: _refreshWithIgnoredNotice,
-                  child: Scrollbar(
-                    controller: _scrollController,
-                    // Always visible and draggable: the fast way through a
-                    // thousand-track library.
-                    thumbVisibility: true,
-                    interactive: true,
-                    child: CustomScrollView(
+                  child: ScrollbarTheme(
+                    data: ScrollbarThemeData(
+                      // Musicolet style: grey at rest, coloured while
+                      // dragged, a touch thicker than the default.
+                      thickness: WidgetStateProperty.all(8),
+                      radius: const Radius.circular(4),
+                      thumbColor: WidgetStateProperty.resolveWith((states) {
+                        if (states.contains(WidgetState.dragged)) {
+                          return Theme.of(context).colorScheme.primary;
+                        }
+                        return Colors.grey.withValues(alpha: 0.55);
+                      }),
+                    ),
+                    child: Scrollbar(
+                      controller: _scrollController,
+                      // Always visible and draggable: the fast way through
+                      // a thousand-track library.
+                      thumbVisibility: true,
+                      interactive: true,
+                      child: CustomScrollView(
                       controller: _scrollController,
                       slivers: [
-                      _LibraryAppBar(
-                        songsAsync: songsAsync,
-                        searchController: _searchController,
-                        tabController: _tabController,
-                        onBatch: () => _startBatch(songsAsync.valueOrNull),
-                      ),
                       ...switch (songsAsync) {
                         AsyncData(:final value) when value.isEmpty => [
                           SliverFillRemaining(
@@ -577,6 +592,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   ),
                 ),
               ),
+            ),
         bottomNavigationBar: const _DockedMiniPlayer(),
       ),
     );
@@ -610,7 +626,9 @@ String _sortLabel(LibrarySort sort) => switch (sort) {
   LibrarySort.album => 'Par album',
 };
 
-class _LibraryAppBar extends ConsumerWidget {
+class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
+  @override
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight + 124);
   final AsyncValue<List> songsAsync;
   final TextEditingController searchController;
 
@@ -639,8 +657,10 @@ class _LibraryAppBar extends ConsumerWidget {
       _ => 'Analyse en cours…',
     };
 
-    return SliverAppBar.large(
-      pinned: true,
+    // A plain AppBar, not a sliver: the header lives outside the scrollable
+    // so the scrollbar spans exactly the song list — never the header above
+    // it, never the mini player below.
+    return AppBar(
       title: const Text('Musync'),
       backgroundColor: scheme.surface,
       actions: [
