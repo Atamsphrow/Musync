@@ -61,19 +61,6 @@ final currentLyricsProvider =
       ref.watch(_currentSongMtimeProvider);
       // Frame-walking: the tag's artwork is skipped, not loaded.
       final lyrics = await Id3Reader.readLyricsFrames(currentSong.filePath);
-      // Remember when this revision was read: an external rewrite of the tag
-      // (Musicolet, a tag editor, a file manager) must invalidate the cache,
-      // or the old text would be shown until the song changes.
-      try {
-        final mtime =
-            (await File(currentSong.filePath).lastModified())
-                .millisecondsSinceEpoch;
-        ref
-            .read(_lyricsReadMtimeProvider.notifier)
-            .update((m) => {...m, currentSong.filePath: mtime});
-      } catch (_) {
-        // Unreadable mtime: keep the previous entry (or none).
-      }
       return (
         song: currentSong,
         synced: lyrics.synced,
@@ -81,32 +68,18 @@ final currentLyricsProvider =
       );
     });
 
-/// Modification time of each file when its lyrics were last read, keyed by
-/// path. See [refreshLyricsIfFileChanged].
-final _lyricsReadMtimeProvider = StateProvider<Map<String, int>>(
-  (ref) => const {},
-);
-
-/// Re-reads the current song's lyrics when its file changed on disk since
-/// they were loaded — another app editing the tag behind our back. Called
-/// when the app returns to the foreground, which is when such an edit
-/// becomes visible. Returns true when it invalidated.
-Future<bool> refreshLyricsIfFileChanged(WidgetRef ref) async {
-  final song = ref.read(currentSongProvider);
-  if (song == null) return false;
-  final lastMtime = ref.read(_lyricsReadMtimeProvider)[song.filePath];
-  // Never loaded, or the song changed since: the provider is already fresh
-  // or will load fresh on its own.
-  if (lastMtime == null) return false;
-  final int mtime;
-  try {
-    mtime = (await File(song.filePath).lastModified()).millisecondsSinceEpoch;
-  } catch (_) {
-    return false;
-  }
-  if (mtime == lastMtime) return false;
+/// Re-reads the current song's lyrics from disk, unconditionally. Called
+/// when the app returns to the foreground, which is when a tag edit made in
+/// another app (Musicolet, …) becomes visible.
+///
+/// Deliberately NOT gated on the file's mtime: some tag editors preserve the
+/// modification time when writing, so "changed on disk" is not the same as
+/// "mtime changed". A local ID3 read costs milliseconds; a stale lyric costs
+/// the user's trust. The 2-second mtime poll in [_currentSongMtimeProvider]
+/// stays as the fast path while the app is foregrounded.
+void refreshLyricsOnForeground(WidgetRef ref) {
+  if (ref.read(currentSongProvider) == null) return;
   ref.invalidate(currentLyricsProvider);
-  return true;
 }
 
 /// How often the active line is recomputed while a track plays.
