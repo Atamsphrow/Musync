@@ -18,6 +18,7 @@ import 'dart:async';
 
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/bubble/data/bubble_payload.dart';
@@ -25,6 +26,8 @@ import 'package:musync/features/bubble/data/bubble_sizing.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
+import 'package:musync/features/settings/data/lyrics_appearance.dart';
+import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 enum BubbleStart { started, permissionDenied, failed }
@@ -270,6 +273,14 @@ class LyricsBubbleController extends Notifier<BubbleState> {
         _push();
         _syncOverlayVisibility();
       }),
+    );
+    // An appearance change (size, italic, color) repushes so the bubble
+    // follows the settings like the now-playing screen does.
+    _feeds.add(
+      ref.listen(lyricsAppearanceProvider, (_, _) => _forcePush()),
+    );
+    _feeds.add(
+      ref.listen(dynamicColorSchemeProvider, (_, _) => _forcePush()),
     );
     // A new track pushes right away: while its lyrics load, the provider
     // still holds the previous track's value, and without this the bubble
@@ -584,8 +595,22 @@ class LyricsBubbleController extends Notifier<BubbleState> {
       _prevTailArmedAtMs = null;
     }
     final textScaleFactor = _textScaleFactor();
+    // Lyrics appearance: the bubble follows the settings like the
+    // now-playing screen does, with its own independent color choice.
+    final appearance = ref.read(lyricsAppearanceProvider);
+    final dynamicScheme = ref.read(dynamicColorSchemeProvider);
+    final bubbleColor = appearance.bubbleColorMode == LyricsColorMode.materialYou
+        ? (dynamicScheme?.primary ?? const Color(0xFFFFFFFF))
+        : const Color(0xFFFFFFFF);
     final base = synced == null || synced.isEmpty
-        ? BubblePayload.idle(state.lines, textScaleFactor: textScaleFactor)
+        ? BubblePayload.idle(
+            state.lines,
+            textScaleFactor: textScaleFactor,
+            fontScale: appearance.fontScale,
+            italic: appearance.italic,
+            serif: appearance.fontStyle == LyricsFontStyle.stylized,
+            colorValue: bubbleColor.toARGB32(),
+          )
         : BubblePayload.fromLines(
             [for (final line in synced.lines) line.text],
             activeIndex,
@@ -596,6 +621,10 @@ class LyricsBubbleController extends Notifier<BubbleState> {
             positionMs: positionMs < 0 ? null : positionMs,
             sampledAtMs: sampledAtMs < 0 ? null : sampledAtMs,
             textScaleFactor: textScaleFactor,
+            fontScale: appearance.fontScale,
+            italic: appearance.italic,
+            serif: appearance.fontStyle == LyricsFontStyle.stylized,
+            colorValue: bubbleColor.toARGB32(),
           );
     return BubblePayload(
       previous: base.previous,
@@ -609,6 +638,10 @@ class LyricsBubbleController extends Notifier<BubbleState> {
       positionMs: base.positionMs,
       sampledAtMs: base.sampledAtMs,
       textScaleFactor: base.textScaleFactor,
+      fontScale: base.fontScale,
+      italic: base.italic,
+      serif: base.serif,
+      colorValue: base.colorValue,
     );
   }
 
