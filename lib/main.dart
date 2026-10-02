@@ -15,6 +15,7 @@ import 'core/theme/app_theme.dart';
 import 'features/bubble/providers/bubble_provider.dart';
 import 'features/bubble/ui/lyrics_bubble.dart';
 import 'features/player/data/audio_player_service.dart';
+import 'features/player/providers/lyrics_provider.dart';
 import 'features/player/providers/player_provider.dart';
 
 /// Wrapped so that nothing thrown during startup goes unrecorded.
@@ -174,6 +175,9 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
       holder.state = foreground;
       if (foreground) {
         unawaited(ref.read(lyricsBubbleProvider.notifier).reconcile());
+        // Another app may have rewritten the current file's tag while we were
+        // away (Musicolet, a tag editor): re-read the lyrics if it did.
+        unawaited(refreshLyricsIfFileChanged(ref));
       }
     }
   }
