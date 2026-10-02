@@ -54,6 +54,7 @@ class _Source {
 
 const List<_Source> _sources = [
   _Source('playback_settings.json'),
+  _Source('lyrics_appearance.json'),
   _Source('ai_providers.json'),
   _Source('lyrics_sources.json', inDocuments: true),
 ];
