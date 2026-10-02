@@ -29,6 +29,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// arbitrary files into its own directories on the word of a JSON file.
 const Map<String, bool> _knownFiles = {
   'playback_settings.json': false,
+  'lyrics_appearance.json': false,
   'ai_providers.json': false,
   'lyrics_sources.json': true,
 };
