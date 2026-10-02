@@ -67,6 +67,15 @@ class BubblePayload {
   /// otherwise ignore the user's text size (or clip text measured smaller).
   final double textScaleFactor;
 
+  /// Lyrics appearance, baked in by the main isolate for the same reason:
+  /// the overlay cannot read the app's settings. Font scale from the size
+  /// picker, italic flag, serif flag, and the resolved active-line color
+  /// (the bubble has its own color choice, independent from the player).
+  final double fontScale;
+  final bool italic;
+  final bool serif;
+  final int colorValue;
+
   const BubblePayload({
     required this.previous,
     required this.current,
@@ -79,6 +88,10 @@ class BubblePayload {
     this.positionMs,
     this.sampledAtMs,
     this.textScaleFactor = 1.0,
+    this.fontScale = 1.0,
+    this.italic = true,
+    this.serif = true,
+    this.colorValue = 0xFFFFFFFF,
   });
 
   /// Nothing to sing: the bubble stays up, showing only the note.
@@ -86,6 +99,10 @@ class BubblePayload {
     this.lines, {
     this.widthDp = 120,
     this.textScaleFactor = 1.0,
+    this.fontScale = 1.0,
+    this.italic = true,
+    this.serif = true,
+    this.colorValue = 0xFFFFFFFF,
   })  : previous = '',
         current = kBubbleIdle,
         next = '',
@@ -111,12 +128,20 @@ class BubblePayload {
     int? positionMs,
     int? sampledAtMs,
     double textScaleFactor = 1.0,
+    double fontScale = 1.0,
+    bool italic = true,
+    bool serif = true,
+    int colorValue = 0xFFFFFFFF,
   }) {
     if (texts.isEmpty) {
       return BubblePayload.idle(
         lines,
         widthDp: widthDp,
         textScaleFactor: textScaleFactor,
+        fontScale: fontScale,
+        italic: italic,
+        serif: serif,
+        colorValue: colorValue,
       );
     }
 
@@ -152,6 +177,10 @@ class BubblePayload {
       positionMs: positionMs,
       sampledAtMs: sampledAtMs,
       textScaleFactor: textScaleFactor,
+      fontScale: fontScale,
+      italic: italic,
+      serif: serif,
+      colorValue: colorValue,
     );
   }
 
@@ -167,6 +196,10 @@ class BubblePayload {
     'pos': positionMs,
     'sat': sampledAtMs,
     'tsf': textScaleFactor,
+    'fs': fontScale,
+    'it': italic,
+    'se': serif,
+    'cv': colorValue,
   });
 
   /// Null for anything that is not a payload (the overlay also receives plain
@@ -200,6 +233,10 @@ class BubblePayload {
         sampledAtMs: (map['sat'] as num?)?.toInt(),
         textScaleFactor:
             ((map['tsf'] as num?)?.toDouble() ?? 1.0).clamp(0.5, 3.0),
+        fontScale: ((map['fs'] as num?)?.toDouble() ?? 1.0).clamp(0.5, 3.0),
+        italic: (map['it'] as bool?) ?? true,
+        serif: (map['se'] as bool?) ?? true,
+        colorValue: (map['cv'] as num?)?.toInt() ?? 0xFFFFFFFF,
       );
     } on FormatException {
       return null;
