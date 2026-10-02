@@ -78,4 +78,36 @@ void main() {
       expect(anchor.anchorMs, 0);
     });
   });
+
+  group('bubbleNextChangeAfter', () {
+    test('before the first line it returns the first timestamp', () {
+      expect(bubbleNextChangeAfter(_timed, -100), 0);
+    });
+
+    test('between lines it returns the next timestamp', () {
+      expect(bubbleNextChangeAfter(_timed, 0), 5000);
+      expect(bubbleNextChangeAfter(_timed, 4999), 5000);
+      expect(bubbleNextChangeAfter(_timed, 5000), 10000);
+    });
+
+    test('past the last line it returns null', () {
+      expect(bubbleNextChangeAfter(_timed, 10000), isNull);
+      expect(bubbleNextChangeAfter(_timed, 999999), isNull);
+    });
+
+    test('empty timed lines return null', () {
+      expect(bubbleNextChangeAfter(const [], 0), isNull);
+    });
+
+    test('duplicate timestamps are skipped as one change', () {
+      final dup = [
+        {'ms': 0, 't': 'a'},
+        {'ms': 5000, 't': 'b'},
+        {'ms': 5000, 't': 'c'},
+        {'ms': 9000, 't': 'd'},
+      ];
+      expect(bubbleNextChangeAfter(dup, 4999), 5000);
+      expect(bubbleNextChangeAfter(dup, 5000), 9000);
+    });
+  });
 }
