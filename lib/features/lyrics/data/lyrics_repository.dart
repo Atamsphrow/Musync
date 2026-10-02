@@ -76,7 +76,15 @@ class LyricsRepository {
       }
     }
 
-    if (results.isEmpty && failures.isNotEmpty) throw failures.first;
+    // Only when every source failed is there nothing to show and the user
+    // needs to know why. If at least one source answered — even with an empty
+    // list — the honest outcome is "no results", not the failure of the
+    // source that happened to break. (A 403 from LRCLIB on one search must
+    // not masquerade as "nothing exists" when lyrics.ovh simply found
+    // nothing.)
+    if (results.isEmpty && failures.length == _sources.length) {
+      throw failures.first;
+    }
 
     // Stable: `List.sort` is not, and two sources returning equally confident
     // hits would otherwise swap places between one search and the next for no
