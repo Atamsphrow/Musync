@@ -336,19 +336,28 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
     final p = _payload;
     const dim = Color(0x99FFFFFF);
 
-    Widget line(String text, {required bool active}) => Text(
-      text,
-      textAlign: TextAlign.center,
-      textScaler: TextScaler.linear(p.textScaleFactor),
-      // The active line may take as many visual lines as it needs; the
-      // bubble grows with it. Neighbours stay on one.
-      maxLines: active ? _activeLines : 1,
-      overflow: TextOverflow.ellipsis,
-      // The very styles the width was measured with (bubble_sizing.dart).
-      style: (active ? kBubbleActiveStyle : kBubbleNeighbourStyle).copyWith(
-        color: active ? Colors.white : dim,
-      ),
-    );
+    // Lyrics appearance from the settings, via the payload: the bubble
+    // follows them like the now-playing screen does.
+    final activeColor = Color(p.colorValue);
+    Widget line(String text, {required bool active}) {
+      final base = active ? kBubbleActiveStyle : kBubbleNeighbourStyle;
+      return Text(
+        text,
+        textAlign: TextAlign.center,
+        textScaler: TextScaler.linear(p.textScaleFactor),
+        // The active line may take as many visual lines as it needs; the
+        // bubble grows with it. Neighbours stay on one.
+        maxLines: active ? _activeLines : 1,
+        overflow: TextOverflow.ellipsis,
+        // The very styles the width was measured with (bubble_sizing.dart).
+        style: base.copyWith(
+          color: active ? activeColor : dim,
+          fontSize: (base.fontSize ?? 14) * p.fontScale,
+          fontStyle: p.italic ? FontStyle.italic : FontStyle.normal,
+          fontFamily: p.serif ? 'serif' : null,
+        ),
+      );
+    }
 
     return Container(
       margin: const EdgeInsets.all(4),
