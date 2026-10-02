@@ -305,6 +305,23 @@ void main() {
       );
     });
 
+    test(
+      'a failing source plus an empty one is "no results", not an error',
+      () async {
+        // The reported case: LRCLIB answered 403 while lyrics.ovh simply
+        // found nothing. Only every source failing may throw; otherwise the
+        // honest outcome is the empty list and the screen says "no results".
+        final repo = LyricsRepository(
+          sources: [_FailingSource(), _StubSource(const [])],
+        );
+
+        expect(
+          await repo.searchAll(title: query.title, artist: query.artist),
+          isEmpty,
+        );
+      },
+    );
+
     test('an empty query short-circuits before any request', () async {
       final repo = LyricsRepository(sources: [_FailingSource()]);
 
