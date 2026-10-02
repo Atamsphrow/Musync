@@ -4,6 +4,8 @@ import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/router/app_router.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
+import 'package:musync/features/settings/data/lyrics_appearance.dart';
+import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 import 'package:musync/features/library/data/models/song.dart';
 
 /// Karaoke-style lyrics: the active line is highlighted and kept centered
@@ -28,10 +30,19 @@ class SyncedLyricsView extends ConsumerStatefulWidget {
   ConsumerState<SyncedLyricsView> createState() => _SyncedLyricsViewState();
 }
 
-/// The Musicolet look: italic serif, centered. The system serif keeps the
-/// APK free of a bundled font; on Android it resolves to Noto Serif Italic.
-TextStyle _lyricsTextStyle(TextStyle? base) =>
-    base!.copyWith(fontFamily: 'serif', fontStyle: FontStyle.italic);
+/// Builds the line style from the user's appearance settings. The system
+/// serif keeps the APK free of a bundled font; on Android it resolves to
+/// Noto Serif Italic.
+TextStyle _lyricsTextStyle(TextStyle? base, LyricsAppearance appearance) {
+  var style = base!;
+  if (appearance.fontStyle == LyricsFontStyle.stylized) {
+    style = style.copyWith(fontFamily: 'serif');
+  }
+  if (appearance.italic) {
+    style = style.copyWith(fontStyle: FontStyle.italic);
+  }
+  return style.copyWith(fontSize: (style.fontSize ?? 16) * appearance.fontScale);
+}
 
 class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
   // Measuring every line would mean laying the whole song out up front, so
@@ -82,6 +93,12 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
     final currentIndex = ref.watch(currentLineIndexProvider).valueOrNull;
+    final appearance = ref.watch(lyricsAppearanceProvider);
+    final textAlign = switch (appearance.textAlign) {
+      LyricsTextAlign.left => TextAlign.left,
+      LyricsTextAlign.center => TextAlign.center,
+      LyricsTextAlign.right => TextAlign.right,
+    };
 
     if (widget.lyrics.isEmpty) {
       return _EmptyLyrics(onSearchOnline: widget.onSearchOnline);
@@ -104,10 +121,10 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
             final line = widget.lyrics.lines[index];
             final isCurrent = index == currentIndex;
 
-            // Musicolet: the active line is bold white, everything else the
-            // same dim grey — no past/future split.
+            // The active line is bold in the chosen color, everything else
+            // the same dim grey — no past/future split.
             final Color color = isCurrent
-                ? Colors.white
+                ? lyricsActiveColor(context, appearance)
                 : scheme.onSurfaceVariant.withValues(alpha: 0.55);
 
             return InkWell(
@@ -133,17 +150,18 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                     // lag. The scroll below keeps its 500 ms — that one is
                     // motion, and motion is allowed to be smooth.
                     duration: const Duration(milliseconds: 120),
-                    style: _lyricsTextStyle(textTheme.bodyLarge).copyWith(
+                    style: _lyricsTextStyle(textTheme.bodyLarge, appearance)
+                        .copyWith(
                       color: color,
                       fontWeight:
                           isCurrent ? FontWeight.w700 : FontWeight.w400,
                     ),
-                    textAlign: TextAlign.center,
+                    textAlign: textAlign,
                     child: Text(
                       line.text,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
+                      textAlign: textAlign,
                     ),
                   ),
                 ),
