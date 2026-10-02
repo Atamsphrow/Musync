@@ -265,7 +265,12 @@ class LyricsBubbleController extends Notifier<BubbleState> {
 
   void _attach() {
     if (_feeds.isNotEmpty || _fromOverlay != null) return;
-    _feeds.add(ref.listen(currentLyricsProvider, (_, _) => _push()));
+    _feeds.add(
+      ref.listen(currentLyricsProvider, (_, _) {
+        _push();
+        _syncOverlayVisibility();
+      }),
+    );
     // A new track pushes right away: while its lyrics load, the provider
     // still holds the previous track's value, and without this the bubble
     // would sit frozen on the old song's last line.
@@ -362,9 +367,33 @@ class LyricsBubbleController extends Notifier<BubbleState> {
       ref.read(playerScreenVisibleProvider) &&
       ref.read(appForegroundProvider);
 
+  /// Whether the current song is confirmed to carry synced lyrics.
+  /// Returns null while the answer is not known yet (lyrics still loading,
+  /// load error, or the provider still holding the previous song): the
+  /// bubble is left as-is instead of flickering on every track change.
+  bool? _hasSyncedLyrics() {
+    final song = ref.read(currentSongProvider);
+    final lyrics = ref.read(currentLyricsProvider);
+    if (lyrics.isLoading || lyrics.hasError) return null;
+    if (lyrics.valueOrNull?.song?.id != song?.id) return null;
+    final synced = lyrics.valueOrNull?.synced;
+    return synced != null && synced.isNotEmpty;
+  }
+
   /// Opens or closes the overlay window so that it matches the rules: shown
-  /// only when enabled, playing, and away from the now-playing screen.
+  /// only when enabled, playing, away from the now-playing screen, and the
+  /// current song actually has synced lyrics to show. A floating note with
+  /// nothing to say is just in the way, so a confirmed lyrics-less song
+  /// hides the bubble instead of parking it on the idle note.
   void _syncOverlayVisibility() {
+    if (_hasSyncedLyrics() == false) {
+      if (_overlayUp) {
+        _overlayUp = false;
+        _overlayUpSince = null;
+        unawaited(_closeOverlayNow());
+      }
+      return;
+    }
     final shouldShow = state.active && _playing && !_playerVisible;
     if (shouldShow == _overlayUp) return;
     _overlayUp = shouldShow;
