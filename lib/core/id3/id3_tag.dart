@@ -394,7 +394,7 @@ class Id3Tag {
     if (bytes.isEmpty) return '';
     switch (encoding) {
       case Id3Encoding.latin1:
-        return latin1.decode(bytes, allowInvalid: true);
+        return _decodeLatin1Smart(bytes);
       case Id3Encoding.utf16WithBom:
         return _decodeUtf16(bytes, bigEndian: false);
       case Id3Encoding.utf16BigEndian:
@@ -403,6 +403,32 @@ class Id3Tag {
       default:
         return utf8.decode(bytes, allowMalformed: true);
     }
+  }
+
+  /// Latin-1 with a UTF-8 sniff: countless taggers declare encoding 0 while
+  /// writing UTF-8 bytes (sometimes a whole file, sometimes a single frame).
+  /// Decoding those bytes as Latin-1 is the classic "prÃ©fÃ©rÃ©" mojibake.
+  /// Genuine Latin-1 text with high bytes is essentially never valid UTF-8,
+  /// so valid UTF-8 containing non-ASCII bytes is decoded as UTF-8 — accents
+  /// and emojis (including 4-byte sequences) included. Pure ASCII is
+  /// identical either way, and anything that is not valid UTF-8 still falls
+  /// back to Latin-1.
+  static String _decodeLatin1Smart(List<int> bytes) {
+    var hasNonAscii = false;
+    for (final b in bytes) {
+      if (b >= 0x80) {
+        hasNonAscii = true;
+        break;
+      }
+    }
+    if (hasNonAscii) {
+      try {
+        return utf8.decode(bytes);
+      } on FormatException {
+        // Not UTF-8 after all: genuine Latin-1, decoded below.
+      }
+    }
+    return latin1.decode(bytes, allowInvalid: true);
   }
 
   static String _decodeUtf16(List<int> bytes, {required bool bigEndian}) {
