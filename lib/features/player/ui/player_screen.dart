@@ -11,6 +11,8 @@ import 'package:musync/core/utils/duration_format.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
+import 'package:musync/features/settings/data/lyrics_appearance.dart';
+import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/player/ui/widgets/player_controls.dart';
 import 'package:musync/features/player/ui/widgets/marquee_text.dart';
@@ -510,16 +512,33 @@ class _LyricsPane extends ConsumerWidget {
   }
 }
 
-class _PlainLyrics extends StatelessWidget {
+class _PlainLyrics extends ConsumerWidget {
   final String text;
   final VoidCallback onSearchOnline;
 
   const _PlainLyrics({required this.text, required this.onSearchOnline});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
+    final appearance = ref.watch(lyricsAppearanceProvider);
+    final textAlign = switch (appearance.textAlign) {
+      LyricsTextAlign.left => TextAlign.left,
+      LyricsTextAlign.center => TextAlign.center,
+      LyricsTextAlign.right => TextAlign.right,
+    };
+    var style = textTheme.bodyLarge!;
+    if (appearance.fontStyle == LyricsFontStyle.stylized) {
+      style = style.copyWith(fontFamily: 'serif');
+    }
+    if (appearance.italic) {
+      style = style.copyWith(fontStyle: FontStyle.italic);
+    }
+    style = style.copyWith(
+      color: scheme.onSurface,
+      fontSize: (style.fontSize ?? 16) * appearance.fontScale,
+    );
 
     return Column(
       children: [
@@ -528,12 +547,8 @@ class _PlainLyrics extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
             child: Text(
               text,
-              textAlign: TextAlign.center,
-              style: textTheme.bodyLarge?.copyWith(
-                color: scheme.onSurface,
-                fontFamily: 'serif',
-                fontStyle: FontStyle.italic,
-              ),
+              textAlign: textAlign,
+              style: style,
             ),
           ),
         ),
