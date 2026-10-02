@@ -16,6 +16,7 @@ import 'features/bubble/providers/bubble_provider.dart';
 import 'features/bubble/ui/lyrics_bubble.dart';
 import 'features/player/data/audio_player_service.dart';
 import 'features/player/providers/lyrics_provider.dart';
+import 'features/settings/providers/lyrics_appearance_provider.dart';
 import 'features/player/providers/player_provider.dart';
 
 /// Wrapped so that nothing thrown during startup goes unrecorded.
@@ -177,7 +178,7 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
         unawaited(ref.read(lyricsBubbleProvider.notifier).reconcile());
         // Another app may have rewritten the current file's tag while we were
         // away (Musicolet, a tag editor): re-read the lyrics if it did.
-        unawaited(refreshLyricsIfFileChanged(ref));
+        refreshLyricsOnForeground(ref);
       }
     }
   }
@@ -190,6 +191,13 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
 
     return DynamicColorBuilder(
       builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
+        // Publish the dynamic scheme so the floating bubble (separate engine)
+        // can follow Material You too. Post-frame: modifying a provider
+        // during build is not allowed.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final notifier = ref.read(dynamicColorSchemeProvider.notifier);
+          if (notifier.state != darkDynamic) notifier.state = darkDynamic;
+        });
         // darkDynamic is the wallpaper palette on Android 12+, null elsewhere;
         // resolveScheme falls back to the brand seed in that case.
         final scheme = AppTheme.resolveScheme(
