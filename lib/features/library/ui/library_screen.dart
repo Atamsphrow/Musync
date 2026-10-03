@@ -13,6 +13,7 @@ import 'package:musync/features/library/data/lyrics_status.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/catalogue_provider.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
+import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/library/ui/widgets/song_tile.dart';
 import 'package:musync/features/lyrics/ui/batch_screen.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
@@ -214,6 +215,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// files stay visible in the scanner's ignored-files list if needed.
   Future<void> _refreshLibrary() async {
     await ref.read(songListProvider.notifier).refresh();
+    // The current track's lyrics are read from disk, not from the library
+    // scan: a tag edit in another app (Musicolet) needs this too.
+    ref.invalidate(currentLyricsProvider);
   }
 
   Future<void> _requestPermissions() async {
