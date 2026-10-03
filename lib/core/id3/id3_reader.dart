@@ -10,6 +10,13 @@ typedef LyricsPair = ({SyncedLyrics? synced, UnsyncedLyrics? unsynced});
 
 const LyricsPair _noLyrics = (synced: null, unsynced: null);
 
+/// Title, artist and album read straight out of a file's ID3 tag.
+///
+/// A field the tag doesn't carry is null — the caller decides the fallback.
+typedef TagMetadata = ({String? title, String? artist, String? album});
+
+const TagMetadata _noMetadata = (title: null, artist: null, album: null);
+
 /// Reads USLT (plain) and SYLT (synchronised) lyrics frames.
 ///
 /// Anything unreadable — no tag, a version this app won't touch, a corrupt
@@ -173,6 +180,174 @@ class Id3Reader {
     } finally {
       await handle?.close();
     }
+  }
+
+  /// Basic metadata (title, artist, album) read straight out of a file's ID3
+  /// tag, bypassing MediaStore.
+  ///
+  /// MediaStore caches metadata on Android's own schedule, so a tag edited by
+  /// another app stays invisible to a plain re-query until the system rescans.
+  /// This walks the tag's frame headers and reads only TIT2/TPE1/TALB,
+  /// stepping over everything else — cover art included — so a library-wide
+  /// refresh doesn't pull hundreds of megabytes of artwork into memory.
+  ///
+  /// A field the tag doesn't carry comes back null and the caller keeps its
+  /// previous value; an unreadable file yields all nulls, never an exception.
+  static Future<TagMetadata> readMetadata(String filePath) async {
+    final file = File(filePath);
+    bool exists;
+    try {
+      exists = await file.exists();
+    } on FileSystemException {
+      return _noMetadata;
+    }
+    if (!exists) return _noMetadata;
+
+    final frames = await _readTextFrames(
+      filePath,
+      const {'TIT2', 'TPE1', 'TALB'},
+    );
+    return (title: frames['TIT2'], artist: frames['TPE1'], album: frames['TALB']);
+  }
+
+  /// Same as [readMetadata], against bytes already in memory.
+  static TagMetadata readMetadataFromBytes(Uint8List bytes) {
+    final tag = Id3Tag.parse(bytes);
+    if (tag == null || !tag.isSupported) return _noMetadata;
+
+    String? title;
+    String? artist;
+    String? album;
+    for (final frame in tag.frames) {
+      if (frame.isOpaque) continue;
+      switch (frame.id) {
+        case 'TIT2':
+          title ??= _parseTextFrame(frame.decodedBody);
+        case 'TPE1':
+          artist ??= _parseTextFrame(frame.decodedBody);
+        case 'TALB':
+          album ??= _parseTextFrame(frame.decodedBody);
+      }
+      if (title != null && artist != null && album != null) break;
+    }
+    return (title: title, artist: artist, album: album);
+  }
+
+  /// Reads the decoded text of [wanted] text frames, walking the tag without
+  /// loading anything else.
+  ///
+  /// The metadata twin of [readLyricsFrames]: the same frame walk,
+  /// parameterised by frame ID, so the artwork (and every other unneeded
+  /// frame) is stepped over rather than read. The first occurrence of each ID
+  /// wins.
+  static Future<Map<String, String>> _readTextFrames(
+    String filePath,
+    Set<String> wanted,
+  ) async {
+    final found = <String, String>{};
+    final file = File(filePath);
+    RandomAccessFile? handle;
+
+    try {
+      handle = await file.open();
+
+      final header = await handle.read(10);
+      if (header.length < 10) return found;
+      if (header[0] != 0x49 || header[1] != 0x44 || header[2] != 0x33) {
+        return found;
+      }
+
+      final major = header[3];
+      if (major != 3 && major != 4) return found;
+
+      // Unsynchronisation (0x80) or an extended header (0x40). Rare enough
+      // that the whole-tag parse is the sane fallback — the same call
+      // [readLyricsFrames] makes.
+      if (header[5] & 0xC0 != 0) {
+        await handle.close();
+        handle = null;
+        return await _readTextFramesFallback(file, wanted);
+      }
+
+      final declaredSize = Id3Tag.readSynchsafe(header, 6);
+
+      var walked = 0;
+      while (walked + 10 <= declaredSize) {
+        final frameHeader = await handle.read(10);
+        if (frameHeader.length < 10) break;
+
+        final id = String.fromCharCodes(frameHeader, 0, 4);
+        // Padding, or the tag has gone off the rails. Either way, stop.
+        if (!Id3Tag.isFrameId(id)) break;
+
+        final size = major == 4
+            ? Id3Tag.readSynchsafe(frameHeader, 4)
+            : Id3Tag.readBigEndian(frameHeader, 4);
+        if (size < 0 || walked + 10 + size > declaredSize) break;
+        walked += 10 + size;
+
+        if (wanted.contains(id) && !found.containsKey(id)) {
+          final frame = Id3Frame(
+            id: id,
+            majorVersion: major,
+            body: await handle.read(size),
+            flagsHi: frameHeader[8],
+            flagsLo: frameHeader[9],
+          );
+          if (frame.isOpaque) continue;
+          final text = _parseTextFrame(frame.decodedBody);
+          if (text != null) found[id] = text;
+        } else {
+          // The whole point: step over the artwork instead of reading it.
+          await handle.setPosition(await handle.position() + size);
+        }
+      }
+
+      return found;
+    } on FileSystemException {
+      return found;
+    } finally {
+      await handle?.close();
+    }
+  }
+
+  /// Whole-tag fallback for the rare tags [_readTextFrames] won't walk
+  /// (unsynchronised, extended header).
+  static Future<Map<String, String>> _readTextFramesFallback(
+    File file,
+    Set<String> wanted,
+  ) async {
+    final found = <String, String>{};
+    final Uint8List head;
+    try {
+      head = await _readHead(file);
+    } on FileSystemException {
+      return found;
+    }
+    final tag = Id3Tag.parse(head);
+    if (tag == null || !tag.isSupported) return found;
+    for (final frame in tag.frames) {
+      if (frame.isOpaque) continue;
+      if (wanted.contains(frame.id) && !found.containsKey(frame.id)) {
+        final text = _parseTextFrame(frame.decodedBody);
+        if (text != null) found[frame.id] = text;
+      }
+    }
+    return found;
+  }
+
+  /// A text frame body: one encoding byte, then the text. Stops at the first
+  /// terminator — a second value (another artist, say) is a display question,
+  /// not a read question.
+  static String? _parseTextFrame(Uint8List body) {
+    if (body.isEmpty) return null;
+    final encoding = body[0];
+    final end = Id3Tag.findTerminator(body, 1, encoding);
+    final slice = end == -1
+        ? Uint8List.sublistView(body, 1)
+        : Uint8List.sublistView(body, 1, end);
+    final text = Id3Tag.decodeText(slice, encoding).trim();
+    return text.isEmpty ? null : text;
   }
 
   /// Reads enough of the file to cover the whole tag.
