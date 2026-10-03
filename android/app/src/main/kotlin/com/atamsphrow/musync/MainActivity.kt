@@ -135,6 +135,10 @@ class MainActivity : AudioServiceActivity() {
                         pendingSharedAudio.clear()
                         pendingSharedDropped = 0
                     }
+                    "moveTaskToBack" -> {
+                        moveTaskToBack(true)
+                        result.success(null)
+                    }
                     "showNotification" -> {
                         showBatchNotification(
                             call.argument<String>("title") ?: "Musync",
