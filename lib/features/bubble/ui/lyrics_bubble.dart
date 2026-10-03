@@ -126,6 +126,16 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
   int _appliedLines = -1;
   int _appliedActiveLines = -1;
 
+  /// Appearance from the last main-isolate payload. The overlay's own ticker
+  /// rebuilds payloads via _tick(); reading appearance from there (instead
+  /// of trusting each rebuilt payload's fields) guarantees the user's
+  /// settings survive every tick, even if a payload was built with defaults.
+  double _appearanceTextScale = 1.0;
+  double _appearanceFontScale = 1.0;
+  bool _appearanceItalic = false;
+  bool _appearanceSerif = false;
+  int _appearanceColor = 0xFFFFFFFF;
+
   @override
   void initState() {
     super.initState();
@@ -163,6 +173,13 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
   /// correction for the current song just re-syncs the clock.
   void _adoptPayload(BubblePayload next) {
     if (!mounted) return;
+    // Appearance is authoritative from the main isolate: store it separately
+    // so _tick() can never revert to constructor defaults.
+    _appearanceTextScale = next.textScaleFactor;
+    _appearanceFontScale = next.fontScale;
+    _appearanceItalic = next.italic;
+    _appearanceSerif = next.serif;
+    _appearanceColor = next.colorValue;
     setState(() {
       _payload = next;
       _activeLines = bubbleActiveLinesFor(
@@ -244,14 +261,13 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
       songId: p.songId,
       timedLines: p.timedLines,
       activeIndex: idx,
-      // Appearance travels with the payload: the constructor defaults
-      // (italic: true, serif: true) would otherwise override the user's
-      // settings on every tick of the overlay's own clock.
-      textScaleFactor: p.textScaleFactor,
-      fontScale: p.fontScale,
-      italic: p.italic,
-      serif: p.serif,
-      colorValue: p.colorValue,
+      // Appearance from the stored main-isolate values, never from
+      // constructor defaults: the user's settings survive every tick.
+      textScaleFactor: _appearanceTextScale,
+      fontScale: _appearanceFontScale,
+      italic: _appearanceItalic,
+      serif: _appearanceSerif,
+      colorValue: _appearanceColor,
     );
     setState(() {
       _payload = next;
@@ -351,9 +367,10 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
     final p = _payload;
     const dim = Color(0x99FFFFFF);
 
-    // Lyrics appearance from the settings, via the payload: the bubble
-    // follows them like the now-playing screen does.
-    final activeColor = Color(p.colorValue);
+    // Lyrics appearance from the stored main-isolate values: the bubble
+    // follows the settings like the now-playing screen does, and a ticker-
+    // rebuilt payload can never revert them to defaults.
+    final activeColor = Color(_appearanceColor);
     Widget line(String text, {required bool active}) {
       final base = active ? kBubbleActiveStyle : kBubbleNeighbourStyle;
       return Text(
@@ -367,9 +384,10 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
         // The very styles the width was measured with (bubble_sizing.dart).
         style: base.copyWith(
           color: active ? activeColor : dim,
-          fontSize: (base.fontSize ?? 14) * p.fontScale,
-          fontStyle: p.italic ? FontStyle.italic : FontStyle.normal,
-          fontFamily: p.serif ? 'serif' : null,
+          fontSize: (base.fontSize ?? 14) * _appearanceFontScale,
+          fontStyle:
+              _appearanceItalic ? FontStyle.italic : FontStyle.normal,
+          fontFamily: _appearanceSerif ? 'serif' : null,
         ),
       );
     }
