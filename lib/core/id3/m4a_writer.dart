@@ -151,7 +151,7 @@ class M4aWriter {
     if (udtaRef == null) {
       if (newLyr == null) return moovPayload; // nothing to remove
       final ilst = _makeAtom('ilst', newLyr);
-      final meta = _makeAtom('meta', _withVersionFlags(ilst));
+      final meta = _makeAtom('meta', _buildMetaPayload(ilst));
       final udta = _makeAtom('udta', meta);
       return _rebuildWithChild(moovPayload, _typeBytes('udta'), udta, 0);
     }
@@ -160,7 +160,7 @@ class M4aWriter {
     if (metaRef == null) {
       if (newLyr == null) return moovPayload;
       final ilst = _makeAtom('ilst', newLyr);
-      final meta = _makeAtom('meta', _withVersionFlags(ilst));
+      final meta = _makeAtom('meta', _buildMetaPayload(ilst));
       final newUdtaPayload =
           _rebuildWithChild(udtaRef.payload, _typeBytes('meta'), meta, 0);
       return _rebuildWithChild(
@@ -190,11 +190,23 @@ class M4aWriter {
         moovPayload, _typeBytes('udta'), _makeAtom('udta', newUdtaPayload), 0);
   }
 
-  /// Prepends the 4 version/flags bytes that `meta` requires before children.
-  static Uint8List _withVersionFlags(Uint8List children) {
+  /// Builds a `meta` payload with the `hdlr` the iTunes spec requires.
+  ///
+  /// A `meta` without `hdlr` (handler `mdir`) is technically parseable, but
+  /// some players — iTunes included — ignore an `ilst` they can't attribute
+  /// to a handler. When we create `meta` from scratch, we do it properly.
+  static Uint8List _buildMetaPayload(Uint8List ilst) {
+    final hdlrPayload = BytesBuilder(copy: false)
+      ..add(Uint8List.fromList([0, 0, 0, 0])) // version + flags
+      ..add(Uint8List.fromList([0, 0, 0, 0])) // pre_defined
+      ..add(_typeBytes('mdir')) // handler_type: metadata
+      ..add(Uint8List.fromList(List.filled(12, 0))) // reserved
+      ..add(Uint8List.fromList([0])); // empty name, null-terminated
+    final hdlr = _makeAtom('hdlr', hdlrPayload.toBytes());
     final out = BytesBuilder(copy: false)
-      ..add(Uint8List.fromList([0, 0, 0, 0]))
-      ..add(children);
+      ..add(Uint8List.fromList([0, 0, 0, 0])) // meta version/flags
+      ..add(hdlr)
+      ..add(ilst);
     return out.toBytes();
   }
 
@@ -267,9 +279,16 @@ class M4aWriter {
     while (offset + 8 <= end) {
       final header = _readHeader(bytes, offset);
       if (header == null) break;
-      // Sanity: type should be ASCII-ish; garbage means we've walked into
-      // leaf data, not atoms.
-      if (!_looksLikeType(header.type)) break;
+      if (!_looksLikeType(header.type)) {
+        // Custom atom with a non-ASCII type: skip it by its (sane) size
+        // instead of stopping, so a later udta/meta/ilst isn't missed and
+        // duplicated. If the size is insane, we've hit leaf data — stop.
+        if (header.size >= 8 && offset + header.size <= end) {
+          offset += header.size;
+          continue;
+        }
+        break;
+      }
       atoms.add(header);
       offset += header.size;
     }
