@@ -293,4 +293,81 @@ void main() {
     final bytes = await File(path).readAsBytes();
     expect(readLyr(bytes), text);
   });
+
+  test('newly created meta contains the hdlr iTunes expects', () async {
+    // No udta at all -> the writer builds udta > meta > ilst from scratch.
+    final path = await writeTemp(buildM4a(withUdta: false));
+    await M4aWriter.writeLrc(path, 'lyrics');
+    final bytes = await File(path).readAsBytes();
+
+    final moov = _findChild(bytes, 0, bytes.length, 'moov'.codeUnits)!;
+    final (_, moovOff, moovSize) = moov;
+    final udta =
+        _findChild(bytes, moovOff + 8, moovOff + moovSize, 'udta'.codeUnits)!;
+    final (_, udtaOff, udtaSize) = udta;
+    final meta =
+        _findChild(bytes, udtaOff + 8, udtaOff + udtaSize, 'meta'.codeUnits)!;
+    final (_, metaOff, metaSize) = meta;
+    // meta children start after 4 version/flags bytes; hdlr must be there
+    // and declare the mdir (metadata) handler.
+    final hdlr =
+        _findChild(bytes, metaOff + 12, metaOff + metaSize, 'hdlr'.codeUnits);
+    expect(hdlr, isNotNull, reason: 'meta without hdlr');
+    final (_, hdlrOff, _) = hdlr!;
+    // handler_type sits at +16 from hdlr start (size+type+version/flags+pre_defined).
+    final handlerType = bytes.sublist(hdlrOff + 16, hdlrOff + 20);
+    expect(String.fromCharCodes(handlerType), 'mdir');
+  });
+
+  test('custom atom with binary type does not hide the existing udta', () async {
+    // A weird-but-valid top-level atom before moov's udta: the parser must
+    // skip it, not stop, or it would create a duplicate udta.
+    Uint8List weirdAtom() {
+      final payload = Uint8List.fromList(List.filled(20, 0xAB));
+      final out = BytesBuilder(copy: false)
+        ..add(_u32(8 + payload.length))
+        ..add([0x00, 0x41, 0x42, 0x43]) // non-ASCII leading byte
+        ..add(payload);
+      return out.toBytes();
+    }
+
+    final base = buildM4a(existingLyr: 'keep me');
+    // Insert the weird atom at the start of moov's payload.
+    final moov = _findChild(base, 0, base.length, 'moov'.codeUnits)!;
+    final (_, moovOff, moovSize) = moov;
+    final weird = weirdAtom();
+    final patched = BytesBuilder(copy: false)
+      ..add(base.sublist(0, moovOff + 8))
+      ..add(weird)
+      ..add(base.sublist(moovOff + 8, moovOff + moovSize))
+      ..add(base.sublist(moovOff + moovSize));
+    // Fix the moov size.
+    final patchedBytes = patched.toBytes();
+    final newMoovSize = moovSize + weird.length;
+    patchedBytes[moovOff] = (newMoovSize >> 24) & 0xFF;
+    patchedBytes[moovOff + 1] = (newMoovSize >> 16) & 0xFF;
+    patchedBytes[moovOff + 2] = (newMoovSize >> 8) & 0xFF;
+    patchedBytes[moovOff + 3] = newMoovSize & 0xFF;
+
+    final path = await writeTemp(patchedBytes);
+    await M4aWriter.writeLrc(path, 'new text');
+    final bytes = await File(path).readAsBytes();
+    expect(readLyr(bytes), 'new text');
+
+    // Exactly one udta: the pre-existing one was found and reused.
+    final moov2 = _findChild(bytes, 0, bytes.length, 'moov'.codeUnits)!;
+    final (_, moovOff2, moovSize2) = moov2;
+    var udtaCount = 0;
+    var off = moovOff2 + 8;
+    while (off + 8 <= moovOff2 + moovSize2) {
+      final size = ByteData.sublistView(bytes, off, off + 4)
+          .getUint32(0, Endian.big);
+      if (size < 8 || off + size > moovOff2 + moovSize2) break;
+      if (String.fromCharCodes(bytes.sublist(off + 4, off + 8)) == 'udta') {
+        udtaCount++;
+      }
+      off += size;
+    }
+    expect(udtaCount, 1, reason: 'duplicate udta created');
+  });
 }
