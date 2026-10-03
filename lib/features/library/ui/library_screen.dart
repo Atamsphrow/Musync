@@ -215,8 +215,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// files stay visible in the scanner's ignored-files list if needed.
   Future<void> _refreshLibrary() async {
     await ref.read(songListProvider.notifier).refresh();
-    // The current track's lyrics are read from disk, not from the library
-    // scan: a tag edit in another app (Musicolet) needs this too.
+    // Pull-to-refresh rebuilds the lyrics cache from the files' actual
+    // contents: if another app (Musicolet) edited tags, the Sans paroles /
+    // Synchronisées tabs and counts are updated, not served stale.
+    // The cache is kept for fast startups — this just refreshes it on demand.
+    ref.read(lyricsStatusScannerProvider).clear();
+    ref.invalidate(lyricsStatusProvider);
+    // The current track's lyrics are read straight from disk, bypassing
+    // every cache.
     ref.invalidate(currentLyricsProvider);
   }
 
