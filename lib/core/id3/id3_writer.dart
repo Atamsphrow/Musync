@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:musync/core/id3/audio_container.dart';
 import 'package:musync/core/id3/id3_tag.dart';
+import 'package:musync/core/id3/m4a_writer.dart';
 import 'package:musync/core/id3/lrc_parser.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 
@@ -64,11 +65,20 @@ class Id3Writer {
     // tag prepended to it — which moves every byte of an MP4 container down and
     // invalidates the absolute atom offsets inside `moov`. The track stopped
     // playing, and Musync said the lyrics had been saved.
-    //
-    // Refusing is the honest answer, not a limitation to be worked around:
-    // there is no standard way to carry synchronised lyrics in MP4 at all, so
-    // even a correct writer could only ever store plain text there.
     final container = AudioContainerReader.detect(bytes);
+    if (container == AudioContainer.mp4) {
+      // M4A has its own writer: lyrics go in the `©lyr` atom as LRC text,
+      // via atomic temp-file + verify + rename, with stco/co64 fixup. The
+      // LRC text follows the same rule as the MP3 USLT frame so Musicolet
+      // sees the timings.
+      final plain = _plainFrameFor(synced, unsynced);
+      try {
+        await M4aWriter.writeLrc(filePath, plain?.text);
+      } on M4aWriteException catch (e) {
+        throw Id3WriteException(e.message, e.cause);
+      }
+      return;
+    }
     if (!container.isWritable) {
       throw Id3WriteException(
         'Musync écrit les paroles dans les fichiers MP3. '
