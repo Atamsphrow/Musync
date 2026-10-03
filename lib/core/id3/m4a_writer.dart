@@ -102,6 +102,40 @@ class M4aWriter {
     }
   }
 
+  /// Reads the LRC lyrics text from [filePath]'s `©lyr` atom.
+  ///
+  /// Returns null if the file has no `©lyr` or it can't be read. The text is
+  /// LRC (`[mm:ss.xx]` prefixes) when the lyrics are synchronised, plain
+  /// text otherwise — the same convention as the USLT frame of an MP3.
+  static Future<String?> readLrc(String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) return null;
+    Uint8List bytes;
+    try {
+      bytes = await file.readAsBytes();
+    } catch (_) {
+      return null;
+    }
+    if (AudioContainerReader.detect(bytes) != AudioContainer.mp4) return null;
+    try {
+      final topLevel = _parseChildren(bytes, 0, bytes.length, 0);
+      final moov = _findByType(topLevel, 'moov');
+      if (moov == null) return null;
+      final moovPayload = bytes.sublist(
+        moov.offset + moov.headerSize,
+        moov.offset + moov.size,
+      );
+      final ilst = _childPayload(moovPayload, ['udta', 'meta', 'ilst']);
+      if (ilst == null) return null;
+      final children = _parseChildren(ilst, 0, ilst.length, 0);
+      final lyr = _findByTypeBytes(children, _lyrType);
+      if (lyr == null) return null;
+      return _readLyrText(ilst, lyr);
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ── File assembly ──
 
   /// Returns the full new file bytes with the `©lyr` atom replaced/added (or
