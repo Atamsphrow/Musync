@@ -51,10 +51,14 @@ class SongListNotifier extends AsyncNotifier<List<Song>> {
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
       if (!await PermissionService.hasAudioAccess()) return const <Song>[];
-      return _sorted(
-        await ref.read(musicScannerProvider).scanAllSongs(),
-        ref.read(librarySortProvider),
-      );
+      final scanner = ref.read(musicScannerProvider);
+      final songs = await scanner.scanAllSongs();
+      // Deep rescan, manual refresh only: re-read the ID3 tags of files
+      // whose content changed since the last refresh, straight from the
+      // files instead of the MediaStore cache. The initial scan in
+      // [build] stays MediaStore-only so app launch stays fast.
+      final fresh = await scanner.refreshMetadataFromFiles(songs);
+      return _sorted(fresh, ref.read(librarySortProvider));
     });
   }
 
