@@ -355,4 +355,46 @@ Une note de bas de page
       expect(LrcParser.stripTimestamps('\uFEFF[00:01.00]Première'), 'Première');
     });
   });
+
+  group('leadingTimestamps — one line', () {
+    // The paste detector: per-line, and keeps untimed lines instead of
+    // dropping them the way parse() does.
+    test('a plain line carries none', () {
+      expect(LrcParser.leadingTimestamps('Juste des mots'), isEmpty);
+      expect(LrcParser.leadingTimestamps('[Refrain]'), isEmpty);
+      expect(LrcParser.leadingTimestamps(''), isEmpty);
+    });
+
+    test('extracts the head timestamp', () {
+      expect(
+        LrcParser.leadingTimestamps('[00:10.70]Joé'),
+        [const Duration(minutes: 0, seconds: 10, milliseconds: 700)],
+      );
+    });
+
+    test('a repeated chorus yields one stamp per repeat', () {
+      expect(
+        LrcParser.leadingTimestamps('[00:10.00][01:20.00]Refrain'),
+        [
+          const Duration(seconds: 10),
+          const Duration(minutes: 1, seconds: 20),
+        ],
+      );
+    });
+
+    test('a timestamp after real words is not leading', () {
+      expect(
+        LrcParser.leadingTimestamps('Il a dit [00:05.00] puis rien'),
+        isEmpty,
+      );
+    });
+
+    test('agrees with parse and stripTimestamps on where the words start', () {
+      const line = '[00:01.00] [00:05.00]Texte';
+
+      expect(LrcParser.leadingTimestamps(line), hasLength(2));
+      expect(LrcParser.stripTimestamps(line), 'Texte');
+      expect(LrcParser.parse(line).lines.first.text, 'Texte');
+    });
+  });
 }
