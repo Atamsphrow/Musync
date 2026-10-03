@@ -5,6 +5,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/utils/snackbar.dart';
 import 'package:musync/features/bubble/providers/bubble_provider.dart';
@@ -32,12 +33,18 @@ class LyricsBubbleButton extends ConsumerWidget {
         switch (result) {
           case BubbleStart.started:
             // The bubble stays hidden on this screen (it already shows the
-            // synced lyrics): drop straight back to the library so the user
-            // sees what the button just did instead of wondering. Only when
-            // this screen is still on top — a second tap racing the first
-            // must not pop the library underneath.
+            // synced lyrics): send the whole app to the background so the
+            // user sees the bubble floating over their home screen — that is
+            // what the button is for. Only when this screen is still on top.
             if (context.mounted && ModalRoute.of(context)?.isCurrent == true) {
-              Navigator.of(context).maybePop();
+              try {
+                await const MethodChannel(
+                  'com.atamsphrow.musync/media_store',
+                ).invokeMethod('moveTaskToBack');
+              } catch (_) {
+                // Fallback: just close this screen.
+                if (context.mounted) Navigator.of(context).maybePop();
+              }
             }
             break;
           case BubbleStart.permissionDenied:
