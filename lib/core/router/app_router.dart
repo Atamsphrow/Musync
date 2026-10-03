@@ -29,6 +29,10 @@ import 'package:musync/features/sync_editor/ui/sync_editor_screen.dart';
 /// six and quietly leave the seventh to reintroduce it.
 final appRouteObserver = RouteObserver<ModalRoute<void>>();
 
+/// Global navigator key: lets code without a BuildContext (e.g. the
+/// notification-tap handler) push routes.
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
+
 class AppRoutes {
   AppRoutes._();
 
@@ -89,6 +93,7 @@ class AppRouter {
             BatchScreen(
               songs: args.songs,
               filenameFirst: args.filenameFirst,
+              reviewOnly: args.reviewOnly,
             ),
           );
         }
