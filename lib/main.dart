@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 
 import 'core/router/app_router.dart';
+import 'features/lyrics/ui/batch_screen.dart';
 import 'core/services/audio_backend_check.dart';
 import 'core/services/debug_log.dart';
 import 'core/utils/snackbar.dart';
@@ -29,6 +30,19 @@ void main() => runGuarded(_start);
 
 Future<void> _start() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Tapping the "batch search done" notification asks native to open the
+  // review screen. The navigator key lets this fire without a BuildContext.
+  const MethodChannel('com.atamsphrow.musync/media_store').setMethodCallHandler((
+    call,
+  ) async {
+    if (call.method == 'openBatchReview') {
+      appNavigatorKey.currentState?.pushNamed(
+        AppRoutes.batch,
+        arguments: const BatchRequest([], reviewOnly: true),
+      );
+    }
+  });
 
   // Before anything else that can fail. Musync is sideloaded onto a phone that
   // is rarely attached to a laptop, so an exception that only reaches logcat
@@ -219,6 +233,7 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
           onGenerateRoute: AppRouter.generateRoute,
           navigatorObservers: [appRouteObserver],
           scaffoldMessengerKey: appMessengerKey,
+          navigatorKey: appNavigatorKey,
         );
       },
     );
