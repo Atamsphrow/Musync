@@ -25,6 +25,33 @@ Uint8List _m4aHeader() => Uint8List.fromList([
   ...List<int>.generate(4096, (i) => (i * 13) % 256),
 ]);
 
+/// A minimal but structurally valid M4A: ftyp + moov + mdat.
+/// The M4A writer needs a real moov to work with.
+Uint8List _validM4a() {
+  Uint8List atom(String type, Uint8List payload) {
+    final size = 8 + payload.length;
+    return Uint8List.fromList([
+      (size >> 24) & 0xFF,
+      (size >> 16) & 0xFF,
+      (size >> 8) & 0xFF,
+      size & 0xFF,
+      ...ascii.encode(type),
+      ...payload,
+    ]);
+  }
+
+  final ftyp = atom('ftyp', Uint8List.fromList([
+    ...ascii.encode('M4A '),
+    0, 0, 0, 0,
+    ...ascii.encode('isom'),
+  ]));
+  final moov = atom('moov', Uint8List(0));
+  final mdat = atom('mdat', Uint8List.fromList(
+    List<int>.generate(256, (i) => i % 256),
+  ));
+  return Uint8List.fromList([...ftyp, ...moov, ...mdat]);
+}
+
 Uint8List _mp3WithTag() => Uint8List.fromList([
   ...ascii.encode('ID3'),
   4, 0, 0,
@@ -111,46 +138,51 @@ void main() {
       const LyricLine(timestamp: Duration(seconds: 1), text: 'Une'),
     ]);
 
-    test('an M4A is refused, and left byte for byte as it was', () async {
-      final original = _m4aHeader();
+    test('an M4A is written via the M4A writer, not refused', () async {
+      // M4A lyrics go in the ©lyr atom (see m4a_writer.dart); the old refusal
+      // was replaced by a safe writer.
+      final original = _validM4a();
       final file = await fixture('track.m4a', original);
 
-      await expectLater(
-        () => Id3Writer.writeLyrics(file.path, synced: lyrics),
-        throwsA(isA<Id3WriteException>()),
-      );
+      await Id3Writer.writeLyrics(file.path, synced: lyrics);
 
-      // The guarantee that matters. Before this check existed, the file came
-      // back with an ID3 tag glued to the front of it and would not play.
-      expect(await file.readAsBytes(), original);
+      // The file grew (lyrics atom added) and still starts with ftyp.
+      final bytes = await file.readAsBytes();
+      expect(bytes.length, greaterThan(original.length));
+      expect(String.fromCharCodes(bytes.sublist(4, 8)), 'ftyp');
     });
 
     test(
       'the refusal names the format, so the message is actionable',
       () async {
-        final file = await fixture('track.m4a', _m4aHeader());
+        final bytes = Uint8List.fromList([
+          ...ascii.encode('fLaC'),
+          ...List<int>.generate(512, (i) => i % 256),
+        ]);
+        final file = await fixture('track.flac', bytes);
 
         try {
           await Id3Writer.writeLyrics(file.path, synced: lyrics);
           fail('devrait refuser');
         } on Id3WriteException catch (e) {
-          expect(e.message, contains('M4A'));
+          expect(e.message, contains('FLAC'));
           expect(e.message, contains('MP3'));
         }
       },
     );
 
-    test('an M4A named .mp3 is still refused', () async {
+    test('an M4A named .mp3 is written as M4A', () async {
       // The extension is the one thing a user can get wrong by accident, so the
-      // check reads the file's own bytes rather than its name.
-      final original = _m4aHeader();
+      // check reads the file's own bytes rather than its name — and M4A bytes
+      // take the M4A writer whatever the extension says.
+      final original = _validM4a();
       final file = await fixture('menteur.mp3', original);
 
-      await expectLater(
-        () => Id3Writer.writeLyrics(file.path, synced: lyrics),
-        throwsA(isA<Id3WriteException>()),
-      );
-      expect(await file.readAsBytes(), original);
+      await Id3Writer.writeLyrics(file.path, synced: lyrics);
+
+      final bytes = await file.readAsBytes();
+      expect(bytes.length, greaterThan(original.length));
+      expect(String.fromCharCodes(bytes.sublist(4, 8)), 'ftyp');
     });
 
     test('FLAC, Ogg and WAV are refused as well', () async {
