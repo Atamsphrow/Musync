@@ -1,7 +1,10 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:on_audio_query/on_audio_query.dart';
+import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/library/data/tag_mtime_store.dart';
 
 /// Reads the device's music library through MediaStore.
 ///
@@ -18,9 +21,11 @@ class IgnoredFile {
 
 class MusicScanner {
   final OnAudioQuery _audioQuery;
+  final TagMtimeStore _mtimeStore;
 
-  MusicScanner({OnAudioQuery? audioQuery})
-    : _audioQuery = audioQuery ?? OnAudioQuery();
+  MusicScanner({OnAudioQuery? audioQuery, TagMtimeStore? mtimeStore})
+    : _audioQuery = audioQuery ?? OnAudioQuery(),
+      _mtimeStore = mtimeStore ?? const TagMtimeStore();
 
   /// Only real music: MediaStore also indexes ringtones, notification sounds
   /// and voice recordings, none of which belong in a library screen.
@@ -76,6 +81,81 @@ class MusicScanner {
     }
     lastIgnored = List.unmodifiable(ignored);
     return kept;
+  }
+
+  /// Re-reads title/artist/album straight from the audio files whose content
+  /// changed since the last refresh, bypassing the MediaStore cache.
+  ///
+  /// MediaStore only picks up an external tag edit (Musicolet) on Android's
+  /// own schedule, so a refresh that merely re-queries it keeps showing the
+  /// old values. This stats every library file and, for each one whose mtime
+  /// moved since the last call (or was never recorded), parses TIT2/TPE1/TALB
+  /// directly out of the ID3 tag. Unchanged files cost one stat() each and no
+  /// tag parsing; the mtimes persist across launches, so a refresh with
+  /// nothing edited re-reads zero tags.
+  ///
+  /// Only MP3 (ID3) files are re-read — other containers keep their MediaStore
+  /// values. A file that can't be read keeps its values too: a refresh must
+  /// never blank a title it cannot replace.
+  Future<List<Song>> refreshMetadataFromFiles(List<Song> songs) async {
+    final mtimes = await _mtimeStore.load();
+    var dirty = false;
+    final updated = <Song>[];
+
+    for (final song in songs) {
+      final path = song.filePath;
+      final current = await _mtimeOf(path);
+      if (current == null) {
+        updated.add(song);
+        continue;
+      }
+      if (mtimes[path] != current) {
+        mtimes[path] = current;
+        dirty = true;
+        if (_isMp3(path)) {
+          updated.add(
+            _withFileMetadata(song, await Id3Reader.readMetadata(path)),
+          );
+          continue;
+        }
+      }
+      updated.add(song);
+    }
+
+    if (dirty) await _mtimeStore.save(mtimes);
+    return updated;
+  }
+
+  /// File modification time, or null when the file can't be statted. Never
+  /// throws: an unreadable file simply keeps its current metadata.
+  static Future<int?> _mtimeOf(String path) async {
+    try {
+      return (await File(path).stat()).modified.millisecondsSinceEpoch;
+    } on FileSystemException {
+      return null;
+    }
+  }
+
+  static bool _isMp3(String path) => path.toLowerCase().endsWith('.mp3');
+
+  /// Applies ID3 metadata onto [song]. A field the tag doesn't carry keeps the
+  /// MediaStore value — the file was re-read because its bytes changed, but an
+  /// absent frame is not an instruction to blank the display.
+  Song _withFileMetadata(Song song, TagMetadata meta) {
+    var updated = song;
+    final title = meta.title?.trim();
+    if (title != null && title.isNotEmpty) {
+      updated = updated.copyWith(title: title);
+    }
+    final artist = meta.artist?.trim();
+    if (artist != null && artist.isNotEmpty) {
+      updated = updated.copyWith(artist: _orUnknown(artist, unknownArtist));
+    }
+    final album = meta.album?.trim();
+    if (album != null && album.isNotEmpty) {
+      updated = updated.copyWith(album: _orUnknown(album, unknownAlbum));
+    }
+    return updated;
   }
 
   /// What an untagged file is shown as.
