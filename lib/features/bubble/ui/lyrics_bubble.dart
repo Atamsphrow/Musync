@@ -176,10 +176,12 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
     if (next.timedLines.isNotEmpty) {
       _timed = next.timedLines;
       _timedSongId = next.songId;
-    } else if (next.songId != _timedSongId) {
-      _timed = const [];
-      _timedSongId = next.songId;
     }
+    // A new song's payload can arrive before its timed lines (lyrics still
+    // loading, or the message was lost). Clearing _timed here leaves the
+    // ticker with nothing to advance and the bubble freezes. Keep the last
+    // known lines instead — _tick() only advances when _timedSongId matches
+    // the current song, so stale lines can never show wrong text.
     final idx = next.activeIndex;
     _shownIndex = idx;
     final anchor = bubbleAnchorFor(next, _timed);
@@ -219,6 +221,11 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
   /// [_adoptPayload] and wins.
   void _tick() {
     if (!mounted || _timed.isEmpty) return;
+    // The timed lines belong to a previous song (the new song's lines
+    // haven't arrived yet): advancing through them would show wrong text.
+    // Stay on the main isolate's last payload instead — it has the right
+    // text, it just won't auto-advance until the lines arrive.
+    if (_timedSongId != _payload.songId) return;
     final posMs =
         _anchorMs + DateTime.now().difference(_anchorTime).inMilliseconds;
     final idx = _lineAt(posMs);
@@ -237,6 +244,14 @@ class _LyricsBubbleState extends State<_LyricsBubble> {
       songId: p.songId,
       timedLines: p.timedLines,
       activeIndex: idx,
+      // Appearance travels with the payload: the constructor defaults
+      // (italic: true, serif: true) would otherwise override the user's
+      // settings on every tick of the overlay's own clock.
+      textScaleFactor: p.textScaleFactor,
+      fontScale: p.fontScale,
+      italic: p.italic,
+      serif: p.serif,
+      colorValue: p.colorValue,
     );
     setState(() {
       _payload = next;
