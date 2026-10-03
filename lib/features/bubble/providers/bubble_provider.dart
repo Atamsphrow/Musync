@@ -658,7 +658,6 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     // Same payload as last time (texts, lines and width): nothing to say,
     // and the stream ticks often.
     if (data == _lastSent) return;
-    _lastSent = data;
 
     unawaited(_send(data));
   }
@@ -703,6 +702,9 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   Future<void> _send(String data) async {
     try {
       await FlutterOverlayWindow.shareData(data);
+      // Marked only on success: a failed send leaves _lastSent unset so the
+      // next _push() retries instead of believing the payload arrived.
+      _lastSent = data;
     } catch (error) {
       DebugLog.instance.warning(
         'Bulle',
