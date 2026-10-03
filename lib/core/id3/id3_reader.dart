@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:musync/core/id3/id3_tag.dart';
 import 'package:musync/core/id3/lrc_parser.dart';
+import 'package:musync/core/id3/m4a_writer.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 
 /// Lyrics read out of a file's ID3 tag.
@@ -109,6 +110,21 @@ class Id3Reader {
   /// Tags that are unsynchronised or carry an extended header fall back to
   /// [readLyrics]: both need the whole body treated as one, and both are rare
   /// enough that a second walk isn't worth maintaining.
+  /// Reads lyrics from an M4A's ©lyr atom.
+  static Future<LyricsPair> _readM4aLyrics(String filePath) async {
+    final lrc = await M4aWriter.readLrc(filePath);
+    if (lrc == null || lrc.trim().isEmpty) return _noLyrics;
+    final hasTs = lrc.split('\n').any(
+        (line) => LrcParser.leadingTimestamps(line).isNotEmpty);
+    if (hasTs) {
+      try {
+        final synced = LrcParser.parse(lrc);
+        return (synced: synced, unsynced: null);
+      } catch (_) {}
+    }
+    return (synced: null, unsynced: UnsyncedLyrics(lrc));
+  }
+
   static Future<LyricsPair> readLyricsFrames(String filePath) async {
     final file = File(filePath);
     RandomAccessFile? handle;
@@ -119,7 +135,10 @@ class Id3Reader {
       final header = await handle.read(10);
       if (header.length < 10) return _noLyrics;
       if (header[0] != 0x49 || header[1] != 0x44 || header[2] != 0x33) {
-        return _noLyrics;
+        // Not ID3 — maybe an M4A with lyrics in ©lyr.
+        await handle.close();
+        handle = null;
+        return await _readM4aLyrics(filePath);
       }
 
       final major = header[3];
