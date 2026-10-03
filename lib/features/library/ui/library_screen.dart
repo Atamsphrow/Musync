@@ -210,27 +210,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     _tabController.animateTo(next);
   }
 
-  /// After a manual refresh, tells the user about files the scan left out.
-  /// Silent when everything was kept — the common case needs no announcement.
-  Future<void> _refreshWithIgnoredNotice() async {
+  /// Manual refresh: rescans the library quietly. No snackbar — ignored
+  /// files stay visible in the scanner's ignored-files list if needed.
+  Future<void> _refreshLibrary() async {
     await ref.read(songListProvider.notifier).refresh();
-    if (!mounted) return;
-    final ignored = ref.read(ignoredFilesProvider);
-    if (ignored.isEmpty) return;
-    final names = ignored
-        .take(3)
-        .map((f) => f.path.split('/').last)
-        .join(', ');
-    final more = ignored.length > 3 ? ' (+${ignored.length - 3} autres)' : '';
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '${ignored.length} fichier(s) ignoré(s) : $names$more',
-        ),
-        duration: const Duration(seconds: 5),
-      ),
-    );
   }
 
   Future<void> _requestPermissions() async {
@@ -513,7 +496,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
             : GestureDetector(
                 onHorizontalDragEnd: _onHorizontalDragEnd,
                 child: RefreshIndicator(
-                  onRefresh: _refreshWithIgnoredNotice,
+                  onRefresh: _refreshLibrary,
                   child: ScrollbarTheme(
                     data: ScrollbarThemeData(
                       // Musicolet style: grey at rest, coloured while
