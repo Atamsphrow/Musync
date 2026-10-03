@@ -699,16 +699,6 @@ class _LyricsActions extends ConsumerWidget {
           icon: const Icon(Icons.tune, size: 18),
           label: const Text('Paroles'),
         ),
-        // Re-reads the lyrics straight from the file, bypassing every
-        // cache. For tag edits made in another app (Musicolet) that the
-        // automatic refresh may have missed.
-        IconButton(
-          onPressed: song == null
-              ? null
-              : () => ref.invalidate(currentLyricsProvider),
-          icon: const Icon(Icons.refresh, size: 18),
-          tooltip: 'Relire les paroles du fichier',
-        ),
       ],
     );
   }
