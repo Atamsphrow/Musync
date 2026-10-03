@@ -44,6 +44,27 @@ class LrcParser {
         .join('\n');
   }
 
+  /// The `[mm:ss.xx]` timestamps leading one raw line, in order.
+  ///
+  /// Empty when the line carries none. Unlike [parse], which drops untimed
+  /// lines, this lets a caller split pasted text line by line and keep every
+  /// line — a `[Refrain]` marker between two timed lines stays an untimed
+  /// line instead of vanishing.
+  ///
+  /// The scan mirrors [parse]'s: only the run at the head of the row counts.
+  /// A `[00:02.00]` mid-sentence is a lyric, not a cue.
+  static List<Duration> leadingTimestamps(String rawLine) {
+    final line = rawLine.trim();
+    final stamps = <Duration>[];
+    var cursor = 0;
+    for (final match in _timestamp.allMatches(line)) {
+      if (line.substring(cursor, match.start).trim().isNotEmpty) break;
+      stamps.add(_toDuration(match));
+      cursor = match.end;
+    }
+    return stamps;
+  }
+
   static SyncedLyrics parse(String lrcContent) {
     final lyricLines = <LyricLine>[];
     var offset = Duration.zero;
