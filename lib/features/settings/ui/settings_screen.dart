@@ -23,16 +23,31 @@ import 'package:musync/features/settings/ui/backup_tab.dart';
 import 'package:musync/features/settings/ui/settings_export_dialog.dart';
 import 'package:musync/features/settings/ui/settings_import_dialog.dart';
 
-class SettingsScreen extends StatelessWidget {
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  /// The debug Journal tab stays hidden until revealed with a long-press on
+  /// the title — it is a troubleshooting tool, not a daily setting.
+  bool _showJournal = false;
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 5,
+      // The key forces a fresh controller when the tab count changes;
+      // otherwise the old length would stick and misalign the indicator.
+      key: ValueKey(_showJournal),
+      length: _showJournal ? 5 : 4,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Paramètres'),
+          title: GestureDetector(
+            onLongPress: () => setState(() => _showJournal = !_showJournal),
+            child: const Text('Paramètres'),
+          ),
           actions: [
             Builder(
               builder: (context) => IconButton(
@@ -56,30 +71,37 @@ class SettingsScreen extends StatelessWidget {
               ),
             ),
           ],
-          bottom: const TabBar(
+          bottom: TabBar(
             // Scrollable: four labels do not fit side by side on a phone, and
             // squeezing them in would cost the icons.
             isScrollable: true,
             tabAlignment: TabAlignment.start,
             tabs: [
-              Tab(text: 'Sources', icon: Icon(Icons.travel_explore)),
-              Tab(text: 'Apparence', icon: Icon(Icons.text_fields_outlined)),
-              Tab(text: 'IA', icon: Icon(Icons.auto_awesome_outlined)),
-              Tab(
+              const Tab(text: 'Sources', icon: Icon(Icons.travel_explore)),
+              const Tab(
+                text: 'Apparence',
+                icon: Icon(Icons.text_fields_outlined),
+              ),
+              const Tab(text: 'IA', icon: Icon(Icons.auto_awesome_outlined)),
+              const Tab(
                 text: 'Historique',
                 icon: Icon(Icons.settings_backup_restore),
               ),
-              Tab(text: 'Journal', icon: Icon(Icons.bug_report_outlined)),
+              if (_showJournal)
+                const Tab(
+                  text: 'Journal',
+                  icon: Icon(Icons.bug_report_outlined),
+                ),
             ],
           ),
         ),
-        body: const TabBarView(
+        body: TabBarView(
           children: [
-            _SourcesTab(),
-            AppearanceTab(),
-            AiTab(),
-            BackupTab(),
-            _DebugTab(),
+            const _SourcesTab(),
+            const AppearanceTab(),
+            const AiTab(),
+            const BackupTab(),
+            if (_showJournal) const _DebugTab(),
           ],
         ),
       ),
