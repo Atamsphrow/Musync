@@ -119,6 +119,14 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   /// 'closed', so this is re-synced there too.
   bool _overlayUp = false;
 
+  /// Re-sends the timed lines every 30 s while the bubble is active. The
+  /// overlay advances lines on its own clock from these; a single lost
+  /// shareData message (or a song change while the main isolate was
+  /// throttled) must not freeze the bubble forever. The payload dedup in
+  /// _push() means only the timed-lines part actually goes out — the text
+  /// payload is unchanged and skipped.
+  Timer? _timedLinesResend;
+
   /// When the overlay was last brought up. Guards [reconcile]: a bubble that
   /// is still opening must not be mistaken for a bubble that is gone.
   DateTime? _overlayUpSince;
@@ -325,6 +333,12 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     // The line index is subscribed separately: it only lives while playing,
     // to stop the 60 Hz wakeups in pause.
     _syncLineFeed();
+    // Periodic timed-lines re-send: see _timedLinesResend.
+    _timedLinesResend ??= Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!state.active) return;
+      _timedLinesSentFor = null;
+      _push();
+    });
   }
 
   void _detach() {
@@ -336,6 +350,8 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     _lineFeed = null;
     _fromOverlay?.cancel();
     _fromOverlay = null;
+    _timedLinesResend?.cancel();
+    _timedLinesResend = null;
     _lastSent = null;
   }
 
