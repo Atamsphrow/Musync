@@ -419,6 +419,88 @@ void main() {
       expect(editor.state.cursor, 1);
     });
 
+    group('pasting LRC text', () {
+      // The Musicolet round-trip: copy `[mm:ss.xx]` lines from another app and
+      // paste them into the plain editor. The brackets must become real
+      // timestamps, never visible text.
+      test('a pasted LRC becomes timed lines with clean text', () {
+        editor.setMode(SyncMode.simple);
+        editor.replaceAllText('[00:10.70]Jo\u00e9\n[00:15.77]Deuxi\u00e8me ligne');
+
+        expect(
+          editor.state.lines.map((l) => l.text),
+          ['Jo\u00e9', 'Deuxi\u00e8me ligne'],
+        );
+        expect(editor.state.lines.map((l) => l.timestamp), [
+          const Duration(seconds: 10, milliseconds: 700),
+          const Duration(seconds: 15, milliseconds: 770),
+        ]);
+      });
+
+      test('a pasted LRC flips the editor to the synced tab', () {
+        editor.setMode(SyncMode.simple);
+        editor.replaceAllText('[00:10.70]Jo\u00e9');
+
+        expect(editor.state.mode, SyncMode.synced);
+        expect(editor.state.hasChanges, isTrue);
+      });
+
+      test('untimed lines in the paste survive as untimed lines', () {
+        // `[Refrain]` is a structural marker: it belongs to the lyric as text
+        // but must never claim a time. A whole-text parse would drop it.
+        editor.replaceAllText('[00:10.70]Jo\u00e9\n[Refrain]\n[00:15.77]Suite');
+
+        expect(
+          editor.state.lines.map((l) => l.text),
+          ['Jo\u00e9', '[Refrain]', 'Suite'],
+        );
+        expect(editor.state.lines.map((l) => l.timestamp), [
+          const Duration(seconds: 10, milliseconds: 700),
+          isNull,
+          const Duration(seconds: 15, milliseconds: 770),
+        ]);
+      });
+
+      test('a repeated chorus pastes as one line per timing', () {
+        editor.replaceAllText('[00:10.00][01:20.00]Refrain');
+
+        expect(editor.state.lines, hasLength(2));
+        expect(editor.state.lines.map((l) => l.timestamp), [
+          const Duration(seconds: 10),
+          const Duration(minutes: 1, seconds: 20),
+        ]);
+        expect(editor.state.lines.map((l) => l.text), ['Refrain', 'Refrain']);
+      });
+
+      test('plain pasted text keeps the old behaviour and stays simple', () {
+        editor.setMode(SyncMode.simple);
+        editor.replaceAllText('Une\nDeux\nTrois');
+
+        // Timings already done survive line by line; the new line is untimed.
+        expect(editor.state.lines.map((l) => l.timestamp), [
+          const Duration(seconds: 10),
+          const Duration(seconds: 20),
+          isNull,
+        ]);
+        expect(editor.state.mode, SyncMode.simple);
+      });
+
+      test('a pasted LRC saves as real timings, not bracket text', () {
+        // What the file holds after the paste: proper LRC in the plain frame
+        // (brackets are the format there) and timed lines for SYLT. The
+        // reader strips the plain side on the way back, so the player never
+        // sees `[00:10.70]` as words.
+        editor.replaceAllText('[00:10.70]Jo\u00e9\n[Refrain]');
+
+        expect(editor.state.asSyncedLyrics.length, 1);
+        expect(editor.state.asSyncedLyrics.lines.single.text, 'Jo\u00e9');
+        expect(
+          editor.state.asUnsyncedLyrics.text,
+          '[00:10.70]Jo\u00e9\n[Refrain]',
+        );
+      });
+    });
+
     test('insertLineAfter inherits the timestamp above it', () {
       editor.insertLineAfter(0);
 
