@@ -18,17 +18,27 @@ class BatchRequest {
   final List<Song> songs;
   final bool filenameFirst;
 
-  const BatchRequest(this.songs, {this.filenameFirst = false});
+  const BatchRequest(
+    this.songs, {
+    this.filenameFirst = false,
+    this.reviewOnly = false,
+  });
+
+  /// When true, the screen shows the already-completed batch results instead
+  /// of starting a new search (used when opening from the done notification).
+  final bool reviewOnly;
 }
 
 class BatchScreen extends ConsumerStatefulWidget {
   final List<Song> songs;
   final bool filenameFirst;
+  final bool reviewOnly;
 
   const BatchScreen({
     super.key,
     required this.songs,
     this.filenameFirst = false,
+    this.reviewOnly = false,
   });
 
   @override
@@ -78,7 +88,11 @@ class _BatchScreenState extends ConsumerState<BatchScreen> with RouteAware {
     super.initState();
     _batch = ref.read(batchProvider.notifier);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _batch.start(widget.songs, filenameFirst: widget.filenameFirst);
+      // From the done notification the results are already in the provider;
+      // starting again would re-run the whole search.
+      if (!widget.reviewOnly) {
+        _batch.start(widget.songs, filenameFirst: widget.filenameFirst);
+      }
     });
   }
 
