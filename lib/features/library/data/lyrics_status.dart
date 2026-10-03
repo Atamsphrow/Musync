@@ -63,6 +63,11 @@ class LyricsStatusScanner {
   /// app is still picked up.
   static const String _cacheFileName = 'lyrics_status_cache.json';
 
+  /// Cache schema version. Bump this when the lyrics-reading logic changes
+  /// (new formats, new frames) so stale "no lyrics" entries are re-read
+  /// rather than served forever. v2: M4A (©lyr) support in Id3Reader.
+  static const int _cacheSchemaVersion = 2;
+
   bool _loaded = false;
   bool _dirty = false;
 
@@ -94,7 +99,14 @@ class LyricsStatusScanner {
       final decoded = jsonDecode(await file.readAsString());
       if (decoded is! Map) return;
 
+      // The reading logic changed since this cache was written: the old
+      // answers (especially "no lyrics") can't be trusted anymore.
+      final meta = decoded['_schema'];
+      final version = meta is Map ? meta['version'] : null;
+      if (version != _cacheSchemaVersion) return;
+
       for (final entry in decoded.entries) {
+        if (entry.key == '_schema') continue;
         final value = entry.value;
         if (value is! Map) continue;
         final mtime = value['mtime'];
@@ -129,6 +141,7 @@ class LyricsStatusScanner {
       await AtomicFile.writeString(
         await _cacheFile(),
         jsonEncode({
+          '_schema': {'version': _cacheSchemaVersion},
           for (final entry in _cache.entries)
             entry.key: {
               'mtime': entry.value.mtime,
@@ -205,6 +218,17 @@ class LyricsStatusScanner {
   /// the case where a write lands inside the same clock tick as the last read.
   void forget(String filePath) {
     _cache.remove(filePath);
+    _dirty = true;
+  }
+
+  /// Drops every entry, forcing a full re-read from disk on the next scan.
+  ///
+  /// Used by pull-to-refresh: after another app (Musicolet) may have edited
+  /// tags, the cache is rebuilt from the files' actual contents so the two
+  /// apps can't disagree. The cache is kept for fast startups — this just
+  /// refreshes it on demand.
+  void clear() {
+    _cache.clear();
     _dirty = true;
   }
 }
