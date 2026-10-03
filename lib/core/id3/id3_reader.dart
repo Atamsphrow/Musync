@@ -39,7 +39,11 @@ class Id3Reader {
       return _noLyrics;
     }
 
-    return readLyricsFromBytes(head);
+    final pair = readLyricsFromBytes(head);
+    if (pair.synced == null && pair.unsynced == null) {
+      return _readM4aLyrics(filePath);
+    }
+    return pair;
   }
 
   /// Same as [readLyrics], against bytes already in memory.
