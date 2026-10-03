@@ -105,6 +105,16 @@ class MainActivity : AudioServiceActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             MEDIA_STORE_CHANNEL,
         )
+        // Cold start from the batch-done notification: the tap intent carries
+        // the extra, but onNewIntent never fires. Dart needs a moment to
+        // install its handler, hence the post.
+        if (intent.getBooleanExtra("musync_open_batch", false)) {
+            intent.removeExtra("musync_open_batch")
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                channel?.invokeMethod("openBatchReview", null)
+            }, 1200)
+        }
+
         channel!!.setMethodCallHandler { call, result ->
                 when (call.method) {
                     "rescan" -> rescan(call.argument<String>("path"), result)
@@ -147,6 +157,11 @@ class MainActivity : AudioServiceActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+
+        if (intent.getBooleanExtra("musync_open_batch", false)) {
+            intent.removeExtra("musync_open_batch")
+            runOnUiThread { channel?.invokeMethod("openBatchReview", null) }
+        }
 
         val before = pendingSharedAudio.size
         queueSharedAudio(intent)
@@ -361,6 +376,9 @@ class MainActivity : AudioServiceActivity() {
                 )
             }
             val openIntent = packageManager.getLaunchIntentForPackage(packageName)
+            // Tapping the notification must land on the batch review screen,
+            // not just reopen the app wherever it was.
+            openIntent?.putExtra("musync_open_batch", true)
             val pending = PendingIntent.getActivity(
                 this,
                 0,
