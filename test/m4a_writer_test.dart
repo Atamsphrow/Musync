@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:musync/core/id3/m4a_writer.dart';
+import 'package:musync/core/id3/id3_reader.dart';
 
 // ── Synthetic M4A builder ──
 //
@@ -317,6 +318,24 @@ void main() {
     // handler_type sits at +16 from hdlr start (size+type+version/flags+pre_defined).
     final handlerType = bytes.sublist(hdlrOff + 16, hdlrOff + 20);
     expect(String.fromCharCodes(handlerType), 'mdir');
+  });
+
+  test('Id3Reader reads back M4A lyrics written by M4aWriter', () async {
+    final path = await writeTemp(buildM4a());
+    const lrc = '[00:10.00]Hello\n[00:20.00]World';
+    await M4aWriter.writeLrc(path, lrc);
+    final pair = await Id3Reader.readLyricsFrames(path);
+    expect(pair.synced, isNotNull);
+    expect(pair.synced!.lines.length, 2);
+    expect(pair.synced!.lines[0].text, 'Hello');
+    expect(pair.synced!.lines[1].text, 'World');
+  });
+
+  test('Id3Reader returns no lyrics for M4A without clyr', () async {
+    final path = await writeTemp(buildM4a());
+    final pair = await Id3Reader.readLyricsFrames(path);
+    expect(pair.synced, isNull);
+    expect(pair.unsynced, isNull);
   });
 
   test('custom atom with binary type does not hide the existing udta', () async {
