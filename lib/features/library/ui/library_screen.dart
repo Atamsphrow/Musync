@@ -729,7 +729,7 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
                   Tab(
                     height: 46,
                     child: Text(
-                      '${lyricsStatusLabel(status)}  ${counts[status] ?? 0}',
+                      '${lyricsStatusLabel(status)}  ${counts[status]?.toString() ?? '…'}',
                       style: textTheme.labelLarge,
                     ),
                   ),
