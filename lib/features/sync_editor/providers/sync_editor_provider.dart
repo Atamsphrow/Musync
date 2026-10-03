@@ -334,21 +334,61 @@ class SyncEditorNotifier extends StateNotifier<SyncEditorState> {
 
   /// Replaces the whole lyric from pasted text (plan §3.3).
   ///
-  /// Timestamps already set are kept line by line where the count allows, so
-  /// fixing a typo in the third verse doesn't throw away the timing of the
-  /// first two.
+  /// A paste carrying its own `[mm:ss.xx]` timings — the Musicolet round-trip —
+  /// is detected and parsed: the brackets become real timestamps, never visible
+  /// text, and the editor flips to the synced tab so the timings are what the
+  /// user sees. Detection is per line and keeps every line, so a `[Refrain]`
+  /// marker between two timed lines stays an untimed line instead of being
+  /// dropped the way a whole-text [LrcParser.parse] would drop it.
+  ///
+  /// Pasted text without timings keeps the old contract: timestamps already set
+  /// are kept line by line where the count allows, so fixing a typo in the
+  /// third verse doesn't throw away the timing of the first two.
   ///
   /// Lines beyond what was there before arrive **untimed**. They used to arrive
   /// at `Duration.zero`, which reads as `00:00.00` and says the line is sung at
   /// the very first instant — a claim, and a false one, that would have gone
   /// straight into SYLT. Same correction as `resetTimings`.
   void replaceAllText(String text) {
-    final incoming = text.split('\n').map((l) => l.trim()).toList();
+    // A byte-order mark survives trim() and would sit in front of the first
+    // line's timestamp, silently dropping that line's timing — the same trap
+    // [LrcParser.parse] guards against.
+    final content = text.startsWith('\uFEFF') ? text.substring(1) : text;
+    final incoming = content.split('\n');
+
+    if (incoming.any((line) => LrcParser.leadingTimestamps(line).isNotEmpty)) {
+      final lines = <LyricLine>[];
+      for (final raw in incoming) {
+        final stamps = LrcParser.leadingTimestamps(raw);
+        final words = LrcParser.stripTimestamps(raw);
+        if (stamps.isEmpty) {
+          // Untimed but real: a structural marker belongs to the lyric.
+          // Pure empties are noise, the way [LrcParser.parse] treats them.
+          if (words.isNotEmpty) {
+            lines.add(LyricLine(timestamp: null, text: words));
+          }
+        } else {
+          // One timed line per stamp: the repeated-chorus shape.
+          for (final stamp in stamps) {
+            lines.add(LyricLine(timestamp: stamp, text: words));
+          }
+        }
+      }
+      state = state.copyWith(
+        lines: lines,
+        // The paste said "synced" — show the timing tab, not the plain one.
+        mode: SyncMode.synced,
+        cursor: state.cursor.clamp(0, lines.length),
+        hasChanges: true,
+      );
+      return;
+    }
+
     final lines = <LyricLine>[
       for (var i = 0; i < incoming.length; i++)
         LyricLine(
           timestamp: i < state.lines.length ? state.lines[i].timestamp : null,
-          text: incoming[i],
+          text: incoming[i].trim(),
         ),
     ];
     state = state.copyWith(
