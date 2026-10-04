@@ -325,6 +325,11 @@ class _TopBar extends ConsumerWidget {
                 : 'Afficher les paroles',
             onPressed: song == null ? null : onToggleLyrics,
           ),
+          IconButton(
+            icon: const Icon(Icons.open_in_new),
+            tooltip: 'Ouvrir dans Musicolet',
+            onPressed: song == null ? null : () => _share(context, song!),
+          ),
         ],
       ),
     );
@@ -866,8 +871,6 @@ class _LyricsActions extends ConsumerWidget {
           tooltip: 'Plus',
           onSelected: (value) {
             switch (value) {
-              case 'share':
-                if (song != null) _share(context, song!);
               case 'queue':
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -880,17 +883,6 @@ class _LyricsActions extends ConsumerWidget {
             }
           },
           itemBuilder: (context) => [
-            PopupMenuItem(
-              value: 'share',
-              enabled: song != null,
-              child: const Row(
-                children: [
-                  Icon(Icons.open_in_new, size: 20),
-                  SizedBox(width: 12),
-                  Text('Ouvrir dans Musicolet'),
-                ],
-              ),
-            ),
             const PopupMenuItem(
               value: 'queue',
               child: Row(
