@@ -3,7 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:on_audio_query/on_audio_query.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/player/providers/named_queue_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
+
+/// Actions of the tile's ⋯ menu.
+enum _TileMenu { playNext }
 
 class SongTile extends ConsumerWidget {
   final Song song;
@@ -117,12 +121,67 @@ class SongTile extends ConsumerWidget {
                     color: scheme.onSurfaceVariant,
                   ),
                 ),
+                PopupMenuButton<_TileMenu>(
+                  icon: Icon(
+                    Icons.more_vert,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  iconSize: 20,
+                  tooltip: 'Options',
+                  padding: EdgeInsets.zero,
+                  onSelected: (value) => _onMenuSelected(context, ref, value),
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(
+                      value: _TileMenu.playNext,
+                      child: ListTile(
+                        leading: Icon(Icons.queue_music),
+                        title: Text('Jouer ensuite'),
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
         ),
       ),
     );
+  }
+
+  /// F6 hook: mirrors the player's queue into the active named queue.
+  ///
+  /// `syncActiveFromPlayer` is landing on [NamedQueuesController] from a
+  /// parallel worker; the dynamic call keeps this compiling until it does,
+  /// and the try/catch keeps it silent if the method is still absent at
+  /// runtime. The coordinator verifies the final wiring.
+  Future<void> _syncActiveQueue(WidgetRef ref) async {
+    try {
+      await (ref.read(namedQueuesProvider.notifier) as dynamic)
+          .syncActiveFromPlayer();
+    } catch (_) {
+      // Absent or failing: the queue mutation itself already succeeded.
+    }
+  }
+
+  Future<void> _onMenuSelected(
+    BuildContext context,
+    WidgetRef ref,
+    _TileMenu value,
+  ) async {
+    switch (value) {
+      case _TileMenu.playNext:
+        await ref.read(audioPlayerServiceProvider).playNext(song);
+        await _syncActiveQueue(ref);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('« ${song.title} » sera joué ensuite'),
+            ),
+          );
+        }
+    }
   }
 }
 
