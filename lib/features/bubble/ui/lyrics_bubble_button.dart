@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/utils/snackbar.dart';
 import 'package:musync/features/bubble/providers/bubble_provider.dart';
+import 'package:musync/features/player/providers/player_provider.dart';
 
 class LyricsBubbleButton extends ConsumerWidget {
   const LyricsBubbleButton({super.key});
@@ -32,6 +33,14 @@ class LyricsBubbleButton extends ConsumerWidget {
         if (!context.mounted) return;
         switch (result) {
           case BubbleStart.started:
+            // The bubble only shows while playing: if the track is paused or
+            // stopped, start it first — otherwise the app would go to the
+            // background with nothing to show.
+            final playing =
+                ref.read(playerStateProvider).valueOrNull?.playing ?? false;
+            if (!playing && ref.read(currentSongProvider) != null) {
+              await ref.read(audioPlayerServiceProvider).play();
+            }
             // The bubble stays hidden on this screen (it already shows the
             // synced lyrics): send the whole app to the background so the
             // user sees the bubble floating over their home screen — that is
