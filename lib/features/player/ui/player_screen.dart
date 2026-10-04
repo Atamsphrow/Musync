@@ -1,8 +1,15 @@
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:musync/core/utils/snackbar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:on_audio_query/on_audio_query.dart';
 
+import 'package:musync/core/id3/id3_writer.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/router/app_router.dart';
 import 'package:musync/core/theme/app_theme.dart';
@@ -368,7 +375,7 @@ Future<void> _share(BuildContext context, Song song) async {
   }
 }
 
-class _ArtworkPane extends StatelessWidget {
+class _ArtworkPane extends ConsumerWidget {
   final Song? song;
 
   /// Reveals the lyrics. Null only while there is no track to show any for.
@@ -388,7 +395,7 @@ class _ArtworkPane extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
 
     return Center(
@@ -396,7 +403,7 @@ class _ArtworkPane extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 32),
         child: GestureDetector(
           onTap: onTap,
-          onLongPress: song == null ? null : () => _showArtworkMenu(context),
+          onLongPress: song == null ? null : () => _showArtworkMenu(context, ref),
           onVerticalDragUpdate: onVerticalDragUpdate,
           onVerticalDragEnd: onVerticalDragEnd,
           child: AspectRatio(
@@ -451,9 +458,10 @@ class _ArtworkPane extends StatelessWidget {
     );
   }
 
-  /// Long-press menu on the cover: view it full-screen or change it via the
-  /// tag editor (which owns the Musicolet-style save flow for artwork).
-  void _showArtworkMenu(BuildContext context) {
+  /// Long-press menu on the cover: view it full-screen or replace it
+  /// directly, with the same Musicolet-style safe write as the tag editor
+  /// (system permission, temp copy, atomic replace, rescan).
+  void _showArtworkMenu(BuildContext context, WidgetRef ref) {
     final target = song;
     if (target == null) return;
     showModalBottomSheet<void>(
@@ -475,17 +483,97 @@ class _ArtworkPane extends StatelessWidget {
               title: const Text('Changer la pochette'),
               onTap: () {
                 Navigator.pop(sheetContext);
-                Navigator.pushNamed(
-                  context,
-                  AppRoutes.tagEditor,
-                  arguments: SongRouteArgs(song: target),
-                );
+                _changeCoverDirectly(context, ref, target);
               },
             ),
           ],
         ),
       ),
     );
+  }
+
+  /// Picks an image and writes it as the track's cover art, without opening
+  /// the tag editor.
+  Future<void> _changeCoverDirectly(
+    BuildContext context,
+    WidgetRef ref,
+    Song target,
+  ) async {
+    final chosen = await FilePicker.pickFile(
+      type: FileType.image,
+      dialogTitle: 'Choisir une pochette',
+    );
+    final imagePath = chosen?.path;
+    if (imagePath == null || !context.mounted) return;
+    final bytes = await _readCoverBytes(imagePath);
+    if (bytes == null || !context.mounted) return;
+
+    try {
+      // 1. System write permission (Android 11+). A refusal aborts silently.
+      final granted = await MediaStore.requestWriteAccess(
+        mediaStoreId: target.id,
+        path: target.filePath,
+      );
+      if (!granted || !context.mounted) return;
+
+      // 2. Work on a copy in the app's cache directory.
+      final cacheDir = await getTemporaryDirectory();
+      final workPath = p.join(cacheDir.path, 'cover_edit_${target.id}.tmp');
+      final workFile = File(workPath);
+      if (await workFile.exists()) await workFile.delete();
+      await File(target.filePath).copy(workPath);
+
+      // 3. Artwork-only diff: every other field stays untouched.
+      await Id3Writer.writeMetadata(workPath, (
+        title: null,
+        artist: null,
+        album: null,
+        albumArtist: null,
+        genre: null,
+        year: null,
+        trackNumber: null,
+        trackTotal: null,
+        discNumber: null,
+        discTotal: null,
+        composer: null,
+        comment: null,
+        artwork: bytes,
+      ));
+
+      // 4. Binary copy over the original, via a sibling temp + atomic rename.
+      final original = File(target.filePath);
+      final stage = File('${original.path}.musync.tmp');
+      if (await stage.exists()) await stage.delete();
+      await workFile.copy(stage.path);
+      await stage.rename(original.path);
+
+      // 5. Tell MediaStore the file changed, then drop the cached artwork.
+      await MediaStore.rescan(original.path);
+      if (!context.mounted) return;
+      await ref.read(audioPlayerServiceProvider).forgetArtwork(target);
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showOnly(
+        const SnackBar(
+          content: Text('Changement de pochette impossible.'),
+        ),
+      );
+      return;
+    }
+
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showOnly(
+      const SnackBar(content: Text('Pochette mise à jour')),
+    );
+  }
+
+  Future<Uint8List?> _readCoverBytes(String imagePath) async {
+    try {
+      final bytes = await File(imagePath).readAsBytes();
+      return bytes.isEmpty ? null : bytes;
+    } catch (_) {
+      return null;
+    }
   }
 
   void _viewFullscreen(BuildContext context, Song target) {
