@@ -127,6 +127,8 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   /// payload is unchanged and skipped.
   Timer? _timedLinesResend;
 
+
+
   /// When the overlay was last brought up. Guards [reconcile]: a bubble that
   /// is still opening must not be mistaken for a bubble that is gone.
   DateTime? _overlayUpSince;
