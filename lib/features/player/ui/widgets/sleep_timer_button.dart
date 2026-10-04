@@ -58,7 +58,13 @@ class _SleepTimerSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final textTheme = Theme.of(context).textTheme;
-    final selected = ref.watch(sleepTimerProvider).option;
+    final timerState = ref.watch(sleepTimerProvider);
+    final selected = timerState.option;
+
+    Widget checkMark(BuildContext context) => Icon(
+          Icons.check,
+          color: Theme.of(context).colorScheme.primary,
+        );
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -77,18 +83,15 @@ class _SleepTimerSheet extends ConsumerWidget {
           child: ListView(
             shrinkWrap: true,
             children: [
-              for (final option in SleepTimerOption.values)
+              for (final option in SleepTimerOption.values.where(
+                  (o) => o != SleepTimerOption.custom))
                 ListTile(
                   leading: option == SleepTimerOption.disabled
                       ? const Icon(Icons.timer_off_outlined)
                       : const Icon(Icons.timer_outlined),
                   title: Text(option.label),
-                  trailing: selected == option
-                      ? Icon(
-                          Icons.check,
-                          color: Theme.of(context).colorScheme.primary,
-                        )
-                      : null,
+                  trailing:
+                      selected == option ? checkMark(context) : null,
                   onTap: () {
                     ref
                         .read(sleepTimerProvider.notifier)
@@ -96,10 +99,60 @@ class _SleepTimerSheet extends ConsumerWidget {
                     Navigator.pop(context);
                   },
                 ),
+              ListTile(
+                leading: const Icon(Icons.tune),
+                title: Text(timerState.displayLabel),
+                trailing: selected == SleepTimerOption.custom
+                    ? checkMark(context)
+                    : null,
+                onTap: () => _pickCustomMinutes(context, ref),
+              ),
             ],
           ),
         ),
       ],
     );
+  }
+
+  /// Asks for a minute count and starts a timer for exactly that long.
+  Future<void> _pickCustomMinutes(BuildContext context, WidgetRef ref) async {
+    final field = TextEditingController(
+      text: ref.read(sleepTimerProvider).customMinutes?.toString(),
+    );
+    final minutes = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Durée personnalisée'),
+        content: TextField(
+          controller: field,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(
+            hintText: 'Ex. 20',
+            suffixText: 'min',
+          ),
+          onSubmitted: (value) =>
+              Navigator.pop(dialogContext, int.tryParse(value.trim())),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Annuler'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(
+              dialogContext,
+              int.tryParse(field.text.trim()),
+            ),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    field.dispose();
+    if (minutes == null || minutes <= 0 || minutes > 1440) return;
+    if (!context.mounted) return;
+    ref.read(sleepTimerProvider.notifier).setCustomMinutes(minutes);
+    Navigator.pop(context);
   }
 }
