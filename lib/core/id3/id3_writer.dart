@@ -6,6 +6,7 @@ import 'package:musync/core/id3/id3_tag.dart';
 import 'package:musync/core/id3/m4a_writer.dart';
 import 'package:musync/core/id3/lrc_parser.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
+import 'package:musync/core/id3/tag_metadata.dart';
 
 /// Raised when lyrics can't be written. Carries a message meant to be shown to
 /// the user, since every cause here is something only they can act on: a file
@@ -138,6 +139,22 @@ class Id3Writer {
         _buildUsltFrame(plain, tag.majorVersion),
     ];
 
+    await _commitFrames(file, bytes, tag, frames);
+  }
+
+
+  /// Commits [frames] as the file's new tag, reusing the tag's own space when
+  /// they fit.
+  ///
+  /// Extracted from [writeLyrics]: the fast path (overwrite the tag head in
+  /// place) and the safe path (temp file + atomic rename) are the same
+  /// whichever frames are being written.
+  static Future<void> _commitFrames(
+    File file,
+    Uint8List bytes,
+    Id3Tag tag,
+    List<Id3Frame> frames,
+  ) async {
     final framesSize = frames.fold<int>(
       0,
       (sum, f) => sum + 10 + f.body.length,
@@ -168,6 +185,258 @@ class Id3Writer {
     }
   }
 
+  /// Replaces the text metadata frames of [filePath] (title, artist, album,
+  /// …) and optionally the cover art.
+  ///
+  /// Follows [TrackMetadata]'s contract: a null field is left untouched, an
+  /// empty string removes the frame, a negative track/disc number drops that
+  /// part of the pair. Every other frame is carried across untouched, and the
+  /// tag keeps its original major version — the year goes in TYER on a v2.3
+  /// tag and TDRC on a v2.4 one.
+  ///
+  /// M4A files are delegated to [M4aWriter.writeMetadata]; a container Musync
+  /// can't edit is refused out loud. Throws [Id3WriteException] when the file
+  /// can't be written — the original is left intact in every failure case.
+  static Future<void> writeMetadata(
+    String filePath,
+    TrackMetadata metadata,
+  ) async {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      throw Id3WriteException('Fichier introuvable : $filePath');
+    }
+
+    final Uint8List bytes;
+    try {
+      bytes = await file.readAsBytes();
+    } on FileSystemException catch (e) {
+      throw Id3WriteException(
+        'Lecture impossible : ${e.osError?.message ?? e.message}',
+        e,
+      );
+    }
+
+    // Same naming-before-writing rule as [writeLyrics]: the container decides
+    // which writer runs.
+    final container = AudioContainerReader.detect(bytes);
+    if (container == AudioContainer.mp4) {
+      try {
+        await M4aWriter.writeMetadata(filePath, metadata);
+      } on M4aWriteException catch (e) {
+        throw Id3WriteException(e.message, e.cause);
+      }
+      return;
+    }
+    if (!container.isWritable) {
+      throw Id3WriteException(
+        'Format non supporté : Musync ne peut pas modifier les tags d\'un '
+        'fichier ${container.label}.',
+      );
+    }
+
+    final tag = Id3Tag.parse(bytes) ?? Id3Tag.empty();
+    if (tag.audioOffset > bytes.length) {
+      throw Id3WriteException(
+        'Tag ID3 corrompu (fichier tronqué) : '
+        'impossible d\'y écrire des tags.',
+      );
+    }
+    if (!tag.isSupported) {
+      throw Id3WriteException(
+        'Tag ID3v2.${tag.majorVersion} non pris en charge : '
+        'impossible d\'y écrire des tags sans risque.',
+      );
+    }
+
+    final majorVersion = tag.majorVersion;
+
+    // A managed frame is dropped when its field is being rewritten; the new
+    // frame is appended below. Untouched fields keep their frames verbatim,
+    // in their original order.
+    bool replaces(String id) {
+      switch (id) {
+        case 'TIT2':
+          return metadata.title != null;
+        case 'TPE1':
+          return metadata.artist != null;
+        case 'TALB':
+          return metadata.album != null;
+        case 'TPE2':
+          return metadata.albumArtist != null;
+        case 'TCON':
+          return metadata.genre != null;
+        case 'TYER':
+        case 'TDRC':
+          return metadata.year != null;
+        case 'TRCK':
+          return metadata.trackNumber != null || metadata.trackTotal != null;
+        case 'TPOS':
+          return metadata.discNumber != null || metadata.discTotal != null;
+        case 'TCOM':
+          return metadata.composer != null;
+        case 'COMM':
+          return metadata.comment != null;
+        case 'APIC':
+          return metadata.artwork != null;
+        default:
+          return false;
+      }
+    }
+
+    final frames = <Id3Frame>[
+      for (final frame in tag.frames)
+        if (!replaces(frame.id)) frame,
+    ];
+
+    void setText(String? value, String id) {
+      if (value == null || value.isEmpty) return;
+      frames.add(_buildTextFrame(id, value, majorVersion));
+    }
+
+    setText(metadata.title, 'TIT2');
+    setText(metadata.artist, 'TPE1');
+    setText(metadata.album, 'TALB');
+    setText(metadata.albumArtist, 'TPE2');
+    setText(metadata.genre, 'TCON');
+    // v2.3 predates TDRC; v2.4 deprecated TYER. The tag keeps its version, so
+    // the year goes in the frame that version understands — and whichever
+    // spelling was there is dropped with it, never duplicated.
+    setText(metadata.year, majorVersion >= 4 ? 'TDRC' : 'TYER');
+    setText(metadata.composer, 'TCOM');
+    if (metadata.comment != null && metadata.comment!.isNotEmpty) {
+      frames.add(_buildCommFrame(metadata.comment!, majorVersion));
+    }
+
+    final trackText = _composeNumberPair(
+      metadata.trackNumber,
+      metadata.trackTotal,
+      _existingPair(tag, 'TRCK'),
+    );
+    if (trackText != null && trackText.isNotEmpty) {
+      frames.add(_buildTextFrame('TRCK', trackText, majorVersion));
+    }
+    final discText = _composeNumberPair(
+      metadata.discNumber,
+      metadata.discTotal,
+      _existingPair(tag, 'TPOS'),
+    );
+    if (discText != null && discText.isNotEmpty) {
+      frames.add(_buildTextFrame('TPOS', discText, majorVersion));
+    }
+
+    // Replacing the cover drops every APIC frame and writes a single
+    // front-cover one; an empty payload removes them all.
+    final artwork = metadata.artwork;
+    if (artwork != null && artwork.isNotEmpty) {
+      frames.add(_buildApicFrame(artwork, majorVersion));
+    }
+
+    await _commitFrames(file, bytes, tag, frames);
+  }
+
+  /// Reads the current "n/m" pair of [frameId], so a number field the caller
+  /// didn't touch falls back to the existing value.
+  static (int?, int?) _existingPair(Id3Tag tag, String frameId) {
+    final frame = tag.frameById(frameId);
+    if (frame == null || frame.isOpaque) return (null, null);
+    return _splitPair(_textOf(frame));
+  }
+
+  /// The decoded text of a text frame, without the encoding byte.
+  static String? _textOf(Id3Frame frame) {
+    final body = frame.decodedBody;
+    if (body.isEmpty) return null;
+    final encoding = body[0];
+    final end = Id3Tag.findTerminator(body, 1, encoding);
+    final slice = end == -1
+        ? Uint8List.sublistView(body, 1)
+        : Uint8List.sublistView(body, 1, end);
+    final text = Id3Tag.decodeText(slice, encoding).trim();
+    return text.isEmpty ? null : text;
+  }
+
+  static (int?, int?) _splitPair(String? text) {
+    if (text == null) return (null, null);
+    final parts = text.split('/');
+    int? part(String s) {
+      final trimmed = s.trim();
+      return trimmed.isEmpty ? null : int.tryParse(trimmed);
+    }
+
+    return (part(parts[0]), parts.length > 1 ? part(parts[1]) : null);
+  }
+
+  /// Composes the "n/m" text for TRCK/TPOS.
+  ///
+  /// Both null means "leave the frame alone" (null). Otherwise the part the
+  /// caller didn't set falls back to the existing frame's value, a negative
+  /// part drops that part, and when neither part survives the frame is
+  /// removed (empty string).
+  static String? _composeNumberPair(
+    int? number,
+    int? total,
+    (int?, int?) existing,
+  ) {
+    if (number == null && total == null) return null;
+    final n = number == null ? existing.$1 : (number < 0 ? null : number);
+    final t = total == null ? existing.$2 : (total < 0 ? null : total);
+    if (n == null && t == null) return '';
+    return '${n?.toString() ?? ''}${t != null ? '/$t' : ''}';
+  }
+
+  /// A plain text frame: one encoding byte, then the text.
+  static Id3Frame _buildTextFrame(String id, String text, int majorVersion) {
+    final encoding = Id3Encoding.unicodeFor(majorVersion);
+    final body = BytesBuilder(copy: false)
+      ..addByte(encoding)
+      ..add(Id3Tag.encodeText(text, encoding));
+    return Id3Frame(id: id, body: body.toBytes(), majorVersion: majorVersion);
+  }
+
+  /// COMM: encoding, language, empty descriptor, terminator, then the text.
+  static Id3Frame _buildCommFrame(String text, int majorVersion) {
+    final encoding = Id3Encoding.unicodeFor(majorVersion);
+    final body = BytesBuilder(copy: false)
+      ..addByte(encoding)
+      ..add(_language)
+      ..add(List<int>.filled(Id3Encoding.terminatorLength(encoding), 0))
+      ..add(Id3Tag.encodeText(text, encoding));
+    return Id3Frame(
+      id: 'COMM',
+      body: body.toBytes(),
+      majorVersion: majorVersion,
+    );
+  }
+
+  /// APIC: latin-1 encoding, MIME, front-cover type, empty description, then
+  /// the image bytes.
+  static Id3Frame _buildApicFrame(Uint8List image, int majorVersion) {
+    final body = BytesBuilder(copy: false)
+      ..addByte(Id3Encoding.latin1)
+      ..add(_imageMime(image).codeUnits)
+      ..addByte(0)
+      ..addByte(3) // front cover
+      ..addByte(0) // empty description
+      ..add(image);
+    return Id3Frame(
+      id: 'APIC',
+      body: body.toBytes(),
+      majorVersion: majorVersion,
+    );
+  }
+
+  /// MIME from the magic bytes. PNG is detected; anything else is served as
+  /// JPEG, which is what the overwhelming majority of embedded covers are.
+  static String _imageMime(Uint8List image) {
+    if (image.length >= 4 &&
+        image[0] == 0x89 &&
+        image[1] == 0x50 &&
+        image[2] == 0x4E &&
+        image[3] == 0x47) {
+      return 'image/png';
+    }
+    return 'image/jpeg';
+  }
   /// Overwrites the tag region without touching the audio behind it.
   static Future<void> _overwriteHead(File file, Uint8List newTag) async {
     // FileMode.append is the only writable mode that doesn't truncate.
