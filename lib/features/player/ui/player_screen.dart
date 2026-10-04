@@ -19,6 +19,8 @@ import 'package:musync/features/player/ui/widgets/marquee_text.dart';
 import 'package:musync/features/player/ui/widgets/synced_lyrics_view.dart';
 import 'package:musync/features/bubble/ui/lyrics_bubble_button.dart';
 import 'package:musync/features/player/ui/widgets/sleep_timer_button.dart';
+import 'package:musync/features/player/ui/queue_screen.dart';
+import 'package:musync/features/player/ui/queues_sheet.dart';
 import 'package:musync/features/sync_editor/providers/sync_editor_provider.dart';
 
 /// Full-screen now-playing view.
@@ -319,6 +321,18 @@ class _TopBar extends ConsumerWidget {
                 ? 'Afficher la pochette'
                 : 'Afficher les paroles',
             onPressed: song == null ? null : onToggleLyrics,
+          ),
+          IconButton(
+            icon: const Icon(Icons.queue_music),
+            tooltip: 'File d’attente',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const QueueScreen()),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.playlist_play),
+            tooltip: 'Files d’attente',
+            onPressed: () => showQueuesSheet(context),
           ),
           const SleepTimerButton(),
         ],
