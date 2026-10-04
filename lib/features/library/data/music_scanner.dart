@@ -104,13 +104,16 @@ class MusicScanner {
 
     for (final song in songs) {
       final path = song.filePath;
-      final current = await _mtimeOf(path);
-      if (current == null) {
+      final stat = await _statOf(path);
+      if (stat == null) {
         updated.add(song);
         continue;
       }
-      if (mtimes[path] != current) {
-        mtimes[path] = current;
+      // mtime AND size: some tag editors (Musicolet) preserve the mtime when
+      // writing, so mtime alone misses their edits. Size catches those.
+      final key = '${stat.mtime}:${stat.size}';
+      if (mtimes[path] != key) {
+        mtimes[path] = key;
         dirty = true;
         if (_isMp3(path)) {
           updated.add(
@@ -126,11 +129,12 @@ class MusicScanner {
     return updated;
   }
 
-  /// File modification time, or null when the file can't be statted. Never
+  /// File stat (mtime + size), or null when the file can't be statted. Never
   /// throws: an unreadable file simply keeps its current metadata.
-  static Future<int?> _mtimeOf(String path) async {
+  static Future<({int mtime, int size})?> _statOf(String path) async {
     try {
-      return (await File(path).stat()).modified.millisecondsSinceEpoch;
+      final s = await File(path).stat();
+      return (mtime: s.modified.millisecondsSinceEpoch, size: s.size);
     } on FileSystemException {
       return null;
     }
