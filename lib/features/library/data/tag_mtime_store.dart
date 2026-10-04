@@ -25,16 +25,19 @@ class TagMtimeStore {
 
   /// Path → mtime in milliseconds since epoch. Empty — not an error — when
   /// nothing was ever recorded or the file can't be read.
-  Future<Map<String, int>> load() async {
+  Future<Map<String, String>> load() async {
     try {
       final file = await _file();
       if (!await file.exists()) return {};
       final decoded = jsonDecode(await file.readAsString());
       if (decoded is! Map) return {};
-      final out = <String, int>{};
+      final out = <String, String>{};
       for (final entry in decoded.entries) {
-        if (entry.key is String && entry.value is int) {
-          out[entry.key as String] = entry.value as int;
+        if (entry.key is String) {
+          // Old cache stored int mtimes; new format is "mtime:size".
+          // An int entry never matches a "mtime:size" key, so it naturally
+          // forces a re-read — exactly what we want after the format change.
+          out[entry.key as String] = '${entry.value}';
         }
       }
       return out;
@@ -45,7 +48,7 @@ class TagMtimeStore {
 
   /// Best effort: losing the record just means the next refresh re-reads more
   /// tags than strictly needed — never lost music, never a crash.
-  Future<void> save(Map<String, int> mtimes) async {
+  Future<void> save(Map<String, String> mtimes) async {
     try {
       await AtomicFile.writeString(await _file(), jsonEncode(mtimes));
     } catch (_) {
