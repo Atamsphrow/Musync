@@ -160,6 +160,10 @@ class BubblePayload {
         positionMs: positionMs,
         sampledAtMs: sampledAtMs,
         textScaleFactor: textScaleFactor,
+        fontScale: fontScale,
+        italic: italic,
+        serif: serif,
+        colorValue: colorValue,
       );
     }
 
