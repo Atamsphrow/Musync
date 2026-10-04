@@ -318,75 +318,6 @@ class _TopBar extends ConsumerWidget {
                 : 'Afficher les paroles',
             onPressed: song == null ? null : onToggleLyrics,
           ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert),
-            tooltip: 'Plus',
-            onSelected: (value) {
-              switch (value) {
-                case 'share':
-                  if (song != null) _share(context, song!);
-                case 'queue':
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const QueueScreen()),
-                  );
-                case 'queues':
-                  showQueuesSheet(context);
-                case 'timer':
-                  showSleepTimerSheet(context);
-              }
-            },
-            itemBuilder: (context) {
-              final timerActive = ref.watch(sleepTimerProvider).active;
-              return [
-                PopupMenuItem(
-                  value: 'share',
-                  enabled: song != null,
-                  child: const Row(
-                    children: [
-                      Icon(Icons.open_in_new, size: 20),
-                      SizedBox(width: 12),
-                      Text('Ouvrir dans Musicolet'),
-                    ],
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'queue',
-                  child: Row(
-                    children: [
-                      Icon(Icons.queue_music, size: 20),
-                      SizedBox(width: 12),
-                      Text('File d’attente'),
-                    ],
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'queues',
-                  child: Row(
-                    children: [
-                      Icon(Icons.playlist_play, size: 20),
-                      SizedBox(width: 12),
-                      Text('Files d’attente'),
-                    ],
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'timer',
-                  child: Row(
-                    children: [
-                      Icon(
-                        timerActive
-                            ? Icons.timer
-                            : Icons.timer_off_outlined,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 12),
-                      const Text('Minuteur d’arrêt'),
-                    ],
-                  ),
-                ),
-              ];
-            },
-          ),
         ],
       ),
     );
@@ -465,6 +396,7 @@ class _ArtworkPane extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 32),
         child: GestureDetector(
           onTap: onTap,
+          onLongPress: song == null ? null : () => _showArtworkMenu(context),
           onVerticalDragUpdate: onVerticalDragUpdate,
           onVerticalDragEnd: onVerticalDragEnd,
           child: AspectRatio(
@@ -512,6 +444,66 @@ class _ArtworkPane extends StatelessWidget {
                         ),
                       ),
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Long-press menu on the cover: view it full-screen or change it via the
+  /// tag editor (which owns the Musicolet-style save flow for artwork).
+  void _showArtworkMenu(BuildContext context) {
+    final target = song;
+    if (target == null) return;
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.fullscreen),
+              title: const Text('Voir en grand'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _viewFullscreen(context, target);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit),
+              title: const Text('Changer la pochette'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                Navigator.pushNamed(
+                  context,
+                  AppRoutes.tagEditor,
+                  arguments: SongRouteArgs(song: target),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _viewFullscreen(BuildContext context, Song target) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => Dialog(
+        insetPadding: const EdgeInsets.all(16),
+        child: AspectRatio(
+          aspectRatio: 1,
+          child: QueryArtworkWidget(
+            id: target.id,
+            type: ArtworkType.AUDIO,
+            size: 1024,
+            quality: 100,
+            artworkQuality: FilterQuality.high,
+            artworkFit: BoxFit.contain,
+            nullArtworkWidget: const Center(
+              child: Icon(Icons.music_note, size: 96),
             ),
           ),
         ),
@@ -759,18 +751,92 @@ class _LyricsActions extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final timerActive = ref.watch(sleepTimerProvider).active;
     return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        TextButton.icon(
-          onPressed: song == null ? null : () => _openSheet(context, ref),
-          icon: const Icon(Icons.tune, size: 18),
-          label: const Text('Paroles'),
+        Expanded(
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              TextButton.icon(
+                onPressed:
+                    song == null ? null : () => _openSheet(context, ref),
+                icon: const Icon(Icons.tune, size: 18),
+                label: const Text('Paroles'),
+              ),
+              TextButton.icon(
+                onPressed:
+                    song == null ? null : () => _openTagEditor(context),
+                icon: const Icon(Icons.edit, size: 18),
+                label: const Text('Tags'),
+              ),
+            ],
+          ),
         ),
-        TextButton.icon(
-          onPressed: song == null ? null : () => _openTagEditor(context),
-          icon: const Icon(Icons.edit, size: 18),
-          label: const Text('Tags'),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert),
+          tooltip: 'Plus',
+          onSelected: (value) {
+            switch (value) {
+              case 'share':
+                if (song != null) _share(context, song!);
+              case 'queue':
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                      builder: (_) => const QueueScreen()),
+                );
+              case 'queues':
+                showQueuesSheet(context);
+              case 'timer':
+                showSleepTimerSheet(context);
+            }
+          },
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'share',
+              enabled: song != null,
+              child: const Row(
+                children: [
+                  Icon(Icons.open_in_new, size: 20),
+                  SizedBox(width: 12),
+                  Text('Ouvrir dans Musicolet'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'queue',
+              child: Row(
+                children: [
+                  Icon(Icons.queue_music, size: 20),
+                  SizedBox(width: 12),
+                  Text('File d’attente'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'queues',
+              child: Row(
+                children: [
+                  Icon(Icons.playlist_play, size: 20),
+                  SizedBox(width: 12),
+                  Text('Files d’attente'),
+                ],
+              ),
+            ),
+            PopupMenuItem(
+              value: 'timer',
+              child: Row(
+                children: [
+                  Icon(
+                    timerActive ? Icons.timer : Icons.timer_off_outlined,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  const Text('Minuteur d’arrêt'),
+                ],
+              ),
+            ),
+          ],
         ),
       ],
     );
