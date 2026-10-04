@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:musync/core/utils/snackbar.dart';
+import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/data/named_queue.dart';
 import 'package:musync/features/player/providers/named_queue_provider.dart';
 
@@ -226,6 +227,42 @@ Future<void> _openCreateDialog(BuildContext context, WidgetRef ref) async {
   ScaffoldMessenger.of(context).showOnly(
     SnackBar(
       content: Text('« ${created?.name ?? name} » créée avec la file actuelle'),
+    ),
+  );
+}
+
+/// Crée une file d'attente nommée depuis une liste de morceaux arbitraire
+/// (résultats de recherche, dossier, …). Le nom proposé est pré-rempli mais
+/// modifiable. Affiche une confirmation discrète une fois créée.
+Future<void> createQueueFromSongs(
+  BuildContext context,
+  WidgetRef ref,
+  List<Song> songs, {
+  String? suggestedName,
+}) async {
+  if (songs.isEmpty) return;
+  final name = await showDialog<String>(
+    context: context,
+    builder: (context) => _QueueNameDialog(
+      title: 'Nouvelle file',
+      confirmLabel: 'Créer',
+      initialName: suggestedName,
+    ),
+  );
+  if (name == null || !context.mounted) return;
+  final notifier = ref.read(namedQueuesProvider.notifier);
+  final id = await notifier.createFromSongs(name, songs);
+  if (!context.mounted) return;
+  final created = ref
+      .read(namedQueuesProvider)
+      .queues
+      .where((q) => q.id == id)
+      .firstOrNull;
+  ScaffoldMessenger.of(context).showOnly(
+    SnackBar(
+      content: Text(
+        '« ${created?.name ?? name} » créée (${songs.length} morceaux)',
+      ),
     ),
   );
 }
