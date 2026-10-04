@@ -136,7 +136,11 @@ class MainActivity : AudioServiceActivity() {
                         pendingSharedDropped = 0
                     }
                     "moveTaskToBack" -> {
-                        moveTaskToBack(true)
+                        // false: move the whole task back even when this
+                        // activity is the task root (the usual case). With
+                        // true the call is a silent no-op on the root and
+                        // the app would stay in the foreground.
+                        moveTaskToBack(false)
                         result.success(null)
                     }
                     "showNotification" -> {
