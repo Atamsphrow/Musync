@@ -40,12 +40,16 @@ class SleepTimerButton extends ConsumerWidget {
     );
   }
 
-  void _openSheet(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (_) => const SafeArea(child: _SleepTimerSheet()),
-    );
-  }
+  void _openSheet(BuildContext context) => showSleepTimerSheet(context);
+}
+
+/// Opens the sleep-timer sheet. Public so the now-playing overflow menu can
+/// offer the same entry point as the old top-bar button.
+void showSleepTimerSheet(BuildContext context) {
+  showModalBottomSheet<void>(
+    context: context,
+    builder: (_) => const SafeArea(child: _SleepTimerSheet()),
+  );
 }
 
 class _SleepTimerSheet extends ConsumerWidget {
