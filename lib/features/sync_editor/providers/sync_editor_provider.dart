@@ -336,10 +336,10 @@ class SyncEditorNotifier extends StateNotifier<SyncEditorState> {
   ///
   /// A paste carrying its own `[mm:ss.xx]` timings — the Musicolet round-trip —
   /// is detected and parsed: the brackets become real timestamps, never visible
-  /// text, and the editor flips to the synced tab so the timings are what the
-  /// user sees. Detection is per line and keeps every line, so a `[Refrain]`
-  /// marker between two timed lines stays an untimed line instead of being
-  /// dropped the way a whole-text [LrcParser.parse] would drop it.
+  /// text. The editor stays on its current tab — the user switches when they
+  /// want to see the timings. Detection is per line and keeps every line, so a
+  /// `[Refrain]` marker between two timed lines stays an untimed line instead
+  /// of being dropped the way a whole-text [LrcParser.parse] would drop it.
   ///
   /// Pasted text without timings keeps the old contract: timestamps already set
   /// are kept line by line where the count allows, so fixing a typo in the
@@ -376,8 +376,9 @@ class SyncEditorNotifier extends StateNotifier<SyncEditorState> {
       }
       state = state.copyWith(
         lines: lines,
-        // The paste said "synced" — show the timing tab, not the plain one.
-        mode: SyncMode.synced,
+        // The timestamps are parsed and kept, but the mode is left alone:
+        // typing in the Simple tab must not yank the user to the Synced tab.
+        // They switch tabs themselves when they want to see the timings.
         cursor: state.cursor.clamp(0, lines.length),
         hasChanges: true,
       );
