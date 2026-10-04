@@ -309,6 +309,15 @@ class _TopBar extends ConsumerWidget {
             ),
           ),
           if (hasSynced) const LyricsBubbleButton(),
+          IconButton(
+            isSelected: showLyrics,
+            icon: const Icon(Icons.lyrics_outlined),
+            selectedIcon: const Icon(Icons.lyrics),
+            tooltip: showLyrics
+                ? 'Afficher la pochette'
+                : 'Afficher les paroles',
+            onPressed: song == null ? null : onToggleLyrics,
+          ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
             tooltip: 'Plus',
@@ -316,8 +325,6 @@ class _TopBar extends ConsumerWidget {
               switch (value) {
                 case 'share':
                   if (song != null) _share(context, song!);
-                case 'lyrics':
-                  onToggleLyrics();
                 case 'queue':
                   Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const QueueScreen()),
@@ -339,26 +346,6 @@ class _TopBar extends ConsumerWidget {
                       Icon(Icons.open_in_new, size: 20),
                       SizedBox(width: 12),
                       Text('Ouvrir dans Musicolet'),
-                    ],
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'lyrics',
-                  enabled: song != null,
-                  child: Row(
-                    children: [
-                      Icon(
-                        showLyrics
-                            ? Icons.lyrics
-                            : Icons.lyrics_outlined,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 12),
-                      Text(
-                        showLyrics
-                            ? 'Afficher la pochette'
-                            : 'Afficher les paroles',
-                      ),
                     ],
                   ),
                 ),
