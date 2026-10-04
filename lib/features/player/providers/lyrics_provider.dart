@@ -37,12 +37,39 @@ final _currentSongMtimeProvider = StreamProvider<int>((ref) async* {
     }
   }
 
-  var last = await mtime();
+  // Content hash of the lyrics frames: some tag editors (Musicolet) preserve
+  // the mtime when writing, so mtime alone misses their edits. Hashing the
+  // actual lyrics bytes catches every change. The read is frame-walking
+  // (no cover art), so it's cheap enough for a 5 s poll.
+  Future<int> lyricsHash() async {
+    try {
+      final pair = await Id3Reader.readLyricsFrames(song.filePath);
+      final synced = pair.synced;
+      final unsynced = pair.unsynced;
+      var h = 0;
+      if (synced != null) {
+        for (final line in synced.lines) {
+          h = h * 31 + (line.timestamp?.inMilliseconds ?? 0);
+          h = h * 31 + line.text.hashCode;
+        }
+      } else if (unsynced != null) {
+        h = unsynced.text.hashCode;
+      }
+      return h;
+    } catch (_) {
+      return -1;
+    }
+  }
+
+  var lastMtime = await mtime();
+  var lastHash = await lyricsHash();
   await for (final _ in Stream.periodic(const Duration(seconds: 2))) {
-    final current = await mtime();
-    if (current != last) {
-      last = current;
-      yield current;
+    final currentMtime = await mtime();
+    final currentHash = await lyricsHash();
+    if (currentMtime != lastMtime || currentHash != lastHash) {
+      lastMtime = currentMtime;
+      lastHash = currentHash;
+      yield currentMtime;
     }
   }
 });
