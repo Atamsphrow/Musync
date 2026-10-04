@@ -61,6 +61,22 @@ class ArtworkCache {
   /// previous play already produced and nothing otherwise.
   Uri? cached(Song song) => _known[_keyFor(song)];
 
+  /// Forgets [song]'s extracted cover, deleting the extracted file.
+  ///
+  /// Used after a cover edit: the extracted file would otherwise keep showing
+  /// the old image in the media notification.
+  Future<void> forget(Song song) async {
+    final key = _keyFor(song);
+    _known.remove(key);
+    try {
+      final dir = await _directory();
+      final file = File('${dir.path}${Platform.pathSeparator}$key');
+      if (await file.exists()) await file.delete();
+    } catch (_) {
+      // Best effort — the next extraction simply re-reads the tag.
+    }
+  }
+
   /// Forgets what the cache directory no longer holds.
   ///
   /// The in-memory map remembers a `file://` URI; Android clearing the directory
