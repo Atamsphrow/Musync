@@ -665,11 +665,14 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
             ),
           ),
         ),
-        IconButton(
-          icon: const Icon(Icons.playlist_add_check),
-          tooltip: 'Chercher les paroles de cet onglet',
-          onPressed: songsAsync.valueOrNull?.isEmpty ?? true ? null : onBatch,
-        ),
+        // No batch search on the Synchronisées tab: those tracks already
+        // have synced lyrics, there is nothing to search for.
+        if (ref.watch(libraryTabProvider) != LyricsStatus.synced)
+          IconButton(
+            icon: const Icon(Icons.playlist_add_check),
+            tooltip: 'Chercher les paroles de cet onglet',
+            onPressed: songsAsync.valueOrNull?.isEmpty ?? true ? null : onBatch,
+          ),
         PopupMenuButton<LibrarySort>(
           icon: const Icon(Icons.sort),
           tooltip: 'Trier',
