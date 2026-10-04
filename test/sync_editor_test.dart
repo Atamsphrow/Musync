@@ -437,11 +437,18 @@ void main() {
         ]);
       });
 
-      test('a pasted LRC flips the editor to the synced tab', () {
+      test('a pasted LRC keeps timed lines without yanking tabs', () {
+        // replaceAllText is the plain editor's onChanged: it fires on every
+        // keystroke, so it must never flip the tab mid-typing. The timestamps
+        // are parsed and kept; the user switches tabs themselves.
         editor.setMode(SyncMode.simple);
         editor.replaceAllText('[00:10.70]Jo\u00e9');
 
-        expect(editor.state.mode, SyncMode.synced);
+        expect(editor.state.mode, SyncMode.simple);
+        expect(
+          editor.state.lines.map((l) => l.timestamp),
+          [const Duration(seconds: 10, milliseconds: 700)],
+        );
         expect(editor.state.hasChanges, isTrue);
       });
 
