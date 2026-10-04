@@ -166,8 +166,8 @@ void main() {
         final store = TagMtimeStore(root: dir);
         expect(await store.load(), isEmpty);
 
-        await store.save({'/a/b.mp3': 123, '/c/d.mp3': 456});
-        expect(await store.load(), {'/a/b.mp3': 123, '/c/d.mp3': 456});
+        await store.save({'/a/b.mp3': '123:1000', '/c/d.mp3': '456:2000'});
+        expect(await store.load(), {'/a/b.mp3': '123:1000', '/c/d.mp3': '456:2000'});
       } finally {
         await dir.delete(recursive: true);
       }
@@ -234,7 +234,7 @@ void main() {
       expect(updated.single.artist, 'Artist');
       expect(updated.single.album, 'Old album');
 
-      expect(await mtimeStore.load(), {file.path: t1});
+      expect(await mtimeStore.load(), {file.path: '$t1:${await file.length()}'});
     });
 
     test('skips files whose mtime did not move', () async {
@@ -244,8 +244,9 @@ void main() {
       final first = await scanner.refreshMetadataFromFiles([songFor(file)]);
       expect(first.single.title, 'First title');
 
-      // Rewrite the tag but pin the mtime back: the refresh must not notice.
-      await writeMp3('b.mp3', 'Sneaky title');
+      // Rewrite the tag (same byte length) but pin the mtime back:
+      // the refresh must not notice.
+      await writeMp3('b.mp3', 'SneakyTitle');
       await file.setLastModified(DateTime.fromMillisecondsSinceEpoch(t1));
 
       final second = await scanner.refreshMetadataFromFiles([first.single]);
