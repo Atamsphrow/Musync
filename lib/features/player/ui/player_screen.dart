@@ -18,6 +18,7 @@ import 'package:musync/features/player/ui/widgets/player_controls.dart';
 import 'package:musync/features/player/ui/widgets/marquee_text.dart';
 import 'package:musync/features/player/ui/widgets/synced_lyrics_view.dart';
 import 'package:musync/features/bubble/ui/lyrics_bubble_button.dart';
+import 'package:musync/features/player/ui/widgets/sleep_timer_button.dart';
 import 'package:musync/features/sync_editor/providers/sync_editor_provider.dart';
 
 /// Full-screen now-playing view.
@@ -319,6 +320,7 @@ class _TopBar extends ConsumerWidget {
                 : 'Afficher les paroles',
             onPressed: song == null ? null : onToggleLyrics,
           ),
+          const SleepTimerButton(),
         ],
       ),
     );
