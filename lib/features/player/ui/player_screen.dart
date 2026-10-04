@@ -18,6 +18,7 @@ import 'package:musync/features/player/ui/widgets/player_controls.dart';
 import 'package:musync/features/player/ui/widgets/marquee_text.dart';
 import 'package:musync/features/player/ui/widgets/synced_lyrics_view.dart';
 import 'package:musync/features/bubble/ui/lyrics_bubble_button.dart';
+import 'package:musync/features/player/providers/sleep_timer_provider.dart';
 import 'package:musync/features/player/ui/widgets/sleep_timer_button.dart';
 import 'package:musync/features/player/ui/queue_screen.dart';
 import 'package:musync/features/player/ui/queues_sheet.dart';
@@ -308,33 +309,97 @@ class _TopBar extends ConsumerWidget {
             ),
           ),
           if (hasSynced) const LyricsBubbleButton(),
-          IconButton(
-            icon: const Icon(Icons.open_in_new),
-            tooltip: 'Ouvrir dans Musicolet',
-            onPressed: song == null ? null : () => _share(context, song!),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            tooltip: 'Plus',
+            onSelected: (value) {
+              switch (value) {
+                case 'share':
+                  if (song != null) _share(context, song!);
+                case 'lyrics':
+                  onToggleLyrics();
+                case 'queue':
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const QueueScreen()),
+                  );
+                case 'queues':
+                  showQueuesSheet(context);
+                case 'timer':
+                  showSleepTimerSheet(context);
+              }
+            },
+            itemBuilder: (context) {
+              final timerActive = ref.watch(sleepTimerProvider).active;
+              return [
+                PopupMenuItem(
+                  value: 'share',
+                  enabled: song != null,
+                  child: const Row(
+                    children: [
+                      Icon(Icons.open_in_new, size: 20),
+                      SizedBox(width: 12),
+                      Text('Ouvrir dans Musicolet'),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'lyrics',
+                  enabled: song != null,
+                  child: Row(
+                    children: [
+                      Icon(
+                        showLyrics
+                            ? Icons.lyrics
+                            : Icons.lyrics_outlined,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        showLyrics
+                            ? 'Afficher la pochette'
+                            : 'Afficher les paroles',
+                      ),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'queue',
+                  child: Row(
+                    children: [
+                      Icon(Icons.queue_music, size: 20),
+                      SizedBox(width: 12),
+                      Text('File d’attente'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'queues',
+                  child: Row(
+                    children: [
+                      Icon(Icons.playlist_play, size: 20),
+                      SizedBox(width: 12),
+                      Text('Files d’attente'),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'timer',
+                  child: Row(
+                    children: [
+                      Icon(
+                        timerActive
+                            ? Icons.timer
+                            : Icons.timer_off_outlined,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 12),
+                      const Text('Minuteur d’arrêt'),
+                    ],
+                  ),
+                ),
+              ];
+            },
           ),
-          IconButton(
-            isSelected: showLyrics,
-            icon: const Icon(Icons.lyrics_outlined),
-            selectedIcon: const Icon(Icons.lyrics),
-            tooltip: showLyrics
-                ? 'Afficher la pochette'
-                : 'Afficher les paroles',
-            onPressed: song == null ? null : onToggleLyrics,
-          ),
-          IconButton(
-            icon: const Icon(Icons.queue_music),
-            tooltip: 'File d’attente',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const QueueScreen()),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.playlist_play),
-            tooltip: 'Files d’attente',
-            onPressed: () => showQueuesSheet(context),
-          ),
-          const SleepTimerButton(),
         ],
       ),
     );
