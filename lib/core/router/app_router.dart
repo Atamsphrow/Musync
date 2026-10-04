@@ -14,6 +14,7 @@ import 'package:musync/features/settings/ui/settings_screen.dart';
 import 'package:musync/features/sync_editor/providers/sync_editor_provider.dart';
 import 'package:musync/features/lyrics/ui/lyrics_search_screen.dart';
 import 'package:musync/features/player/ui/player_screen.dart';
+import 'package:musync/features/player/ui/tag_editor_screen.dart';
 import 'package:musync/features/sync_editor/ui/sync_editor_screen.dart';
 
 /// Lets a screen know when another one is pushed over it, or uncovered again.
@@ -38,6 +39,7 @@ class AppRoutes {
 
   static const String library = '/';
   static const String player = '/player';
+  static const String tagEditor = '/tag-editor';
   static const String lyricsSearch = '/lyrics-search';
   static const String syncEditor = '/sync-editor';
   static const String settings = '/settings';
@@ -111,6 +113,15 @@ class AppRouter {
       case AppRoutes.lyricsSearch:
         if (args is SongRouteArgs) {
           return _buildRoute(settings, LyricsSearchScreen(song: args.song));
+        }
+        return _buildRoute(
+          settings,
+          const _RouteError('Aucun morceau fourni.'),
+        );
+
+      case AppRoutes.tagEditor:
+        if (args is SongRouteArgs) {
+          return _buildRoute(settings, TagEditorScreen(song: args.song));
         }
         return _buildRoute(
           settings,
