@@ -78,6 +78,33 @@ abstract final class MediaStore {
     );
   }
 
+  /// Asks Android for permission to modify a media file, the way Musicolet
+  /// does before writing tags.
+  ///
+  /// On Android 11+ (API 30+) this shows the system dialog "Allow Musync to
+  /// modify this file?". Returns true when the user allowed — or when no
+  /// dialog is needed — and false when they refused or the request failed.
+  /// A refusal is not an error: the caller aborts the save silently.
+  ///
+  /// Never throws.
+  static Future<bool> requestWriteAccess({
+    required int mediaStoreId,
+    required String path,
+  }) async {
+    if (!Platform.isAndroid) return true;
+    try {
+      final granted = await _channel.invokeMethod<bool>(
+        'requestWriteAccess',
+        <String, Object>{'mediaStoreId': mediaStoreId, 'path': path},
+      );
+      return granted ?? false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
   /// Collects audio handed to Musync through the share sheet or "open with",
   /// and empties the platform-side queue.
   ///
