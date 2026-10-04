@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:on_audio_query/on_audio_query.dart';
 import 'package:musync/core/id3/id3_reader.dart';
+import 'package:musync/features/library/data/excluded_dirs_store.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/data/tag_mtime_store.dart';
 
@@ -22,10 +23,15 @@ class IgnoredFile {
 class MusicScanner {
   final OnAudioQuery _audioQuery;
   final TagMtimeStore _mtimeStore;
+  final ExcludedDirsStore _excludedDirsStore;
 
-  MusicScanner({OnAudioQuery? audioQuery, TagMtimeStore? mtimeStore})
-    : _audioQuery = audioQuery ?? OnAudioQuery(),
-      _mtimeStore = mtimeStore ?? const TagMtimeStore();
+  MusicScanner({
+    OnAudioQuery? audioQuery,
+    TagMtimeStore? mtimeStore,
+    ExcludedDirsStore? excludedDirsStore,
+  }) : _audioQuery = audioQuery ?? OnAudioQuery(),
+       _mtimeStore = mtimeStore ?? const TagMtimeStore(),
+       _excludedDirsStore = excludedDirsStore ?? const ExcludedDirsStore();
 
   /// Only real music: MediaStore also indexes ringtones, notification sounds
   /// and voice recordings, none of which belong in a library screen.
@@ -44,6 +50,11 @@ class MusicScanner {
       ignoreCase: true,
     );
 
+    // Directories the user excluded in Paramètres › Bibliothèque. Read fresh
+    // each scan: the scanner is long-lived, and the list changes from the
+    // settings screen without the library being rebuilt.
+    final excludedDirs = await _excludedDirsStore.load();
+
     final ignored = <IgnoredFile>[];
     final kept = <Song>[];
     for (final s in songs) {
@@ -56,15 +67,17 @@ class MusicScanner {
         continue;
       }
       if ((s.duration ?? 0) < _minDurationMs) {
-        ignored.add(
-          IgnoredFile(path: s.data, reason: 'Trop court (< 20 s)'),
-        );
+        ignored.add(IgnoredFile(path: s.data, reason: 'Trop court (< 20 s)'));
         continue;
       }
       if (s.data.isEmpty) {
         ignored.add(
           IgnoredFile(path: s.displayNameWOExt, reason: 'Chemin illisible'),
         );
+        continue;
+      }
+      if (ExcludedDirsStore.isExcluded(s.data, excludedDirs)) {
+        ignored.add(IgnoredFile(path: s.data, reason: 'Dossier exclu'));
         continue;
       }
       kept.add(
