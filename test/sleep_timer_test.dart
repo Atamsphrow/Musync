@@ -14,8 +14,9 @@ void main() {
       expect(SleepTimerOption.min90.duration, const Duration(minutes: 90));
     });
 
-    test('disabled and end-of-track are not wall-clock durations', () {
+    test('disabled, custom and end-of-track are not wall-clock durations', () {
       expect(SleepTimerOption.disabled.duration, isNull);
+      expect(SleepTimerOption.custom.duration, isNull);
       expect(SleepTimerOption.endOfTrack.duration, isNull);
     });
 
@@ -26,6 +27,7 @@ void main() {
       expect(SleepTimerOption.min45.label, '45 min');
       expect(SleepTimerOption.min60.label, '60 min');
       expect(SleepTimerOption.min90.label, '90 min');
+      expect(SleepTimerOption.custom.label, 'Personnalisé');
       expect(SleepTimerOption.endOfTrack.label, 'Fin du morceau');
     });
   });
@@ -47,6 +49,26 @@ void main() {
           reason: option.name,
         );
       }
+    });
+
+    test('custom display label shows the chosen minutes', () {
+      const state = SleepTimerState(
+        option: SleepTimerOption.custom,
+        customMinutes: 20,
+      );
+      expect(state.displayLabel, 'Personnalisé · 20 min');
+      expect(state.active, isTrue);
+    });
+
+    test('display label falls back to the plain label', () {
+      expect(
+        const SleepTimerState().displayLabel,
+        'Désactivé',
+      );
+      expect(
+        const SleepTimerState(option: SleepTimerOption.min30).displayLabel,
+        '30 min',
+      );
     });
   });
 }
