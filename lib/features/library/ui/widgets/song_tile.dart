@@ -150,18 +150,13 @@ class SongTile extends ConsumerWidget {
     );
   }
 
-  /// F6 hook: mirrors the player's queue into the active named queue.
-  ///
-  /// `syncActiveFromPlayer` is landing on [NamedQueuesController] from a
-  /// parallel worker; the dynamic call keeps this compiling until it does,
-  /// and the try/catch keeps it silent if the method is still absent at
-  /// runtime. The coordinator verifies the final wiring.
+  /// F6 hook: mirrors the player's queue into the active named queue, so the
+  /// named queue stays an exact snapshot after a reorder/remove/play-next.
   Future<void> _syncActiveQueue(WidgetRef ref) async {
     try {
-      await (ref.read(namedQueuesProvider.notifier) as dynamic)
-          .syncActiveFromPlayer();
+      await ref.read(namedQueuesProvider.notifier).syncActiveFromPlayer();
     } catch (_) {
-      // Absent or failing: the queue mutation itself already succeeded.
+      // Best-effort: the queue mutation itself already succeeded.
     }
   }
 
