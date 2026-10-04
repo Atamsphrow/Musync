@@ -715,7 +715,20 @@ class _LyricsActions extends ConsumerWidget {
           icon: const Icon(Icons.tune, size: 18),
           label: const Text('Paroles'),
         ),
+        TextButton.icon(
+          onPressed: song == null ? null : () => _openTagEditor(context),
+          icon: const Icon(Icons.edit, size: 18),
+          label: const Text('Tags'),
+        ),
       ],
+    );
+  }
+
+  void _openTagEditor(BuildContext context) {
+    Navigator.pushNamed(
+      context,
+      AppRoutes.tagEditor,
+      arguments: SongRouteArgs(song: song!),
     );
   }
 
