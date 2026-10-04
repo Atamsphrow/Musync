@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:musync/core/id3/audio_container.dart';
+import 'package:musync/core/id3/tag_metadata.dart';
 
 /// Raised when M4A lyrics can't be written. Same contract as
 /// [Id3WriteException]: the message is meant for the user, the cause is for
@@ -42,6 +43,19 @@ class M4aWriter {
 
   /// Atom type for `©lyr`: 0xA9 'l' 'y' 'r'.
   static const List<int> _lyrType = [0xA9, 0x6C, 0x79, 0x72];
+
+  /// Metadata atom types (iTunes convention).
+  static const List<int> _namType = [0xA9, 0x6E, 0x61, 0x6D]; // ©nam title
+  static const List<int> _artType = [0xA9, 0x41, 0x52, 0x54]; // ©ART artist
+  static const List<int> _albType = [0xA9, 0x61, 0x6C, 0x62]; // ©alb album
+  static const List<int> _aartType = [0x61, 0x41, 0x52, 0x54]; // aART album artist
+  static const List<int> _genType = [0xA9, 0x67, 0x65, 0x6E]; // ©gen genre
+  static const List<int> _dayType = [0xA9, 0x64, 0x61, 0x79]; // ©day year
+  static const List<int> _cmtType = [0xA9, 0x63, 0x6D, 0x74]; // ©cmt comment
+  static const List<int> _wrtType = [0xA9, 0x77, 0x72, 0x74]; // ©wrt composer
+  static const List<int> _trknType = [0x74, 0x72, 0x6B, 0x6E]; // trkn track
+  static const List<int> _diskType = [0x64, 0x69, 0x73, 0x6B]; // disk disc
+  static const List<int> _covrType = [0x63, 0x6F, 0x76, 0x72]; // covr artwork
 
   /// Replaces the `©lyr` lyrics of [filePath] with [lrcText].
   ///
@@ -138,9 +152,384 @@ class M4aWriter {
 
   // ── File assembly ──
 
+  /// Reads the tag-editor metadata (`©nam`, `©ART`, `©alb`, …, `trkn`,
+  /// `disk`, `covr`) from [filePath].
+  ///
+  /// A field the file doesn't carry is null. Never throws: an unreadable
+  /// file reads as "nothing to pre-fill".
+  static Future<TrackMetadata> readMetadata(String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) return emptyTrackMetadata;
+    Uint8List bytes;
+    try {
+      bytes = await file.readAsBytes();
+    } catch (_) {
+      return emptyTrackMetadata;
+    }
+    return metadataFromBytes(bytes);
+  }
+
+  /// Same as [readMetadata], against bytes already in memory.
+  static TrackMetadata metadataFromBytes(Uint8List bytes) {
+    if (AudioContainerReader.detect(bytes) != AudioContainer.mp4) {
+      return emptyTrackMetadata;
+    }
+    try {
+      final topLevel = _parseChildren(bytes, 0, bytes.length, 0);
+      final moov = _findByType(topLevel, 'moov');
+      if (moov == null) return emptyTrackMetadata;
+      final moovPayload = bytes.sublist(
+        moov.offset + moov.headerSize,
+        moov.offset + moov.size,
+      );
+      final ilst = _childPayload(moovPayload, ['udta', 'meta', 'ilst']);
+      if (ilst == null) return emptyTrackMetadata;
+      final children = _parseChildren(ilst, 0, ilst.length, 0);
+
+      String? text(List<int> type) {
+        final atom = _findByTypeBytes(children, type);
+        if (atom == null) return null;
+        final value = _readTextData(ilst, atom)?.trim();
+        return (value == null || value.isEmpty) ? null : value;
+      }
+
+      (int?, int?) pair(List<int> type) {
+        final atom = _findByTypeBytes(children, type);
+        if (atom == null) return (null, null);
+        return _readNumberPair(ilst, atom);
+      }
+
+      final track = pair(_trknType);
+      final disc = pair(_diskType);
+      Uint8List? artwork;
+      final covr = _findByTypeBytes(children, _covrType);
+      if (covr != null) artwork = _readCovrData(ilst, covr);
+
+      return (
+        title: text(_namType),
+        artist: text(_artType),
+        album: text(_albType),
+        albumArtist: text(_aartType),
+        genre: text(_genType),
+        year: text(_dayType),
+        trackNumber: track.$1,
+        trackTotal: track.$2,
+        discNumber: disc.$1,
+        discTotal: disc.$2,
+        composer: text(_wrtType),
+        comment: text(_cmtType),
+        artwork: artwork,
+      );
+    } catch (_) {
+      return emptyTrackMetadata;
+    }
+  }
+
+  /// Reads the UTF-8 text out of a text atom's `data` child.
+  static String? _readTextData(Uint8List ilst, _AtomHeader atom) {
+    final payload = ilst.sublist(
+      atom.offset + atom.headerSize,
+      atom.offset + atom.size,
+    );
+    final children = _parseChildren(payload, 0, payload.length, 0);
+    final data = _findByType(children, 'data');
+    if (data == null) return null;
+    // type(4) + locale(4), then text.
+    final start = data.offset + data.headerSize + 8;
+    final end = data.offset + data.size;
+    if (start > end) return null;
+    try {
+      return utf8.decode(payload.sublist(start, end));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Reads a `trkn`/`disk` number pair: after type/locale, 8 bytes of
+  /// reserved(2), number(2), total(2), reserved(2). A zero part reads as
+  /// absent, matching what the writer emits for a dropped part.
+  static (int?, int?) _readNumberPair(Uint8List ilst, _AtomHeader atom) {
+    final payload = ilst.sublist(
+      atom.offset + atom.headerSize,
+      atom.offset + atom.size,
+    );
+    final children = _parseChildren(payload, 0, payload.length, 0);
+    final data = _findByType(children, 'data');
+    if (data == null) return (null, null);
+    final start = data.offset + data.headerSize + 8;
+    final end = data.offset + data.size;
+    if (end - start < 8) return (null, null);
+    final number = (payload[start + 2] << 8) | payload[start + 3];
+    final total = (payload[start + 4] << 8) | payload[start + 5];
+    return (number == 0 ? null : number, total == 0 ? null : total);
+  }
+
+  /// Reads the image bytes out of a `covr` atom's `data` child.
+  static Uint8List? _readCovrData(Uint8List ilst, _AtomHeader atom) {
+    final payload = ilst.sublist(
+      atom.offset + atom.headerSize,
+      atom.offset + atom.size,
+    );
+    final children = _parseChildren(payload, 0, payload.length, 0);
+    final data = _findByType(children, 'data');
+    if (data == null) return null;
+    final start = data.offset + data.headerSize + 8;
+    final end = data.offset + data.size;
+    if (start >= end) return null;
+    return Uint8List.sublistView(payload, start, end);
+  }
+
+  /// Replaces the tag-editor metadata of [filePath].
+  ///
+  /// Follows [TrackMetadata]'s contract: a null field is left untouched, an
+  /// empty string removes the atom, a negative track/disc number drops that
+  /// part of the pair. Every other atom is carried across untouched.
+  ///
+  /// Same safety as [writeLrc]: the new file is built in memory, written to a
+  /// sibling temp file, re-parsed and verified field by field, and only then
+  /// atomically renamed over the original. Throws [M4aWriteException] on any
+  /// failure — the original is left intact in every case.
+  static Future<void> writeMetadata(
+    String filePath,
+    TrackMetadata metadata,
+  ) async {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      throw M4aWriteException('Fichier introuvable : $filePath');
+    }
+
+    final Uint8List bytes;
+    try {
+      bytes = await file.readAsBytes();
+    } on FileSystemException catch (e) {
+      throw M4aWriteException(
+        'Lecture impossible : ${e.osError?.message ?? e.message}',
+        e,
+      );
+    }
+
+    if (AudioContainerReader.detect(bytes) != AudioContainer.mp4) {
+      throw M4aWriteException('Pas un fichier MP4 / M4A.');
+    }
+
+    final existing = metadataFromBytes(bytes);
+
+    final changes = <_AtomChange>[];
+    void setText(List<int> type, String? value) {
+      if (value == null) return;
+      changes.add(
+        _AtomChange(type, value.isEmpty ? null : _buildTextAtom(type, value)),
+      );
+    }
+
+    setText(_namType, metadata.title);
+    setText(_artType, metadata.artist);
+    setText(_albType, metadata.album);
+    setText(_aartType, metadata.albumArtist);
+    setText(_genType, metadata.genre);
+    setText(_dayType, metadata.year);
+    setText(_cmtType, metadata.comment);
+    setText(_wrtType, metadata.composer);
+    _setNumberPair(
+      changes,
+      _trknType,
+      metadata.trackNumber,
+      metadata.trackTotal,
+      existing.trackNumber,
+      existing.trackTotal,
+    );
+    _setNumberPair(
+      changes,
+      _diskType,
+      metadata.discNumber,
+      metadata.discTotal,
+      existing.discNumber,
+      existing.discTotal,
+    );
+
+    final artwork = metadata.artwork;
+    if (artwork != null) {
+      changes.add(
+        _AtomChange(
+          _covrType,
+          artwork.isEmpty ? null : _buildCovrAtom(artwork),
+        ),
+      );
+    }
+
+    final Uint8List newBytes;
+    try {
+      newBytes = _buildFileWithIlst(bytes, (ilst) {
+        var payload = ilst;
+        for (final change in changes) {
+          payload = _rebuildWithChild(payload, change.type, change.atom, 0);
+        }
+        return payload;
+      });
+    } catch (e) {
+      throw M4aWriteException(
+        'Structure MP4 illisible ou non prise en charge : impossible d\'y '
+        'écrire sans risque.',
+        e,
+      );
+    }
+
+    // Atomic swap: temp file, verify, rename. The original is never opened
+    // for writing.
+    final temp = File('$filePath.musync.tmp');
+    try {
+      await temp.writeAsBytes(newBytes, flush: true);
+      final written = await temp.readAsBytes();
+      _verifyMetadata(written, metadata, existing);
+      await temp.rename(file.path);
+    } catch (e) {
+      if (await temp.exists()) {
+        try {
+          await temp.delete();
+        } on FileSystemException {
+          // Best effort — the original is untouched either way.
+        }
+      }
+      if (e is M4aWriteException) rethrow;
+      throw M4aWriteException(_describeWriteFailure(e), e);
+    }
+  }
+
+  /// Stages a `trkn`/`disk` change: both null means "leave alone". Otherwise
+  /// the part the caller didn't set falls back to the existing value, a
+  /// negative part drops that part, and when neither part survives the atom
+  /// is removed.
+  static void _setNumberPair(
+    List<_AtomChange> changes,
+    List<int> type,
+    int? number,
+    int? total,
+    int? existingNumber,
+    int? existingTotal,
+  ) {
+    if (number == null && total == null) return;
+    final n = number == null
+        ? existingNumber
+        : (number < 0 ? null : number);
+    final t = total == null ? existingTotal : (total < 0 ? null : total);
+    if (n == null && t == null) {
+      changes.add(_AtomChange(type, null));
+    } else {
+      changes.add(_AtomChange(type, _buildNumberAtom(type, n ?? 0, t ?? 0)));
+    }
+  }
+
+  /// Re-parses [bytes] (the temp file) and throws unless every field
+  /// [metadata] set or removed reads back as expected. Fields it left
+  /// untouched are not checked — they were verified by not being rewritten.
+  static void _verifyMetadata(
+    Uint8List bytes,
+    TrackMetadata metadata,
+    TrackMetadata existing,
+  ) {
+    if (AudioContainerReader.detect(bytes) != AudioContainer.mp4) {
+      throw const FormatException('temp file is not MP4');
+    }
+    final read = metadataFromBytes(bytes);
+
+    void checkText(String? value, String? actual, String name) {
+      if (value == null) return;
+      final expected = value.isEmpty ? null : value;
+      if (expected != actual) {
+        throw FormatException('temp file $name mismatch');
+      }
+    }
+
+    checkText(metadata.title, read.title, '©nam');
+    checkText(metadata.artist, read.artist, '©ART');
+    checkText(metadata.album, read.album, '©alb');
+    checkText(metadata.albumArtist, read.albumArtist, 'aART');
+    checkText(metadata.genre, read.genre, '©gen');
+    checkText(metadata.year, read.year, '©day');
+    checkText(metadata.comment, read.comment, '©cmt');
+    checkText(metadata.composer, read.composer, '©wrt');
+
+    void checkPair(
+      int? number,
+      int? total,
+      int? existingNumber,
+      int? existingTotal,
+      int? readNumber,
+      int? readTotal,
+      String name,
+    ) {
+      if (number == null && total == null) return;
+      final expectedNumber = number == null
+          ? existingNumber
+          : (number < 0 ? null : number);
+      final expectedTotal = total == null
+          ? existingTotal
+          : (total < 0 ? null : total);
+      if (expectedNumber != readNumber || expectedTotal != readTotal) {
+        throw FormatException('temp file $name mismatch');
+      }
+    }
+
+    checkPair(
+      metadata.trackNumber,
+      metadata.trackTotal,
+      existing.trackNumber,
+      existing.trackTotal,
+      read.trackNumber,
+      read.trackTotal,
+      'trkn',
+    );
+    checkPair(
+      metadata.discNumber,
+      metadata.discTotal,
+      existing.discNumber,
+      existing.discTotal,
+      read.discNumber,
+      read.discTotal,
+      'disk',
+    );
+
+    final artwork = metadata.artwork;
+    if (artwork != null) {
+      final actual = read.artwork;
+      final matches = artwork.isEmpty
+          ? actual == null
+          : actual != null && _bytesEqual(artwork, actual);
+      if (!matches) throw const FormatException('temp file covr mismatch');
+    }
+  }
+
+  static bool _bytesEqual(Uint8List a, Uint8List b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  // ── File assembly ──
+
   /// Returns the full new file bytes with the `©lyr` atom replaced/added (or
   /// removed when [text] is null).
   static Uint8List _buildFileWithLyrics(Uint8List bytes, String? text) {
+    final newLyr = text == null ? null : _buildLyrAtom(text);
+    return _buildFileWithIlst(
+      bytes,
+      (ilst) => _rebuildWithChild(ilst, _lyrType, newLyr, 0),
+    );
+  }
+
+  /// Rebuilds the file with [updateIlst] applied to the ilst payload,
+  /// creating the `udta > meta > ilst` chain when it is missing.
+  ///
+  /// The moov atom is rebuilt around the new payload, `stco`/`co64` entries
+  /// are fixed up when moov moved in front of `mdat`, and the file is
+  /// reassembled around it. Throws [FormatException] when the structure
+  /// can't be navigated safely.
+  static Uint8List _buildFileWithIlst(
+    Uint8List bytes,
+    Uint8List Function(Uint8List ilstPayload) updateIlst,
+  ) {
     final topLevel = _parseChildren(bytes, 0, bytes.length, 0);
     final moov = _findByType(topLevel, 'moov');
     if (moov == null) {
@@ -152,7 +541,7 @@ class M4aWriter {
       moov.offset + moov.headerSize,
       moov.offset + moov.size,
     );
-    final newMoovPayload = _rebuildMoovPayload(moovPayload, text);
+    final newMoovPayload = _rebuildMoovWithIlst(moovPayload, updateIlst);
     final newMoov = _makeAtom('moov', newMoovPayload);
     final delta = newMoov.length - moov.size;
 
@@ -172,19 +561,24 @@ class M4aWriter {
     return out.toBytes();
   }
 
-  /// Rebuilds the moov payload with an updated `udta > meta > ilst > ©lyr`
-  /// chain. Creates any missing parent atoms.
+  /// Rebuilds the moov payload with [updateIlst] applied to the
+  /// `udta > meta > ilst` chain, creating any missing parent atoms.
   ///
-  /// Empty parent atoms left behind by a removal are valid MP4 and harmless;
-  /// pruning them would add risk for no benefit.
-  static Uint8List _rebuildMoovPayload(Uint8List moovPayload, String? text) {
-    final newLyr = text == null ? null : _buildLyrAtom(text);
-
+  /// When the update leaves the ilst empty and the chain had to be created
+  /// for it, the moov payload comes back unchanged: a removal on a missing
+  /// chain is a no-op, not an empty shell of new atoms. Empty parent atoms
+  /// left behind by a removal on an existing chain are valid MP4 and
+  /// harmless; pruning them would add risk for no benefit.
+  static Uint8List _rebuildMoovWithIlst(
+    Uint8List moovPayload,
+    Uint8List Function(Uint8List ilstPayload) updateIlst,
+  ) {
     // Walk down, creating missing parents on the way when adding.
     final udtaRef = _childRef(moovPayload, 'udta', 0);
     if (udtaRef == null) {
-      if (newLyr == null) return moovPayload; // nothing to remove
-      final ilst = _makeAtom('ilst', newLyr);
+      final newIlstPayload = updateIlst(Uint8List(0));
+      if (newIlstPayload.isEmpty) return moovPayload; // nothing to remove
+      final ilst = _makeAtom('ilst', newIlstPayload);
       final meta = _makeAtom('meta', _buildMetaPayload(ilst));
       final udta = _makeAtom('udta', meta);
       return _rebuildWithChild(moovPayload, _typeBytes('udta'), udta, 0);
@@ -192,8 +586,9 @@ class M4aWriter {
 
     final metaRef = _childRef(udtaRef.payload, 'meta', 0);
     if (metaRef == null) {
-      if (newLyr == null) return moovPayload;
-      final ilst = _makeAtom('ilst', newLyr);
+      final newIlstPayload = updateIlst(Uint8List(0));
+      if (newIlstPayload.isEmpty) return moovPayload;
+      final ilst = _makeAtom('ilst', newIlstPayload);
       final meta = _makeAtom('meta', _buildMetaPayload(ilst));
       final newUdtaPayload =
           _rebuildWithChild(udtaRef.payload, _typeBytes('meta'), meta, 0);
@@ -204,8 +599,9 @@ class M4aWriter {
     // meta's children start after 4 version/flags bytes.
     final ilstRef = _childRef(metaRef.payload, 'ilst', 4);
     if (ilstRef == null) {
-      if (newLyr == null) return moovPayload;
-      final ilst = _makeAtom('ilst', newLyr);
+      final newIlstPayload = updateIlst(Uint8List(0));
+      if (newIlstPayload.isEmpty) return moovPayload;
+      final ilst = _makeAtom('ilst', newIlstPayload);
       final newMetaPayload =
           _rebuildWithChild(metaRef.payload, _typeBytes('ilst'), ilst, 4);
       final newUdtaPayload = _rebuildWithChild(udtaRef.payload,
@@ -214,7 +610,7 @@ class M4aWriter {
           moovPayload, _typeBytes('udta'), _makeAtom('udta', newUdtaPayload), 0);
     }
 
-    final newIlstPayload = _rebuildWithChild(ilstRef.payload, _lyrType, newLyr, 0);
+    final newIlstPayload = updateIlst(ilstRef.payload);
     final newIlst = _makeAtom('ilst', newIlstPayload);
     final newMetaPayload =
         _rebuildWithChild(metaRef.payload, _typeBytes('ilst'), newIlst, 4);
@@ -266,6 +662,50 @@ class M4aWriter {
   /// size(4) + type(4) + payload.
   static Uint8List _makeAtom(String type, Uint8List payload) =>
       _makeAtomBytes(_typeBytes(type), payload);
+
+  /// Builds a text metadata atom (`©nam`, `©ART`, …): a `data` child holding
+  /// UTF-8 text, the iTunes convention.
+  static Uint8List _buildTextAtom(List<int> type, String text) {
+    final textBytes = utf8.encode(text);
+    final data = BytesBuilder(copy: false)
+      ..add(_u32(16 + textBytes.length))
+      ..add(_typeBytes('data'))
+      ..add(_u32(1)) // UTF-8
+      ..add(_u32(0)) // locale
+      ..add(textBytes);
+    return _makeAtomBytes(type, data.toBytes());
+  }
+
+  /// Builds a `trkn`/`disk` atom: a `data` child with 8 binary bytes —
+  /// reserved(2), number(2), total(2), reserved(2).
+  static Uint8List _buildNumberAtom(List<int> type, int number, int total) {
+    final payload = Uint8List(8);
+    payload[2] = (number >> 8) & 0xFF;
+    payload[3] = number & 0xFF;
+    payload[4] = (total >> 8) & 0xFF;
+    payload[5] = total & 0xFF;
+    final data = BytesBuilder(copy: false)
+      ..add(_u32(16 + payload.length))
+      ..add(_typeBytes('data'))
+      ..add(_u32(0)) // binary
+      ..add(_u32(0)) // locale
+      ..add(payload);
+    return _makeAtomBytes(type, data.toBytes());
+  }
+
+  /// Builds a `covr` atom: a `data` child holding the image bytes, typed
+  /// JPEG (13) or PNG (14) from the magic bytes.
+  static Uint8List _buildCovrAtom(Uint8List image) {
+    final kind =
+        (image.length >= 4 && image[0] == 0x89 && image[1] == 0x50) ? 14 : 13;
+    final data = BytesBuilder(copy: false)
+      ..add(_u32(16 + image.length))
+      ..add(_typeBytes('data'))
+      ..add(_u32(kind))
+      ..add(_u32(0)) // locale
+      ..add(image);
+    return _makeAtomBytes(_covrType, data.toBytes());
+  }
 
   static Uint8List _makeAtomBytes(List<int> type, Uint8List payload) {
     final out = BytesBuilder(copy: false)
@@ -596,4 +1036,12 @@ class _ChildRef {
     required this.offset,
     required this.size,
   });
+}
+
+/// One ilst child to replace ([atom]) or remove (null [atom]).
+class _AtomChange {
+  final List<int> type;
+  final Uint8List? atom;
+
+  const _AtomChange(this.type, this.atom);
 }
