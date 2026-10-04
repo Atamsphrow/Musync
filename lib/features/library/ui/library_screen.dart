@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show File, FileStat, FileSystemEntityType, Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +7,8 @@ import 'package:musync/core/utils/snackbar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:musync/core/router/app_router.dart';
+import 'package:musync/core/id3/id3_reader.dart';
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/core/services/permission_service.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
@@ -224,6 +226,54 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // The current track's lyrics are read straight from disk, bypassing
     // every cache.
     ref.invalidate(currentLyricsProvider);
+    // Diagnostic for external edits (Musicolet): log exactly which file
+    // Musync reads for the current track, so a path mismatch can be ruled
+    // in or out from the Journal (Paramètres, long-press the title).
+    unawaited(_logCurrentSongFile());
+  }
+
+  /// Logs the current song's file identity to the Journal: path, size,
+  /// mtime, raw TIT2, and adjacent .lrc presence.
+  Future<void> _logCurrentSongFile() async {
+    final song = ref.read(currentSongProvider);
+    if (song == null) return;
+    final path = song.filePath;
+    String size = '?';
+    String mtime = '?';
+    try {
+      final stat = await FileStat.stat(path);
+      if (stat.type != FileSystemEntityType.notFound) {
+        size = '${stat.size}';
+        mtime = stat.modified.toIso8601String();
+      } else {
+        size = 'NOT FOUND';
+      }
+    } catch (e) {
+      size = 'ERR $e';
+    }
+    String lrc = 'none';
+    final dot = path.lastIndexOf('.');
+    if (dot >= 0) {
+      for (final ext in ['.lrc', '.LRC']) {
+        try {
+          if (await File('${path.substring(0, dot)}$ext').exists()) {
+            lrc = ext;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+    String rawTitle = '?';
+    try {
+      rawTitle = (await Id3Reader.readMetadata(path)).title ?? '(no TIT2)';
+    } catch (_) {}
+    DebugLog.instance.info(
+      'Diag',
+      'Morceau en cours: ${song.title}\n'
+      'Fichier: $path\n'
+      'Taille: $size | Modifié: $mtime | .lrc: $lrc\n'
+      'TIT2 brut: $rawTitle',
+    );
   }
 
   Future<void> _requestPermissions() async {
