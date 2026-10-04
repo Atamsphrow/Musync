@@ -400,6 +400,126 @@ class AudioPlayerService {
     if (_player.hasPrevious) await _player.seekToPrevious();
   }
 
+  /// Moves the track at [oldIndex] to [newIndex] in the playback queue.
+  ///
+  /// Both [_queue] and the underlying [ConcatenatingAudioSource] are updated,
+  /// so the audio that follows a move stays the audio the UI lists. [newIndex]
+  /// is the track's final position: `ReorderableListView.onReorderItem`
+  /// reports exactly that (the framework adjusts for the removed item), so no
+  /// index shifting is needed on either side — the UI passes the value
+  /// through, this method owns the player state.
+  ///
+  /// The playing track keeps playing: only its slot changes, never its
+  /// identity, so no track-change is announced and the lyrics/bubble keep
+  /// their state. Invalid indexes are a silent no-op — this is called from a
+  /// drag gesture, never with a reason to crash.
+  Future<void> reorderQueue(int oldIndex, int newIndex) async {
+    final source = _player.audioSource;
+    if (source is! ConcatenatingAudioSource) return;
+    final length = _queue.length;
+    if (oldIndex < 0 || oldIndex >= length) return;
+    if (newIndex < 0 || newIndex >= length) return;
+    if (oldIndex == newIndex) return;
+    final updated = List<Song>.of(_queue);
+    updated.insert(newIndex, updated.removeAt(oldIndex));
+    _queue = List.unmodifiable(updated);
+    await source.move(oldIndex, newIndex);
+    await _reconcileCurrentIndex();
+  }
+
+  /// Removes the track at [index] from the playback queue.
+  ///
+  /// When the removed track is the one playing, playback continues with the
+  /// track that slides into its slot — or the new tail when the tail was
+  /// removed — restarted from zero. When the queue becomes empty, playback
+  /// stops and the player is left with an empty source, so a later play
+  /// cannot resurrect the removed track. The player is never left on an
+  /// invalid index; invalid indexes are a silent no-op.
+  Future<void> removeFromQueue(int index) async {
+    final source = _player.audioSource;
+    if (source is! ConcatenatingAudioSource) return;
+    if (index < 0 || index >= _queue.length) return;
+    final wasCurrent = index == currentIndex;
+    final updated = List<Song>.of(_queue)..removeAt(index);
+    _queue = List.unmodifiable(updated);
+    if (updated.isEmpty) {
+      await _player.stop();
+      // Best-effort: without this, the stopped player still holds the removed
+      // track's source and a later play would bring it back from the dead.
+      try {
+        await _player.setAudioSource(
+          ConcatenatingAudioSource(children: const []),
+        );
+      } catch (_) {
+        // The queue is empty and playback stopped either way.
+      }
+      _setCurrentSong(null);
+      return;
+    }
+    if (wasCurrent) {
+      // Seek to the neighbour in the old source *before* removing the playing
+      // child: what the platform does when the current child disappears
+      // under it is not something to depend on.
+      final target = index < updated.length ? index : updated.length - 1;
+      final oldTarget = index < updated.length ? index + 1 : index - 1;
+      _setCurrentSong(updated[target]);
+      await _player.seek(Duration.zero, index: oldTarget);
+      await source.removeAt(index);
+    } else {
+      await source.removeAt(index);
+    }
+    await _reconcileCurrentIndex();
+  }
+
+  /// Queues [song] to play right after the current track.
+  ///
+  /// When the song is already in the queue it is moved instead of duplicated —
+  /// "play next" on an already-queued track means "sooner", not "twice". With
+  /// no queue loaded at all, this simply starts playback of the song.
+  Future<void> playNext(Song song) async {
+    final source = _player.audioSource;
+    if (source is! ConcatenatingAudioSource || _queue.isEmpty) {
+      await playSong(song, queue: [song], index: 0);
+      return;
+    }
+    final insertAt = (currentIndex + 1).clamp(0, _queue.length);
+    final existing = _queue.indexOf(song);
+    if (existing == insertAt) return; // Already exactly next: nothing to do.
+    final updated = List<Song>.of(_queue);
+    if (existing >= 0) {
+      final moved = updated.removeAt(existing);
+      // Removing a slot before the insertion point shifts it down by one.
+      final target = existing < insertAt ? insertAt - 1 : insertAt;
+      updated.insert(target, moved);
+      _queue = List.unmodifiable(updated);
+      await source.move(existing, target);
+    } else {
+      updated.insert(insertAt, song);
+      _queue = List.unmodifiable(updated);
+      await source.insert(insertAt, _toSource(song));
+    }
+    await _reconcileCurrentIndex();
+  }
+
+  /// Re-aligns the player's index with [_queue] after an in-place mutation.
+  ///
+  /// The platform usually follows moves/inserts/removals on its own, but its
+  /// index event can lag behind the mutation; seeking explicitly to the
+  /// current track's slot at the same position is a no-op when already
+  /// aligned and a repair when not. Never throws: worst case the UI corrects
+  /// itself on the next platform event.
+  Future<void> _reconcileCurrentIndex() async {
+    final current = _currentSong;
+    if (current == null || _queue.isEmpty) return;
+    final expected = _queue.indexOf(current);
+    if (expected < 0 || _player.currentIndex == expected) return;
+    try {
+      await _player.seek(_player.position, index: expected);
+    } catch (_) {
+      // Best-effort, see above.
+    }
+  }
+
   Future<void> toggleShuffle() async {
     final enabling = !_player.shuffleModeEnabled;
     // Reshuffling before enabling avoids replaying the order from last time.
