@@ -47,6 +47,18 @@ class SongListNotifier extends AsyncNotifier<List<Song>> {
     return _sorted(songs, sort);
   }
 
+  /// Replaces one song in the emitted list after a tag edit, keeping the
+  /// current sort order. Cheaper than a full rescan for a change the app
+  /// made itself — the new values are already known.
+  void updateSong(Song updated) {
+    state.whenData((songs) {
+      final index = songs.indexOf(updated);
+      if (index < 0) return;
+      final copy = List<Song>.from(songs)..[index] = updated;
+      state = AsyncValue.data(_sorted(copy, ref.read(librarySortProvider)));
+    });
+  }
+
   Future<void> refresh() async {
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
