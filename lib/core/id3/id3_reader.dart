@@ -1,10 +1,12 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:musync/core/id3/audio_container.dart';
 import 'package:musync/core/id3/id3_tag.dart';
 import 'package:musync/core/id3/lrc_parser.dart';
 import 'package:musync/core/id3/m4a_writer.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
+import 'package:musync/core/id3/tag_metadata.dart';
 
 /// Lyrics read out of a file's ID3 tag.
 typedef LyricsPair = ({SyncedLyrics? synced, UnsyncedLyrics? unsynced});
@@ -364,6 +366,158 @@ class Id3Reader {
       if (title != null && artist != null && album != null) break;
     }
     return (title: title, artist: artist, album: album);
+  }
+
+  /// Full metadata for the tag editor: every field the editor shows, plus the
+  /// cover art bytes.
+  ///
+  /// M4A files are read through [M4aWriter.readMetadata]; a file with no
+  /// usable tag comes back all null. Never throws — the editor treats an
+  /// unreadable file as "nothing to pre-fill", not as a failure.
+  static Future<TrackMetadata> readFullMetadata(String filePath) async {
+    final file = File(filePath);
+    bool exists;
+    try {
+      exists = await file.exists();
+    } on FileSystemException {
+      return emptyTrackMetadata;
+    }
+    if (!exists) return emptyTrackMetadata;
+
+    final Uint8List head;
+    try {
+      head = await _readHead(file);
+    } on FileSystemException {
+      return emptyTrackMetadata;
+    }
+
+    if (AudioContainerReader.detect(head) == AudioContainer.mp4) {
+      return M4aWriter.readMetadata(filePath);
+    }
+
+    final tag = Id3Tag.parse(head);
+    if (tag == null || !tag.isSupported) return emptyTrackMetadata;
+    return _fullMetadataFromTag(tag);
+  }
+
+  /// Same as [readFullMetadata], against bytes already in memory.
+  static TrackMetadata fullMetadataFromBytes(Uint8List bytes) {
+    final tag = Id3Tag.parse(bytes);
+    if (tag == null || !tag.isSupported) return emptyTrackMetadata;
+    return _fullMetadataFromTag(tag);
+  }
+
+  static TrackMetadata _fullMetadataFromTag(Id3Tag tag) {
+    String? title;
+    String? artist;
+    String? album;
+    String? albumArtist;
+    String? genre;
+    String? yearV23;
+    String? yearV24;
+    String? composer;
+    String? comment;
+    (int?, int?)? track;
+    (int?, int?)? disc;
+    Uint8List? artwork;
+
+    for (final frame in tag.frames) {
+      if (frame.isOpaque) continue;
+      switch (frame.id) {
+        case 'TIT2':
+          title ??= _parseTextFrame(frame.decodedBody);
+        case 'TPE1':
+          artist ??= _parseTextFrame(frame.decodedBody);
+        case 'TALB':
+          album ??= _parseTextFrame(frame.decodedBody);
+        case 'TPE2':
+          albumArtist ??= _parseTextFrame(frame.decodedBody);
+        case 'TCON':
+          genre ??= _parseTextFrame(frame.decodedBody);
+        case 'TYER':
+          yearV23 ??= _parseTextFrame(frame.decodedBody);
+        case 'TDRC':
+          yearV24 ??= _parseTextFrame(frame.decodedBody);
+        case 'TCOM':
+          composer ??= _parseTextFrame(frame.decodedBody);
+        case 'TRCK':
+          track ??= _parseNumberPair(_parseTextFrame(frame.decodedBody));
+        case 'TPOS':
+          disc ??= _parseNumberPair(_parseTextFrame(frame.decodedBody));
+        case 'COMM':
+          comment ??= _parseCommFrame(frame.decodedBody);
+        case 'APIC':
+          artwork ??= _parseApicFrame(frame.decodedBody);
+      }
+    }
+
+    return (
+      title: title,
+      artist: artist,
+      album: album,
+      albumArtist: albumArtist,
+      genre: genre,
+      // The tag keeps its own version on write, so whichever year frame it
+      // carries is the one that gets rewritten; reading prefers the one that
+      // matches the tag, falling back to the other.
+      year: tag.majorVersion >= 4 ? (yearV24 ?? yearV23) : (yearV23 ?? yearV24),
+      trackNumber: track?.$1,
+      trackTotal: track?.$2,
+      discNumber: disc?.$1,
+      discTotal: disc?.$2,
+      composer: composer,
+      comment: comment,
+      artwork: artwork,
+    );
+  }
+
+  /// Parses a "3" or "3/12" number pair (TRCK, TPOS).
+  static (int?, int?) _parseNumberPair(String? text) {
+    if (text == null) return (null, null);
+    final parts = text.split('/');
+    int? part(String s) {
+      final trimmed = s.trim();
+      if (trimmed.isEmpty) return null;
+      return int.tryParse(trimmed);
+    }
+
+    return (part(parts[0]), parts.length > 1 ? part(parts[1]) : null);
+  }
+
+  /// COMM: encoding, 3-byte language, descriptor, terminator, then the text.
+  /// The first comment frame wins; the descriptor is not surfaced.
+  static String? _parseCommFrame(Uint8List body) {
+    if (body.length < 5) return null;
+    final encoding = body[0];
+    final descriptorEnd = Id3Tag.findTerminator(body, 4, encoding);
+    if (descriptorEnd == -1) return null;
+    final textStart = descriptorEnd + Id3Encoding.terminatorLength(encoding);
+    if (textStart >= body.length) return null;
+    final text = Id3Tag.decodeText(
+      Uint8List.sublistView(body, textStart),
+      encoding,
+    ).trim();
+    return text.isEmpty ? null : text;
+  }
+
+  /// APIC: encoding, MIME (latin-1, null-terminated), picture type, then the
+  /// description in [encoding], then the image bytes. The first picture wins.
+  static Uint8List? _parseApicFrame(Uint8List body) {
+    if (body.length < 4) return null;
+    final encoding = body[0];
+    // MIME type.
+    var offset = 1;
+    while (offset < body.length && body[offset] != 0) {
+      offset++;
+    }
+    // Terminator, then the picture-type byte.
+    offset += 2;
+    if (offset > body.length) return null;
+    final descriptionEnd = Id3Tag.findTerminator(body, offset, encoding);
+    if (descriptionEnd == -1) return null;
+    final start = descriptionEnd + Id3Encoding.terminatorLength(encoding);
+    if (start >= body.length) return null;
+    return Uint8List.sublistView(body, start);
   }
 
   /// Reads the decoded text of [wanted] text frames, walking the tag without
