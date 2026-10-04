@@ -61,14 +61,37 @@ final _currentSongMtimeProvider = StreamProvider<int>((ref) async* {
     }
   }
 
+  // Also watch the sidecar .lrc: Musicolet may write ONLY the sidecar
+  // without touching the audio file — then neither mtime nor lyrics hash
+  // of the audio changes, and the poll would miss it forever.
+  Future<int> sidecarMtime() async {
+    final dot = song.filePath.lastIndexOf('.');
+    if (dot < 0) return -1;
+    final base = song.filePath.substring(0, dot);
+    for (final ext in ['.lrc', '.LRC']) {
+      try {
+        final f = File('$base$ext');
+        if (await f.exists()) {
+          return (await f.lastModified()).millisecondsSinceEpoch;
+        }
+      } catch (_) {}
+    }
+    return -1;
+  }
+
   var lastMtime = await mtime();
   var lastHash = await lyricsHash();
+  var lastSidecar = await sidecarMtime();
   await for (final _ in Stream.periodic(const Duration(seconds: 2))) {
     final currentMtime = await mtime();
     final currentHash = await lyricsHash();
-    if (currentMtime != lastMtime || currentHash != lastHash) {
+    final currentSidecar = await sidecarMtime();
+    if (currentMtime != lastMtime ||
+        currentHash != lastHash ||
+        currentSidecar != lastSidecar) {
       lastMtime = currentMtime;
       lastHash = currentHash;
+      lastSidecar = currentSidecar;
       yield currentMtime;
     }
   }
