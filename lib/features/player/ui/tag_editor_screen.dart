@@ -147,7 +147,34 @@ class _TagEditorScreenState extends ConsumerState<TagEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: !_hasChanges,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final leave = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Abandonner les modifications ?'),
+            content: const Text(
+              'Les tags modifiés ne seront pas enregistrés.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Continuer'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Abandonner'),
+              ),
+            ],
+          ),
+        );
+        if (leave == true && context.mounted) {
+          Navigator.pop(context);
+        }
+      },
+      child: Scaffold(
       appBar: AppBar(title: const Text('Éditer les tags')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -170,6 +197,7 @@ class _TagEditorScreenState extends ConsumerState<TagEditorScreen> {
                 ),
               ),
             ),
+      ),
     );
   }
 
@@ -357,6 +385,56 @@ class _TagEditorScreenState extends ConsumerState<TagEditorScreen> {
     }
   }
 
+  /// True when the form differs from what was loaded (or last saved):
+  /// any text field, the lyrics, or the cover.
+  bool get _hasChanges {
+    if (_loading) return false;
+    if (_coverEdit != _CoverEdit.keep) return true;
+    return _title.text.trim() != (_loaded.title ?? '') ||
+        _album.text.trim() != (_loaded.album ?? '') ||
+        _artist.text.trim() != (_loaded.artist ?? '') ||
+        _albumArtist.text.trim() != (_loaded.albumArtist ?? '') ||
+        _composer.text.trim() != (_loaded.composer ?? '') ||
+        _genre.text.trim() != (_loaded.genre ?? '') ||
+        _comment.text.trim() != (_loaded.comment ?? '') ||
+        _trackNumber.text.trim() != (_loaded.trackNumber?.toString() ?? '') ||
+        _discNumber.text.trim() != (_loaded.discNumber?.toString() ?? '') ||
+        _lyrics.text != _loadedLyrics;
+  }
+
+  /// After a successful save the form values become the new baseline, so the
+  /// unsaved-changes guard doesn't fire on the way out.
+  void _syncBaseline() {
+    String? norm(TextEditingController controller) {
+      final value = controller.text.trim();
+      return value.isEmpty ? null : value;
+    }
+
+    int? num(TextEditingController controller) {
+      final value = controller.text.trim();
+      return value.isEmpty ? null : int.tryParse(value);
+    }
+
+    _loaded = (
+      title: norm(_title),
+      artist: norm(_artist),
+      album: norm(_album),
+      albumArtist: norm(_albumArtist),
+      genre: norm(_genre),
+      year: _loaded.year,
+      trackNumber: num(_trackNumber),
+      trackTotal: _loaded.trackTotal,
+      discNumber: num(_discNumber),
+      discTotal: _loaded.discTotal,
+      composer: norm(_composer),
+      comment: norm(_comment),
+      artwork: _loaded.artwork,
+    );
+    _loadedLyrics = _lyrics.text;
+    _coverEdit = _CoverEdit.keep;
+    _newCover = null;
+  }
+
   Future<void> _save() async {
     if (_saving || _loading) return;
 
@@ -459,6 +537,7 @@ class _TagEditorScreenState extends ConsumerState<TagEditorScreen> {
 
     if (!mounted) return;
     _refreshDisplays();
+    _syncBaseline();
     setState(() => _saving = false);
     Navigator.maybePop(context);
     // The editor is gone: toast on the app's messenger, Musicolet-style.
