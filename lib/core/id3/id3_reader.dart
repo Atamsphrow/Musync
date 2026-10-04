@@ -59,10 +59,21 @@ class Id3Reader {
   static Future<LyricsPair> _readSidecarLrc(String filePath) async {
     final dot = filePath.lastIndexOf('.');
     if (dot < 0) return _noLyrics;
-    final lrcPath = '${filePath.substring(0, dot)}.lrc';
-    final lrcFile = File(lrcPath);
+    final base = filePath.substring(0, dot);
+    // Try .lrc then .LRC: some taggers write uppercase (Android's ext4/f2fs
+    // is case-sensitive).
+    File? lrcFile;
+    for (final ext in ['.lrc', '.LRC']) {
+      final candidate = File('$base$ext');
+      try {
+        if (await candidate.exists()) {
+          lrcFile = candidate;
+          break;
+        }
+      } catch (_) {}
+    }
+    if (lrcFile == null) return _noLyrics;
     try {
-      if (!await lrcFile.exists()) return _noLyrics;
       final text = await lrcFile.readAsString();
       if (text.trim().isEmpty) return _noLyrics;
       final synced = LrcParser.parse(text);
@@ -179,7 +190,12 @@ class Id3Reader {
       }
 
       final major = header[3];
-      if (major != 3 && major != 4) return _noLyrics;
+      if (major != 3 && major != 4) {
+        // Unsupported ID3 version — but a sidecar .lrc may still exist.
+        await handle.close();
+        handle = null;
+        return await _readSidecarLrc(filePath);
+      }
 
       // Unsynchronisation (0x80) or an extended header (0x40).
       if (header[5] & 0xC0 != 0) {
