@@ -1,8 +1,9 @@
-/// Settings: lyrics sources (P5) and the debug log (T9).
+/// Settings: the app's configuration screens, grouped by concern.
 ///
-/// Two tabs rather than two screens because they are both "things you go and
-/// look at when something isn't working", and the report asked for the log to
-/// live alongside the sources.
+/// The tabs are the day-to-day settings — lyrics sources, appearance, the
+/// local AI, backup, and the library's excluded folders. The debug Journal
+/// stays hidden until revealed with a long-press on the title: it is a
+/// troubleshooting tool, not a daily setting.
 library;
 
 import 'package:flutter/material.dart';
@@ -20,6 +21,7 @@ import 'package:musync/features/settings/data/lyrics_source_config.dart';
 import 'package:musync/features/settings/providers/settings_provider.dart';
 import 'package:musync/features/settings/ui/ai_tab.dart';
 import 'package:musync/features/settings/ui/backup_tab.dart';
+import 'package:musync/features/settings/ui/library_tab.dart';
 import 'package:musync/features/settings/ui/settings_export_dialog.dart';
 import 'package:musync/features/settings/ui/settings_import_dialog.dart';
 
@@ -41,7 +43,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // The key forces a fresh controller when the tab count changes;
       // otherwise the old length would stick and misalign the indicator.
       key: ValueKey(_showJournal),
-      length: _showJournal ? 5 : 4,
+      length: _showJournal ? 6 : 5,
       child: Scaffold(
         appBar: AppBar(
           title: GestureDetector(
@@ -72,7 +74,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
           bottom: TabBar(
-            // Scrollable: four labels do not fit side by side on a phone, and
+            // Scrollable: five labels do not fit side by side on a phone, and
             // squeezing them in would cost the icons.
             isScrollable: true,
             tabAlignment: TabAlignment.start,
@@ -86,6 +88,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const Tab(
                 text: 'Historique',
                 icon: Icon(Icons.settings_backup_restore),
+              ),
+              const Tab(
+                text: 'Bibliothèque',
+                icon: Icon(Icons.folder_outlined),
               ),
               if (_showJournal)
                 const Tab(
@@ -101,6 +107,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const AppearanceTab(),
             const AiTab(),
             const BackupTab(),
+            const LibraryTab(),
             if (_showJournal) const _DebugTab(),
           ],
         ),
@@ -534,7 +541,8 @@ class _SourceDialogState extends State<_SourceDialog> {
               labelText: 'Adresse',
               hintText: 'https://lrclib.net',
               errorText: _urlError,
-              helperText: 'Adresse exacte du fournisseur. /api n\'est plus '
+              helperText:
+                  'Adresse exacte du fournisseur. /api n\'est plus '
                   'ajouté automatiquement.',
             ),
           ),
