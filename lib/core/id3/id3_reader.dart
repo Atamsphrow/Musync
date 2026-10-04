@@ -284,7 +284,63 @@ class Id3Reader {
       filePath,
       const {'TIT2', 'TPE1', 'TALB'},
     );
-    return (title: frames['TIT2'], artist: frames['TPE1'], album: frames['TALB']);
+    var title = frames['TIT2'];
+    var artist = frames['TPE1'];
+    var album = frames['TALB'];
+
+    // ID3v1 fallback: some taggers (or tagger permission failures that only
+    // reach the v1 trailer) leave the v2 frames stale while the 128-byte
+    // trailer at the end of the file carries the fresh values. Fill only
+    // the fields ID3v2 didn't provide.
+    if (title == null || artist == null || album == null) {
+      final v1 = await _readId3v1(file);
+      title ??= v1['title'];
+      artist ??= v1['artist'];
+      album ??= v1['album'];
+    }
+    return (title: title, artist: artist, album: album);
+  }
+
+  /// Reads the ID3v1 trailer (last 128 bytes, header "TAG").
+  ///
+  /// Fields are fixed-width latin-1: title[30], artist[30], album[30],
+  /// year[4], comment[28..30], track, genre. Only the three text fields
+  /// are returned; absent trailer yields an empty map.
+  static Future<Map<String, String>> _readId3v1(File file) async {
+    final found = <String, String>{};
+    RandomAccessFile? handle;
+    try {
+      final length = await file.length();
+      if (length < 128) return found;
+      handle = await file.open();
+      await handle.setPosition(length - 128);
+      final trailer = await handle.read(128);
+      if (trailer.length < 128) return found;
+      if (trailer[0] != 0x54 || trailer[1] != 0x41 || trailer[2] != 0x47) {
+        return found; // No "TAG" header.
+      }
+      String field(int start, int len) {
+        var end = start + len;
+        while (end > start && trailer[end - 1] == 0) {
+          end--;
+        }
+        if (end <= start) return '';
+        // latin-1: each byte maps directly to U+0000..U+00FF.
+        return String.fromCharCodes(trailer.sublist(start, end)).trim();
+      }
+
+      final title = field(3, 30);
+      final artist = field(33, 30);
+      final album = field(63, 30);
+      if (title.isNotEmpty) found['title'] = title;
+      if (artist.isNotEmpty) found['artist'] = artist;
+      if (album.isNotEmpty) found['album'] = album;
+      return found;
+    } on FileSystemException {
+      return found;
+    } finally {
+      await handle?.close();
+    }
   }
 
   /// Same as [readMetadata], against bytes already in memory.
