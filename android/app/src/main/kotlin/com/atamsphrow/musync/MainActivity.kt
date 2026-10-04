@@ -1,5 +1,6 @@
 package com.atamsphrow.musync
 
+import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -118,6 +119,11 @@ class MainActivity : AudioServiceActivity() {
         channel!!.setMethodCallHandler { call, result ->
                 when (call.method) {
                     "rescan" -> rescan(call.argument<String>("path"), result)
+                    "requestWriteAccess" -> requestWriteAccess(
+                        (call.argument<Number>("mediaStoreId"))?.toLong(),
+                        call.argument<String>("path"),
+                        result,
+                    )
                     "shareAudio" -> shareAudio(
                         (call.argument<Number>("mediaStoreId"))?.toLong(),
                         call.argument<String>("title"),
@@ -407,6 +413,102 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
+    /// Pending result for the system write-access dialog, answered in
+    /// [onActivityResult].
+    private var pendingWriteAccessResult: MethodChannel.Result? = null
+
+    /// Asks Android for permission to modify a media file, the way Musicolet
+    /// does before writing tags.
+    ///
+    /// On Android 11+ (API 30+) this shows the system dialog "Allow Musync to
+    /// modify this file?". The answer arrives in [onActivityResult]: true when
+    /// the user allowed, false when they refused. A refusal is not an error —
+    /// Dart aborts the save silently.
+    ///
+    /// Below API 30 there is no such request ([MediaStore.createWriteRequest]
+    /// does not exist) and plain file access applies, so it answers true
+    /// straight away. A track MediaStore doesn't index has nothing the system
+    /// could grant, so that answers true too.
+    private fun requestWriteAccess(
+        mediaStoreId: Long?,
+        path: String?,
+        result: MethodChannel.Result,
+    ) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            result.success(true)
+            return
+        }
+        val uri = resolveMediaUri(mediaStoreId, path)
+        if (uri == null) {
+            result.success(true)
+            return
+        }
+        if (pendingWriteAccessResult != null) {
+            result.error("busy", "A write-access request is already pending.", null)
+            return
+        }
+        try {
+            val request = MediaStore.createWriteRequest(contentResolver, listOf(uri))
+            pendingWriteAccessResult = result
+            startIntentSenderForResult(
+                request.intentSender,
+                WRITE_ACCESS_REQUEST_CODE,
+                null, 0, 0, 0, null,
+            )
+        } catch (e: Exception) {
+            result.success(false)
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == WRITE_ACCESS_REQUEST_CODE) {
+            pendingWriteAccessResult?.success(resultCode == Activity.RESULT_OK)
+            pendingWriteAccessResult = null
+        }
+    }
+
+    /// The MediaStore content URI of a track: from its audio id, falling back
+    /// to a lookup by file path, or null when MediaStore doesn't index it.
+    private fun resolveMediaUri(mediaStoreId: Long?, path: String?): Uri? {
+        if (mediaStoreId != null && mediaStoreId > 0) {
+            val uri = ContentUris.withAppendedId(
+                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                mediaStoreId,
+            )
+            try {
+                contentResolver.query(
+                    uri,
+                    arrayOf(MediaStore.Audio.Media._ID),
+                    null, null, null,
+                )?.use { if (it.moveToFirst()) return uri }
+            } catch (_: Exception) {
+                // Fall through to the path lookup.
+            }
+        }
+        if (path.isNullOrEmpty()) return null
+        return try {
+            contentResolver.query(
+                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Audio.Media._ID),
+                "${MediaStore.MediaColumns.DATA} = ?",
+                arrayOf(path),
+                null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    ContentUris.withAppendedId(
+                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                        cursor.getLong(0),
+                    )
+                } else {
+                    null
+                }
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun rescan(path: String?, result: MethodChannel.Result) {
         if (path.isNullOrEmpty()) {
             result.error("no_path", "A file path is required.", null)
@@ -427,6 +529,9 @@ class MainActivity : AudioServiceActivity() {
 
     private companion object {
         const val MEDIA_STORE_CHANNEL = "com.atamsphrow.musync/media_store"
+
+        /// Request code for the `MediaStore.createWriteRequest` dialog.
+        const val WRITE_ACCESS_REQUEST_CODE = 2401
 
         /// Must match `NativeCrashReport.fileName` on the Dart side.
         const val NATIVE_CRASH_FILE = "native_crash.txt"
