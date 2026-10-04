@@ -20,6 +20,7 @@ import 'package:musync/features/library/ui/widgets/song_tile.dart';
 import 'package:musync/features/library/ui/folders_screen.dart';
 import 'package:musync/features/lyrics/ui/batch_screen.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
+import 'package:musync/features/player/ui/queues_sheet.dart';
 import 'package:musync/features/player/ui/mini_player.dart';
 
 /// Home screen: the whole music library, plus the mini player docked at the
@@ -590,6 +591,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                           ),
                         ],
                         AsyncData(:final value) => [
+                          if (query.isNotEmpty && value.isNotEmpty)
+                            SliverToBoxAdapter(
+                              child: _SearchQueueHeader(
+                                songs: value,
+                                query: query,
+                              ),
+                            ),
                           SliverList.builder(
                             itemCount: value.length,
                             itemBuilder: (context, index) => SongTile(
@@ -843,6 +851,43 @@ class _SearchField extends ConsumerWidget {
             borderSide: BorderSide.none,
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Header shown above search results: result count plus a one-tap way to
+/// turn the results into a named queue (e.g. search "Juice WRLD" →
+/// "Créer une file" → a "Juice WRLD" queue).
+class _SearchQueueHeader extends ConsumerWidget {
+  final List<Song> songs;
+  final String query;
+
+  const _SearchQueueHeader({required this.songs, required this.query});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '${songs.length} résultat${songs.length > 1 ? 's' : ''}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          FilledButton.tonalIcon(
+            onPressed: () => createQueueFromSongs(
+              context,
+              ref,
+              songs,
+              suggestedName: query,
+            ),
+            icon: const Icon(Icons.playlist_add, size: 18),
+            label: const Text('Créer une file'),
+          ),
+        ],
       ),
     );
   }
