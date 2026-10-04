@@ -12,16 +12,21 @@ enum SleepTimerOption {
   min45,
   min60,
   min90,
+  custom,
   endOfTrack;
 
-  /// Null for [disabled] and [endOfTrack]: neither is a wall-clock duration.
+  /// Null for [disabled], [custom] and [endOfTrack]: the custom duration is
+  /// carried in [SleepTimerState.customMinutes] instead.
   Duration? get duration => switch (this) {
         SleepTimerOption.min15 => const Duration(minutes: 15),
         SleepTimerOption.min30 => const Duration(minutes: 30),
         SleepTimerOption.min45 => const Duration(minutes: 45),
         SleepTimerOption.min60 => const Duration(minutes: 60),
         SleepTimerOption.min90 => const Duration(minutes: 90),
-        SleepTimerOption.disabled || SleepTimerOption.endOfTrack => null,
+        SleepTimerOption.disabled ||
+        SleepTimerOption.custom ||
+        SleepTimerOption.endOfTrack =>
+          null,
       };
 
   String get label => switch (this) {
@@ -31,6 +36,7 @@ enum SleepTimerOption {
         SleepTimerOption.min45 => '45 min',
         SleepTimerOption.min60 => '60 min',
         SleepTimerOption.min90 => '90 min',
+        SleepTimerOption.custom => 'Personnalisé',
         SleepTimerOption.endOfTrack => 'Fin du morceau',
       };
 }
@@ -42,12 +48,22 @@ class SleepTimerState {
   /// disabled or waits for the end of the track.
   final Duration? remaining;
 
+  /// The chosen minutes when [option] is [SleepTimerOption.custom].
+  final int? customMinutes;
+
   const SleepTimerState({
     this.option = SleepTimerOption.disabled,
     this.remaining,
+    this.customMinutes,
   });
 
   bool get active => option != SleepTimerOption.disabled;
+
+  /// What the sheet and tooltips show for the current option.
+  String get displayLabel =>
+      option == SleepTimerOption.custom && customMinutes != null
+          ? 'Personnalisé · $customMinutes min'
+          : option.label;
 }
 
 final sleepTimerProvider =
@@ -73,8 +89,10 @@ class SleepTimerController extends Notifier<SleepTimerState> {
   }
 
   /// Replaces the current timer with [option], or cancels it for
-  /// [SleepTimerOption.disabled].
+  /// [SleepTimerOption.disabled]. [SleepTimerOption.custom] needs a duration:
+  /// use [setCustomMinutes] for it instead.
   void setOption(SleepTimerOption option) {
+    if (option == SleepTimerOption.custom) return;
     _cancelAll();
     if (option == SleepTimerOption.disabled) {
       state = const SleepTimerState();
@@ -82,21 +100,7 @@ class SleepTimerController extends Notifier<SleepTimerState> {
     }
     final duration = option.duration;
     if (duration != null) {
-      final deadline = DateTime.now().add(duration);
-      _timer = Timer(duration, _onExpired);
-      _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-        final left = deadline.difference(DateTime.now());
-        if (left <= Duration.zero) return; // [_onExpired] owns the landing.
-        // Rounded up to the minute, and only published when the minute
-        // changes so listeners don't rebuild every second.
-        final snapped = Duration(
-          minutes: left.inMinutes + (left.inSeconds % 60 > 0 ? 1 : 0),
-        );
-        if (snapped != state.remaining) {
-          state = SleepTimerState(option: option, remaining: snapped);
-        }
-      });
-      state = SleepTimerState(option: option, remaining: duration);
+      _startDurationTimer(option, duration);
     } else {
       // End of track: just_audio emits `ProcessingState.completed` when the
       // current source finishes, before moving on (or looping).
@@ -108,6 +112,47 @@ class SleepTimerController extends Notifier<SleepTimerState> {
       });
       state = const SleepTimerState(option: SleepTimerOption.endOfTrack);
     }
+  }
+
+  /// Starts a wall-clock timer for an arbitrary [minutes] count.
+  void setCustomMinutes(int minutes) {
+    assert(minutes > 0);
+    _cancelAll();
+    _startDurationTimer(
+      SleepTimerOption.custom,
+      Duration(minutes: minutes),
+      customMinutes: minutes,
+    );
+  }
+
+  void _startDurationTimer(
+    SleepTimerOption option,
+    Duration duration, {
+    int? customMinutes,
+  }) {
+    final deadline = DateTime.now().add(duration);
+    _timer = Timer(duration, _onExpired);
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      final left = deadline.difference(DateTime.now());
+      if (left <= Duration.zero) return; // [_onExpired] owns the landing.
+      // Rounded up to the minute, and only published when the minute
+      // changes so listeners don't rebuild every second.
+      final snapped = Duration(
+        minutes: left.inMinutes + (left.inSeconds % 60 > 0 ? 1 : 0),
+      );
+      if (snapped != state.remaining) {
+        state = SleepTimerState(
+          option: option,
+          remaining: snapped,
+          customMinutes: customMinutes,
+        );
+      }
+    });
+    state = SleepTimerState(
+      option: option,
+      remaining: duration,
+      customMinutes: customMinutes,
+    );
   }
 
   void _onExpired() {
