@@ -40,10 +40,40 @@ class Id3Reader {
     }
 
     final pair = readLyricsFromBytes(head);
-    if (pair.synced == null && pair.unsynced == null) {
-      return _readM4aLyrics(filePath);
+    if (pair.synced != null || pair.unsynced != null) return pair;
+
+    // No embedded lyrics — maybe an M4A with ©lyr.
+    final m4a = await _readM4aLyrics(filePath);
+    if (m4a.synced != null || m4a.unsynced != null) return m4a;
+
+    // Still nothing — maybe a sidecar .lrc next to the audio file.
+    // Musicolet writes these instead of embedding ("Embedded Lyrics + LRC
+    // support"): without this, its edits are invisible to Musync.
+    return _readSidecarLrc(filePath);
+  }
+
+  /// Reads `<basename>.lrc` next to the audio file, if present.
+  ///
+  /// Returns "no lyrics" when there is no sidecar, it can't be read, or it
+  /// holds no usable lines — the caller then reports "no lyrics" as before.
+  static Future<LyricsPair> _readSidecarLrc(String filePath) async {
+    final dot = filePath.lastIndexOf('.');
+    if (dot < 0) return _noLyrics;
+    final lrcPath = '${filePath.substring(0, dot)}.lrc';
+    final lrcFile = File(lrcPath);
+    try {
+      if (!await lrcFile.exists()) return _noLyrics;
+      final text = await lrcFile.readAsString();
+      if (text.trim().isEmpty) return _noLyrics;
+      final synced = LrcParser.parse(text);
+      if (synced.isNotEmpty) return (synced: synced, unsynced: null);
+      // Plain text without timestamps: still lyrics, just not synced.
+      final plain = LrcParser.stripTimestamps(text).trim();
+      if (plain.isEmpty) return _noLyrics;
+      return (synced: null, unsynced: UnsyncedLyrics(plain));
+    } catch (_) {
+      return _noLyrics;
     }
-    return pair;
   }
 
   /// Same as [readLyrics], against bytes already in memory.
@@ -142,7 +172,10 @@ class Id3Reader {
         // Not ID3 — maybe an M4A with lyrics in ©lyr.
         await handle.close();
         handle = null;
-        return await _readM4aLyrics(filePath);
+        final m4a = await _readM4aLyrics(filePath);
+        if (m4a.synced != null || m4a.unsynced != null) return m4a;
+        // Still nothing — maybe a sidecar .lrc (Musicolet writes these).
+        return await _readSidecarLrc(filePath);
       }
 
       final major = header[3];
@@ -197,7 +230,12 @@ class Id3Reader {
         }
       }
 
-      return _withLrcRecovered(synced, unsynced);
+      final pair = _withLrcRecovered(synced, unsynced);
+      if (pair.synced != null || pair.unsynced != null) return pair;
+      // No embedded lyrics — maybe a sidecar .lrc (Musicolet writes these).
+      await handle.close();
+      handle = null;
+      return await _readSidecarLrc(filePath);
     } on FileSystemException {
       return _noLyrics;
     } finally {
