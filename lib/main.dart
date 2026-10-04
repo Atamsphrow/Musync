@@ -37,10 +37,20 @@ Future<void> _start() async {
     call,
   ) async {
     if (call.method == 'openBatchReview') {
-      appNavigatorKey.currentState?.pushNamed(
-        AppRoutes.batch,
-        arguments: const BatchRequest([], reviewOnly: true),
-      );
+      // The navigator may not be ready on a cold start (MaterialApp not
+      // built yet): retry for up to 5 s instead of dropping the request
+      // and landing on the library.
+      for (var i = 0; i < 10; i++) {
+        final nav = appNavigatorKey.currentState;
+        if (nav != null) {
+          nav.pushNamed(
+            AppRoutes.batch,
+            arguments: const BatchRequest([], reviewOnly: true),
+          );
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      }
     }
   });
 
