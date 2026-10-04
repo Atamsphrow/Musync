@@ -135,6 +135,23 @@ class NamedQueuesController extends Notifier<NamedQueuesState> {
         return queue.id;
       });
 
+  /// Creates a queue from an arbitrary song list (search results, a folder,
+  /// …) instead of the player's current queue. Playback starts at the first
+  /// song. Returns the new queue's id.
+  Future<String> createFromSongs(String name, List<Song> songs) =>
+      _serialized(() async {
+        final trimmed = name.trim();
+        final queue = NamedQueue(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          name: _uniqueName(trimmed.isEmpty ? 'Nouvelle file' : trimmed),
+          songs: List.of(songs),
+          currentIndex: 0,
+        );
+        state = state.copyWith(queues: [...state.queues, queue]);
+        await _persist();
+        return queue.id;
+      });
+
   /// Renames a queue. Returns false when the name is blank or the queue
   /// does not exist.
   Future<bool> rename(String id, String name) => _serialized(() async {
