@@ -4,6 +4,8 @@
 /// setting (how many lines) lives in Settings / Sources.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -39,12 +41,24 @@ class LyricsBubbleButton extends ConsumerWidget {
             final playing =
                 ref.read(playerStateProvider).valueOrNull?.playing ?? false;
             if (!playing && ref.read(currentSongProvider) != null) {
-              await ref.read(audioPlayerServiceProvider).play();
+              // Fire and forget: awaiting play() here once wedged the whole
+              // sequence — the track started playing but the app never went
+              // to the background, because just_audio's future only resolves
+              // once the platform answers. The backgrounding below must never
+              // depend on it.
+              unawaited(
+                ref
+                    .read(audioPlayerServiceProvider)
+                    .play()
+                    .then((_) {}, onError: (_) {}),
+              );
             }
             // The bubble stays hidden on this screen (it already shows the
             // synced lyrics): send the whole app to the background so the
             // user sees the bubble floating over their home screen — that is
             // what the button is for. Only when this screen is still on top.
+            // Runs unconditionally after the unawaited play() above: a slow
+            // or failing play() can never cancel the backgrounding.
             if (context.mounted && ModalRoute.of(context)?.isCurrent == true) {
               try {
                 await const MethodChannel(
