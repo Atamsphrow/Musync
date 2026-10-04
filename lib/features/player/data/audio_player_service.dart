@@ -122,6 +122,34 @@ class AudioPlayerService {
   Song? get currentSong => _currentSong;
   List<Song> get queue => _queue;
   int get currentIndex => _player.currentIndex ?? 0;
+
+  /// Updates the current song's display metadata after a tag edit, without
+  /// touching playback. The file itself is unchanged — only its tags were
+  /// rewritten, so the audio source stays as it is.
+  ///
+  /// Bypasses [_setCurrentSong]'s equality check on purpose: [Song.==]
+  /// compares ids only, so a metadata-only change would look like "the same
+  /// song" and never reach the UI.
+  void updateCurrentSongMetadata({
+    required String title,
+    required String artist,
+    required String album,
+  }) {
+    final current = _currentSong;
+    if (current == null) return;
+    _currentSong = current.copyWith(
+      title: title,
+      artist: artist,
+      album: album,
+    );
+    if (!_currentSongController.isClosed) {
+      _currentSongController.add(_currentSong);
+    }
+  }
+
+  /// Drops the cached notification artwork for [song], e.g. after its cover
+  /// was edited. The next extraction re-reads the tag.
+  Future<void> forgetArtwork(Song song) => _artwork.forget(song);
   bool get isShuffleEnabled => _player.shuffleModeEnabled;
   LoopMode get loopMode => _player.loopMode;
   bool get isPlaying => _player.playing;
