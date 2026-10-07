@@ -196,7 +196,13 @@ class Id3Writer {
   ///
   /// M4A files are delegated to [M4aWriter.writeMetadata]; a container Musync
   /// can't edit is refused out loud. Throws [Id3WriteException] when the file
-  /// can't be written — the original is left intact in every failure case.
+  /// can't be written — the original is left intact in every failure case,
+  /// except the in-place fast path ([_overwriteHead]) which rewrites the head
+  /// of the original file directly when the new tag is no larger than the
+  /// old one. That path is only taken after the new head has been fully
+  /// validated in memory, and its write is a single sequential pass, but it
+  /// is not copy-then-rename: document the exception, don't pretend it
+  /// doesn't exist.
   static Future<void> writeMetadata(
     String filePath,
     TrackMetadata metadata,
