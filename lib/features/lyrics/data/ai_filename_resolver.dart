@@ -123,6 +123,23 @@ class AiFilenameResolver {
           'IA',
           '${provider.name} a échoué, on passe au suivant — ${e.detail}',
         );
+      } catch (e) {
+        // Anything else (a network error that escaped wrapping, a TypeError,
+        // a bug in a provider adapter) must not break the cascade: record it
+        // as this provider's failure and try the next one.
+        final wrapped = AiReaderException('Échec inattendu : $e');
+        attempts.add(
+          AiAttempt(
+            providerId: provider.id,
+            providerName: provider.name,
+            model: provider.model,
+            failure: wrapped,
+          ),
+        );
+        DebugLog.instance.info(
+          'IA',
+          '${provider.name} a échoué, on passe au suivant — ${wrapped.detail}',
+        );
       }
     }
 
