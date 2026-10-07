@@ -317,6 +317,11 @@ class _TopBar extends ConsumerWidget {
           ),
           if (hasSynced) const LyricsBubbleButton(),
           IconButton(
+            icon: const Icon(Icons.open_in_new),
+            tooltip: 'Ouvrir dans Musicolet',
+            onPressed: song == null ? null : () => _share(context, song!),
+          ),
+          IconButton(
             isSelected: showLyrics,
             icon: const Icon(Icons.lyrics_outlined),
             selectedIcon: const Icon(Icons.lyrics),
@@ -324,11 +329,6 @@ class _TopBar extends ConsumerWidget {
                 ? 'Afficher la pochette'
                 : 'Afficher les paroles',
             onPressed: song == null ? null : onToggleLyrics,
-          ),
-          IconButton(
-            icon: const Icon(Icons.open_in_new),
-            tooltip: 'Ouvrir dans Musicolet',
-            onPressed: song == null ? null : () => _share(context, song!),
           ),
         ],
       ),
