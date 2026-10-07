@@ -7,6 +7,8 @@ import 'package:on_audio_query/on_audio_query.dart';
 import 'package:musync/core/router/app_router.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
+import 'package:musync/features/settings/data/lyrics_appearance.dart';
+import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 
 class MiniPlayer extends ConsumerWidget {
   const MiniPlayer({super.key});
@@ -163,7 +165,6 @@ class _MiniLyricLine extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
 
     final song = ref.watch(currentSongProvider);
@@ -178,16 +179,27 @@ class _MiniLyricLine extends ConsumerWidget {
         : null;
     if (text == null || text.isEmpty) return const SizedBox.shrink();
 
+    // Follows the Apparence settings — color, italic, serif, alignment —
+    // all except the size, which stays mini-player small.
+    final appearance = ref.watch(lyricsAppearanceProvider);
+    final textAlign = switch (appearance.textAlign) {
+      LyricsTextAlign.left => TextAlign.left,
+      LyricsTextAlign.center => TextAlign.center,
+      LyricsTextAlign.right => TextAlign.right,
+    };
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 3, 16, 1),
       child: Text(
         text,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        textAlign: TextAlign.center,
+        textAlign: textAlign,
         style: textTheme.bodySmall?.copyWith(
-          color: scheme.primary,
-          fontStyle: FontStyle.italic,
+          color: lyricsActiveColor(context, appearance),
+          fontStyle:
+              appearance.italic ? FontStyle.italic : FontStyle.normal,
+          fontFamily:
+              appearance.fontStyle == LyricsFontStyle.stylized ? 'serif' : null,
         ),
       ),
     );
