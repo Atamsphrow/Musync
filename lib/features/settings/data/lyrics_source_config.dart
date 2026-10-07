@@ -155,12 +155,12 @@ class LyricsSourceStore {
   /// Where the file lives. Production reads the app's documents directory;
   /// tests inject a temporary file instead — `path_provider` has no plugin
   /// in a unit test.
-  final Future<File> Function()? _fileLocator;
+  final Future<File> Function()? fileLocator;
 
-  const LyricsSourceStore({this._fileLocator});
+  const LyricsSourceStore({this.fileLocator});
 
   Future<File> _file() async {
-    final locator = _fileLocator;
+    final locator = fileLocator;
     if (locator != null) return locator();
     final dir = await getApplicationDocumentsDirectory();
     return File('${dir.path}${Platform.pathSeparator}$_fileName');
