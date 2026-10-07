@@ -142,6 +142,10 @@ class AudioPlayerService {
     var index = current == null ? 0 : queue.indexOf(current);
     if (index < 0 || queue.isEmpty) index = 0;
     if (index >= queue.length) index = queue.length - 1;
+    DebugLog.instance.info(
+      'Player',
+      'sauvegarde état: file=${queue.length} index=$index',
+    );
     unawaited(
       PlaybackStateStore().update(
         queuePaths: [for (final s in queue) s.filePath],
@@ -393,9 +397,19 @@ class AudioPlayerService {
       for (final p in state.queuePaths)
         if (byPath.containsKey(p)) byPath[p]!,
     ];
+    DebugLog.instance.info(
+      'Player',
+      'restauration: persistés=${state.queuePaths.length} '
+      'retrouvés=${queue.length} biblio=${library.length} '
+      'index=${state.index} shuffle=${state.shuffle} repeat=${state.repeat}',
+    );
     if (queue.isEmpty) {
       // No persisted queue (first launch on this version, or an unreadable
       // file): fall back to the single last track, as before.
+      DebugLog.instance.info(
+        'Player',
+        'restauration: file vide, repli sur le dernier morceau seul',
+      );
       final single = byPath[path];
       if (single == null) return false;
       queue.add(single);
@@ -439,8 +453,14 @@ class AudioPlayerService {
       // filtered one above.
       _setCurrentSong(match);
       _persistPlaybackState();
+      DebugLog.instance.info(
+        'Player',
+        'restauration OK: file=${queue.length} index=$index '
+        'morceau=${match.title}',
+      );
       return true;
     } catch (_) {
+      DebugLog.instance.info('Player', 'restauration: échec setAudioSource');
       _queue = const [];
       return false;
     }
@@ -487,10 +507,18 @@ class AudioPlayerService {
   );
 
   Future<void> next() async {
+    DebugLog.instance.info(
+      'Player',
+      'next: file=${_queue.length} idx=${_player.currentIndex} hasNext=${_player.hasNext}',
+    );
     if (_player.hasNext) await _player.seekToNext();
   }
 
   Future<void> previous() async {
+    DebugLog.instance.info(
+      'Player',
+      'prev: file=${_queue.length} idx=${_player.currentIndex} hasPrev=${_player.hasPrevious}',
+    );
     if (_player.hasPrevious) await _player.seekToPrevious();
   }
 
