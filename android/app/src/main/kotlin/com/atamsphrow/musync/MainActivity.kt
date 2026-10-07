@@ -119,6 +119,7 @@ class MainActivity : AudioServiceActivity() {
         channel!!.setMethodCallHandler { call, result ->
                 when (call.method) {
                     "rescan" -> rescan(call.argument<String>("path"), result)
+                    "sdkInt" -> result.success(android.os.Build.VERSION.SDK_INT)
                     "requestWriteAccess" -> requestWriteAccess(
                         (call.argument<Number>("mediaStoreId"))?.toLong(),
                         call.argument<String>("path"),
