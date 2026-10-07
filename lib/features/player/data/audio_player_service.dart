@@ -9,6 +9,7 @@ import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/data/artwork_cache.dart';
 import 'package:musync/features/player/data/last_song_store.dart';
+import 'package:musync/features/player/data/playback_state_store.dart';
 
 /// Wraps [AudioPlayer] and owns the playback queue.
 ///
@@ -46,6 +47,9 @@ class AudioPlayerService {
     _indexSubscription = _player.currentIndexStream.listen((index) {
       if (index != null && index >= 0 && index < _queue.length) {
         _setCurrentSong(_queue[index]);
+        // Track change (tap, next/prev, auto-advance, notification): the
+        // restored launch needs this index, not just the song.
+        _persistPlaybackState();
       }
     });
     // Periodic checkpoint of the position. Track changes alone persist too
@@ -122,6 +126,31 @@ class AudioPlayerService {
   Song? get currentSong => _currentSong;
   List<Song> get queue => _queue;
   int get currentIndex => _player.currentIndex ?? 0;
+
+  /// Persists the queue, the current index in it and the shuffle/repeat
+  /// modes, so the next launch restores the whole playback state — not just
+  /// the track. Fire-and-forget: the store never throws, and playback must
+  /// never wait on the disk.
+  ///
+  /// The index is derived from [_currentSong]'s slot in [_queue], never from
+  /// the player's index: with shuffle enabled the player's index runs in
+  /// shuffled order, while the persisted queue is always the plain order and
+  /// is reshuffled on restore.
+  void _persistPlaybackState() {
+    final queue = _queue;
+    final current = _currentSong;
+    var index = current == null ? 0 : queue.indexOf(current);
+    if (index < 0 || queue.isEmpty) index = 0;
+    if (index >= queue.length) index = queue.length - 1;
+    unawaited(
+      PlaybackStateStore().update(
+        queuePaths: [for (final s in queue) s.filePath],
+        index: index,
+        shuffle: _player.shuffleModeEnabled,
+        repeat: _player.loopMode.name,
+      ),
+    );
+  }
 
   /// Updates the current song's display metadata after a tag edit, without
   /// touching playback. The file itself is unchanged — only its tags were
@@ -263,6 +292,8 @@ class AudioPlayerService {
       _setCurrentSong(previousSong);
       rethrow;
     }
+    // The queue actually changed: the next launch restores all of it.
+    _persistPlaybackState();
   }
 
   /// Prefers the caller's index, since a library list can legitimately hold the
@@ -340,42 +371,77 @@ class AudioPlayerService {
 
   Future<void> stop() => _player.stop();
 
-  /// Re-opens the track playing when the app was last closed, paused at the
-  /// saved position. Called once, after the library has loaded, so the track
-  /// can be found by its path.
+  /// Re-opens the playback state from when the app was last closed: the whole
+  /// queue (matched by path against the library, in the persisted order),
+  /// the current track at its saved position, and the shuffle/repeat modes.
+  /// Called once, after the library has loaded, so tracks can be found by
+  /// their paths.
   ///
-  /// Returns true when a track was restored. Never starts playback by itself:
-  /// the track waits, paused, for the user to press play.
+  /// Returns true when something was restored. Never starts playback by
+  /// itself: the track waits, paused, for the user to press play.
   Future<bool> restoreLastPlayed(List<Song> library) async {
     if (_currentSong != null) return false;
     final saved = await LastSongStore().load();
     final path = saved.path;
     if (path == null || path.isEmpty) return false;
-    Song? match;
-    for (final song in library) {
-      if (song.filePath == path) {
-        match = song;
-        break;
-      }
+    final state = await PlaybackStateStore().load();
+
+    // Resolve the persisted queue against the library. Files that disappeared
+    // since (deleted, moved) are dropped; the order stays the persisted one.
+    final byPath = <String, Song>{for (final s in library) s.filePath: s};
+    final queue = <Song>[
+      for (final p in state.queuePaths)
+        if (byPath.containsKey(p)) byPath[p]!,
+    ];
+    if (queue.isEmpty) {
+      // No persisted queue (first launch on this version, or an unreadable
+      // file): fall back to the single last track, as before.
+      final single = byPath[path];
+      if (single == null) return false;
+      queue.add(single);
     }
-    if (match == null) return false;
+    var index = queue.indexWhere((s) => s.filePath == path);
+    if (index < 0) {
+      // The last track itself is gone; restart where the queue says.
+      index = state.index.clamp(0, queue.length - 1);
+    }
+    final match = queue[index];
     try {
       AudioBackendCheck.ensureIntercepted();
-      _queue = List.unmodifiable([match]);
-      await _warmArtwork(0);
+      _queue = List.unmodifiable(queue);
+      await _warmArtwork(index);
       await _player.setAudioSource(
-        ConcatenatingAudioSource(children: [_toSource(match)]),
+        ConcatenatingAudioSource(
+          useLazyPreparation: true,
+          children: [for (final s in queue) _toSource(s)],
+        ),
+        initialIndex: index,
       );
+      // Modes before the seek: the seek lands in plain order, and enabling
+      // shuffle afterwards keeps the current item (same as toggleShuffle).
+      final repeat = switch (state.repeat) {
+        'all' => LoopMode.all,
+        'one' => LoopMode.one,
+        _ => LoopMode.off,
+      };
+      await _player.setLoopMode(repeat);
       var target = saved.position;
       if (target.isNegative) target = Duration.zero;
       final duration = _player.duration;
       if (duration != null && target >= duration) target = Duration.zero;
       await _player.seek(target);
+      if (state.shuffle) {
+        await _player.shuffle();
+        await _player.setShuffleModeEnabled(true);
+      }
       // Announced (and persisted) after the seek, so the stored position is
-      // the restored one rather than zero.
+      // the restored one rather than zero — and the stored queue matches the
+      // filtered one above.
       _setCurrentSong(match);
+      _persistPlaybackState();
       return true;
     } catch (_) {
+      _queue = const [];
       return false;
     }
   }
@@ -482,6 +548,9 @@ class AudioPlayerService {
         // The queue is empty and playback stopped either way.
       }
       _setCurrentSong(null);
+      // The queue just died: persist the empty state so a relaunch does not
+      // resurrect the removed tracks.
+      _persistPlaybackState();
       return;
     }
     if (wasCurrent) {
@@ -539,6 +608,9 @@ class AudioPlayerService {
   Future<void> _reconcileCurrentIndex() async {
     final current = _currentSong;
     if (current == null || _queue.isEmpty) return;
+    // Queue mutations (reorder, remove, play-next) land here: persist before
+    // the alignment check below, which early-returns when already aligned.
+    _persistPlaybackState();
     final expected = _queue.indexOf(current);
     if (expected < 0 || _player.currentIndex == expected) return;
     try {
@@ -553,6 +625,7 @@ class AudioPlayerService {
     // Reshuffling before enabling avoids replaying the order from last time.
     if (enabling) await _player.shuffle();
     await _player.setShuffleModeEnabled(enabling);
+    _persistPlaybackState();
   }
 
   Future<void> cycleRepeatMode() async {
@@ -562,6 +635,7 @@ class AudioPlayerService {
       LoopMode.one => LoopMode.off,
     };
     await _player.setLoopMode(next);
+    _persistPlaybackState();
   }
 
   /// Order matters here.
