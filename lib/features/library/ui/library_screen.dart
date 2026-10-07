@@ -47,6 +47,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// the `_dependents.isEmpty` assertion, not a typing bug.
   late final TextEditingController _searchController;
 
+  /// Focus of the search field. Without this, dismissing the keyboard (system
+  /// back button) leaves the field focused: the cursor keeps blinking and
+  /// the outline stays blue on a field the user is done with. Taps outside
+  /// are handled by the field's own `onTapOutside`; the back-button case is
+  /// caught in [didChangeMetrics] below.
+  late final FocusNode _searchFocusNode;
+
   /// Drives the always-visible, draggable scrollbar: 868 tracks are a long
   /// way to swipe. Owned here, created once, disposed once.
   late final ScrollController _scrollController;
@@ -71,6 +78,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   void initState() {
     super.initState();
     _searchController = TextEditingController();
+    _searchFocusNode = FocusNode();
     _scrollController = ScrollController();
     _tabController = TabController(
       length: LyricsStatus.values.length,
@@ -155,8 +163,22 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     WidgetsBinding.instance.removeObserver(this);
     _tabController.dispose();
     _searchController.dispose();
+    _searchFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeMetrics() {
+    // The keyboard went away without the field losing focus (system back
+    // button dismisses the keyboard but keeps focus): drop it, otherwise
+    // the cursor keeps blinking and the outline stays blue.
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    final keyboardHidden =
+        views.isEmpty || views.first.viewInsets.bottom == 0;
+    if (keyboardHidden && _searchFocusNode.hasFocus) {
+      _searchFocusNode.unfocus();
+    }
   }
 
   /// Asks before closing Musync.
@@ -556,6 +578,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
             : _LibraryAppBar(
                 songsAsync: songsAsync,
                 searchController: _searchController,
+                searchFocusNode: _searchFocusNode,
                 tabController: _tabController,
                 onBatch: () => _startBatch(songsAsync.valueOrNull),
               ),
@@ -692,6 +715,7 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
   Size get preferredSize => const Size.fromHeight(kToolbarHeight + 124);
   final AsyncValue<List> songsAsync;
   final TextEditingController searchController;
+  final FocusNode searchFocusNode;
 
   /// Owned by the screen, so a tap and a swipe drive the same indicator.
   final TabController tabController;
@@ -701,6 +725,7 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
   const _LibraryAppBar({
     required this.songsAsync,
     required this.searchController,
+    required this.searchFocusNode,
     required this.tabController,
     required this.onBatch,
   });
@@ -775,7 +800,10 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: _SearchField(controller: searchController),
+              child: _SearchField(
+                controller: searchController,
+                focusNode: searchFocusNode,
+              ),
             ),
             TabBar(
               // Required, and its absence is not a compile error.
@@ -820,8 +848,9 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
 /// lifecycle would have to be managed alongside the controller's.
 class _SearchField extends ConsumerWidget {
   final TextEditingController controller;
+  final FocusNode focusNode;
 
-  const _SearchField({required this.controller});
+  const _SearchField({required this.controller, required this.focusNode});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -829,6 +858,10 @@ class _SearchField extends ConsumerWidget {
       valueListenable: controller,
       builder: (context, value, _) => TextField(
         controller: controller,
+        focusNode: focusNode,
+        // A tap anywhere else drops focus: the cursor goes away, the
+        // outline leaves its blue focused state, and the keyboard follows.
+        onTapOutside: (_) => focusNode.unfocus(),
         textInputAction: TextInputAction.search,
         onChanged: (text) =>
             ref.read(librarySearchProvider.notifier).state = text,
