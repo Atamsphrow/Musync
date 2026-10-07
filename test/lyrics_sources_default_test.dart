@@ -106,9 +106,10 @@ void main() {
     );
 
     test(
-      'a user re-added lyrics.ovh survives the migration',
+      'any stored lyrics.ovh entry is dropped on load',
       () async {
-        // Same id, but not marked built-in: the user put the preset back.
+        // The preset is gone: even a user-added entry with that id is
+        // legacy now, and the unreliable service is never queried.
         await writeSources([
           {
             'id': 'lrclib',
@@ -130,12 +131,7 @@ void main() {
 
         final loaded = await storeFor('lyrics_sources.json').load();
 
-        expect(idsOf(loaded), ['lrclib', 'lyrics-ovh']);
-        // The user's own toggle survives.
-        expect(
-          loaded.firstWhere((config) => config.id == 'lyrics-ovh').enabled,
-          isFalse,
-        );
+        expect(idsOf(loaded), ['lrclib']);
       },
     );
 
@@ -143,10 +139,5 @@ void main() {
       expect(idsOf(builtInSources), ['lrclib']);
     });
 
-    test('lyrics.ovh is a non-bundled preset of the right kind', () {
-      expect(lyricsOvhPreset.id, 'lyrics-ovh');
-      expect(lyricsOvhPreset.isBuiltIn, isFalse);
-      expect(lyricsOvhPreset.kind, LyricsSourceKind.lyricsOvh);
-    });
   });
 }
