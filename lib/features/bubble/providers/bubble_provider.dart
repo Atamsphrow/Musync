@@ -28,6 +28,7 @@ import 'package:musync/features/player/data/playback_state_store.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
+import 'package:musync/features/settings/providers/playback_settings_provider.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -622,6 +623,15 @@ class LyricsBubbleController extends Notifier<BubbleState> {
       // guard's time window expired). Either way it can disarm.
       _prevTailMs = null;
       _prevTailArmedAtMs = null;
+      // The 60 Hz line stream may not have ticked yet for a song whose
+      // lyrics just loaded: its value is still null while the audio is
+      // already past the first line. Derive the index synchronously from
+      // the same position instead — a payload that carries timed lines
+      // with a null index makes the overlay's one-shot ticker arm to the
+      // next change after the anchor, skipping the first line entirely.
+      activeIndex ??= synced?.getLineAt(
+        Duration(milliseconds: positionMs) + ref.read(lyricsOffsetProvider),
+      );
     }
     final textScaleFactor = _textScaleFactor();
     // Lyrics appearance: the bubble follows the settings like the
