@@ -318,22 +318,32 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // on the first `resumed`. The platform queue drains on the first read, but
     // overlapping runs would still race on the lookup below.
     if (_handlingShare) return;
-    // Never drain the native share queue while the library is unreadable: the
-    // first `resumed` fires before the permission grant, and draining now would
-    // consume the share only to report "not found" — losing it for good. The
-    // post-grant call and later resumes drain normally.
-    if (!await PermissionService.hasAudioAccess()) return;
+    // The flag goes up before the first await: two overlapping calls must not
+    // both slip through while the permission check is in flight.
     _handlingShare = true;
-
-    List<Song> songs;
     try {
-      songs = await _resolveSharedSongs();
+      // Never drain the native share queue while the library is unreadable: the
+      // first `resumed` fires before the permission grant, and draining now would
+      // consume the share only to report "not found" — losing it for good. The
+      // post-grant call and later resumes drain normally.
+      if (!await PermissionService.hasAudioAccess()) return;
+
+      final songs = await _resolveSharedSongs();
+      if (songs.isEmpty || !mounted) return;
+
+      await _routeSharedSongs(songs);
+    } catch (e) {
+      // Called via unawaited() from lifecycle hooks and listeners: an
+      // exception here has nowhere to go, so log it instead of surfacing
+      // as an unhandled async error.
+      DebugLog.instance.error(
+        'Partage',
+        'Ouverture du partage impossible',
+        error: e,
+      );
     } finally {
       _handlingShare = false;
     }
-    if (songs.isEmpty || !mounted) return;
-
-    await _routeSharedSongs(songs);
   }
 
   /// Turns the drained share queue into library tracks.
