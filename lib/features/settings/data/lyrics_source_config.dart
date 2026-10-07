@@ -119,25 +119,6 @@ const LyricsSourceConfig lrclibDefault = LyricsSourceConfig(
   isBuiltIn: true,
 );
 
-/// lyrics.ovh as a one-tap preset. Plain words, never timings, and nothing
-/// to configure.
-///
-/// Not bundled anymore: the service is unreliable enough that it should
-/// not be queried by default. It only ever speaks up when it has
-/// something, it ranks below any timed result, and what it returns is
-/// exactly what the sync editor needs to work on — so a track LRCLIB
-/// has never heard of stops being a dead end, for whoever adds it back.
-///
-/// Added as a regular entry ([isBuiltIn] false): switchable, editable,
-/// deletable. The id is kept stable so the preset can never duplicate
-/// itself in the list.
-const LyricsSourceConfig lyricsOvhPreset = LyricsSourceConfig(
-  id: 'lyrics-ovh',
-  name: 'lyrics.ovh',
-  baseUrl: 'https://api.lyrics.ovh',
-  kind: LyricsSourceKind.lyricsOvh,
-);
-
 /// Every bundled entry, in the order they are shown.
 const List<LyricsSourceConfig> builtInSources = [
   lrclibDefault,
@@ -221,18 +202,15 @@ class LyricsSourceStore {
   /// Also how a new bundled source reaches someone who already has a saved
   /// file: it is simply absent from theirs, and appears here on the next read.
   ///
-  /// Migration: lyrics.ovh used to be bundled. A stored entry with its id
-  /// that is still marked built-in is that legacy default, not something
-  /// the user added — it is dropped so the unreliable service stops being
-  /// queried by default. Whoever wants it back re-adds the preset, which
-  /// carries the same id but is not marked built-in, so it survives here.
+  /// Migration: lyrics.ovh used to be bundled, then a one-tap preset. Both
+  /// are gone now: any stored entry with its id is dropped, so the
+  /// unreliable service is never queried.
   static List<LyricsSourceConfig> _withBuiltIn(
     List<LyricsSourceConfig> configs,
   ) {
     final builtInIds = builtInSources.map((c) => c.id).toSet();
-    final withoutLegacyOvh = configs
-        .where((c) => c.id != lyricsOvhPreset.id || !c.isBuiltIn)
-        .toList();
+    final withoutLegacyOvh =
+        configs.where((c) => c.id != 'lyrics-ovh').toList();
 
     return [
       for (final bundled in builtInSources)
