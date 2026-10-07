@@ -16,6 +16,7 @@ library;
 import 'dart:io' show Platform;
 
 import 'package:permission_handler/permission_handler.dart';
+import 'package:musync/core/services/media_store.dart';
 
 /// Outcome of a permission request, kept distinct because the UI has to react
 /// differently: a plain refusal can be asked again, a permanent one can only be
@@ -92,9 +93,15 @@ class PermissionService {
   /// Whether Musync can currently write to the user's music files.
   static Future<bool> hasWriteAccess() async {
     if (!Platform.isAndroid) return true;
-    // Below Android 11 the plain storage grant already allows writing.
     if (await Permission.manageExternalStorage.isGranted) return true;
-    return Permission.storage.isGranted;
+    // Below Android 11 (API 30) the plain storage grant already allowed
+    // writing. On 11+ it is read-only for other apps' files, so it must
+    // not count as write access there. An unknown API level assumes the
+    // worst: the caller then asks for all-files access instead of
+    // wrongly reporting that writes will work.
+    final sdk = await MediaStore.sdkInt();
+    if (sdk != null && sdk < 30) return Permission.storage.isGranted;
+    return false;
   }
 
   /// Asks for "All files access" (`MANAGE_EXTERNAL_STORAGE`).
