@@ -317,12 +317,10 @@ class LyricsBubbleController extends Notifier<BubbleState> {
         }),
       ),
     );
-    _feeds.add(
-      ref.listen(
-        playerScreenVisibleProvider,
-        (_, _) => Future.microtask(_syncOverlayVisibility),
-      ),
-    );
+    // The now-playing screen no longer drives visibility: the bubble never
+    // floats over Musync's own UI anymore (any screen), only over other apps.
+    // What is left of the player-screen signal is the foreground listener
+    // below, which covers every screen at once.
     // Backgrounding the app does not change the route: HOME from Lecture en
     // cours must bring the bubble back, and returning must hide it again.
     _feeds.add(
@@ -392,10 +390,6 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   bool get _playing =>
       ref.read(playerStateProvider).valueOrNull?.playing ?? false;
 
-  bool get _playerVisible =>
-      ref.read(playerScreenVisibleProvider) &&
-      ref.read(appForegroundProvider);
-
   /// Whether the current song is confirmed to carry synced lyrics.
   /// Returns null while the answer is not known yet (lyrics still loading,
   /// load error, or the provider still holding the previous song): the
@@ -410,9 +404,11 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   }
 
   /// Opens or closes the overlay window so that it matches the rules: shown
-  /// only when enabled, playing, away from the now-playing screen, and the
-  /// current song actually has synced lyrics to show. A floating note with
-  /// nothing to say is just in the way, so a confirmed lyrics-less song
+  /// only when enabled, playing, the app is in the background (over other
+  /// apps), and the current song actually has synced lyrics to show. It never
+  /// floats over Musync's own screens anymore — inside the app, the library
+  /// carries the current line itself, under its progress bar. A floating note
+  /// with nothing to say is just in the way, so a confirmed lyrics-less song
   /// hides the bubble instead of parking it on the idle note.
   void _syncOverlayVisibility() {
     if (_hasSyncedLyrics() == false) {
@@ -423,7 +419,11 @@ class LyricsBubbleController extends Notifier<BubbleState> {
       }
       return;
     }
-    final shouldShow = state.active && _playing && !_playerVisible;
+    // Background only: over Musync's own UI the bubble would cover the very
+    // screens the user is reading, so it stays down while the app is in the
+    // foreground — every screen, not just now-playing.
+    final backgrounded = !ref.read(appForegroundProvider);
+    final shouldShow = state.active && _playing && backgrounded;
     if (shouldShow == _overlayUp) return;
     _overlayUp = shouldShow;
     if (!shouldShow) _overlayUpSince = null;
