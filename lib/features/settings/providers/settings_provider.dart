@@ -53,6 +53,15 @@ class LyricsSourcesNotifier extends AsyncNotifier<List<LyricsSourceConfig>> {
     ]);
   }
 
+  /// Adds a bundled preset — currently only lyrics.ovh — as a regular
+  /// entry: switchable, editable and deletable like a source the user
+  /// added by hand. A no-op when it is already in the list.
+  Future<void> addPreset(LyricsSourceConfig preset) async {
+    final current = state.valueOrNull ?? builtInSources;
+    if (current.any((c) => c.id == preset.id)) return;
+    await _commit([...current, preset]);
+  }
+
   Future<void> setEnabled(String id, bool enabled) async {
     final current = state.valueOrNull ?? builtInSources;
     await _commit([
