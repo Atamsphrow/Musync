@@ -335,7 +335,6 @@ class _SourcesTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final sourcesAsync = ref.watch(lyricsSourcesProvider);
-    final notifier = ref.read(lyricsSourcesProvider.notifier);
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
 
@@ -352,8 +351,7 @@ class _SourcesTab extends ConsumerWidget {
                 'Musync interroge toutes les sources actives en parallèle et '
                 'classe les résultats par pertinence. Une source ajoutée ici '
                 'doit exposer l\'API de LRCLIB — c\'est le cas des instances '
-                'auto-hébergées et des miroirs. lyrics.ovh (texte seul, sans '
-                'calage) se rajoute en un tap ci-dessous.',
+                'auto-hébergées et des miroirs.',
                 style: textTheme.bodySmall?.copyWith(
                   color: scheme.onSurfaceVariant,
                 ),
@@ -361,17 +359,6 @@ class _SourcesTab extends ConsumerWidget {
             ),
             for (final source in sources)
               _SourceTile(source: source, key: ValueKey(source.id)),
-            if (!sources.any((s) => s.id == lyricsOvhPreset.id))
-              ListTile(
-                leading: const Icon(Icons.add_circle_outline),
-                title: const Text('Ajouter lyrics.ovh'),
-                subtitle: const Text(
-                  'Paroles non synchronisées, en dépannage',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                onTap: () => notifier.addPreset(lyricsOvhPreset),
-              ),
           ],
         ),
       ),
