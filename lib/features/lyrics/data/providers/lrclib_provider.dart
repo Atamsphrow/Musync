@@ -130,10 +130,20 @@ class LrclibSource extends LyricsSource {
     }
 
     if (found is LyricsSourceException) {
-      // Both endpoints failed, so the source really is unusable. The exact
-      // lookup's reason comes first when there is one: it was the earlier
-      // failure, and the two are almost always the same cause anyway.
-      throw exactFailure ?? found;
+      if (exactFailure != null) {
+        // Both endpoints failed, so the source really is unusable. The exact
+        // lookup's reason comes first: it was the earlier failure, and the
+        // two are almost always the same cause anyway.
+        throw exactFailure;
+      }
+      if (exact == null) {
+        // /get wasn't attempted (no duration to match on) and /search
+        // failed: nothing was collected, so the failure stands.
+        throw found;
+      }
+      // /get delivered an exact match but /search failed: keep the exact
+      // result instead of throwing it away. /search is only the broad
+      // fallback here, and one dead endpoint must not discard good data.
     }
 
     if (found is List) {
