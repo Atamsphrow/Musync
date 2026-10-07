@@ -149,16 +149,45 @@ void main() {
   });
 
   group('bundled sources', () {
-    test('both are present, in order', () {
-      expect(builtInSources.map((s) => s.id), ['lrclib', 'lyrics-ovh']);
+    test('only LRCLIB is bundled now', () {
+      expect(builtInSources.map((s) => s.id), ['lrclib']);
       expect(builtInSources.every((s) => s.isBuiltIn), isTrue);
+    });
+
+    test('the legacy bundled lyrics.ovh entry is dropped on load', () {
+      // Stored before the preset change: the old default, still marked
+      // built-in. It must not survive — the unreliable service stops being
+      // queried by default.
+      final legacy = LyricsSourceConfig.fromJson({
+        'id': 'lyrics-ovh',
+        'name': 'lyrics.ovh',
+        'baseUrl': 'https://api.lyrics.ovh',
+        'isBuiltIn': true,
+        'kind': 'lyricsOvh',
+      });
+      final loaded = LyricsSourceStore.withBuiltInForTest([legacy!]);
+      expect(loaded.map((s) => s.id), ['lrclib']);
+    });
+
+    test('a re-added lyrics.ovh preset survives', () {
+      // Same id, but not marked built-in: the user put it back by hand.
+      final readded = LyricsSourceConfig.fromJson({
+        'id': 'lyrics-ovh',
+        'name': 'lyrics.ovh',
+        'baseUrl': 'https://api.lyrics.ovh',
+        'isBuiltIn': false,
+        'kind': 'lyricsOvh',
+      });
+      final loaded = LyricsSourceStore.withBuiltInForTest([readded!]);
+      expect(loaded.map((s) => s.id), ['lrclib', 'lyrics-ovh']);
     });
 
     test(
       'kinds are distinct, and lrclib is the default for a stored record',
       () {
         expect(lrclibDefault.kind, LyricsSourceKind.lrclib);
-        expect(lyricsOvhDefault.kind, LyricsSourceKind.lyricsOvh);
+        expect(lyricsOvhPreset.kind, LyricsSourceKind.lyricsOvh);
+        expect(lyricsOvhPreset.isBuiltIn, isFalse);
 
         // A record written before `kind` existed can only have been an LRCLIB
         // mirror — that was the only kind a user could add.
@@ -173,9 +202,9 @@ void main() {
 
     test('kind survives a JSON round trip', () {
       final decoded = LyricsSourceConfig.fromJson(
-        jsonDecode(jsonEncode(lyricsOvhDefault.toJson())),
+        jsonDecode(jsonEncode(lyricsOvhPreset.toJson())),
       );
-      expect(decoded, lyricsOvhDefault);
+      expect(decoded, lyricsOvhPreset);
     });
   });
 }
