@@ -169,8 +169,8 @@ void main() {
       expect(loaded.map((s) => s.id), ['lrclib']);
     });
 
-    test('a re-added lyrics.ovh preset survives', () {
-      // Same id, but not marked built-in: the user put it back by hand.
+    test('any lyrics.ovh entry is dropped, preset or legacy', () {
+      // The preset is gone: whatever the flag, the id means legacy.
       final readded = LyricsSourceConfig.fromJson({
         'id': 'lyrics-ovh',
         'name': 'lyrics.ovh',
@@ -179,15 +179,21 @@ void main() {
         'kind': 'lyricsOvh',
       });
       final loaded = LyricsSourceStore.withBuiltInForTest([readded!]);
-      expect(loaded.map((s) => s.id), ['lrclib', 'lyrics-ovh']);
+      expect(loaded.map((s) => s.id), ['lrclib']);
     });
 
     test(
       'kinds are distinct, and lrclib is the default for a stored record',
       () {
         expect(lrclibDefault.kind, LyricsSourceKind.lrclib);
-        expect(lyricsOvhPreset.kind, LyricsSourceKind.lyricsOvh);
-        expect(lyricsOvhPreset.isBuiltIn, isFalse);
+        const ovh = LyricsSourceConfig(
+          id: 'lyrics-ovh',
+          name: 'lyrics.ovh',
+          baseUrl: 'https://api.lyrics.ovh',
+          kind: LyricsSourceKind.lyricsOvh,
+        );
+        expect(ovh.kind, LyricsSourceKind.lyricsOvh);
+        expect(ovh.isBuiltIn, isFalse);
 
         // A record written before `kind` existed can only have been an LRCLIB
         // mirror — that was the only kind a user could add.
@@ -201,10 +207,16 @@ void main() {
     );
 
     test('kind survives a JSON round trip', () {
-      final decoded = LyricsSourceConfig.fromJson(
-        jsonDecode(jsonEncode(lyricsOvhPreset.toJson())),
+      const original = LyricsSourceConfig(
+        id: 'x',
+        name: 'X',
+        baseUrl: 'https://x.example/api',
+        kind: LyricsSourceKind.lyricsOvh,
       );
-      expect(decoded, lyricsOvhPreset);
+      final decoded = LyricsSourceConfig.fromJson(
+        jsonDecode(jsonEncode(original.toJson())),
+      );
+      expect(decoded, original);
     });
   });
 }
