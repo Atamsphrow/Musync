@@ -17,7 +17,6 @@ import 'package:musync/features/library/providers/catalogue_provider.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/library/ui/widgets/song_tile.dart';
-import 'package:musync/features/library/ui/folders_screen.dart';
 import 'package:musync/features/lyrics/ui/batch_screen.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/player/ui/queues_sheet.dart';
@@ -742,14 +741,6 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
             tooltip: 'Chercher les paroles de cet onglet',
             onPressed: songsAsync.valueOrNull?.isEmpty ?? true ? null : onBatch,
           ),
-        IconButton(
-          icon: const Icon(Icons.folder_outlined),
-          tooltip: 'Par dossiers',
-          onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const FoldersScreen()),
-          ),
-        ),
         PopupMenuButton<LibrarySort>(
           icon: const Icon(Icons.sort),
           tooltip: 'Trier',
