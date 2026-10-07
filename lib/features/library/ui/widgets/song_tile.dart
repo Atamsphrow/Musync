@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:on_audio_query/on_audio_query.dart';
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/providers/named_queue_provider.dart';
@@ -165,17 +166,34 @@ class SongTile extends ConsumerWidget {
     WidgetRef ref,
     _TileMenu value,
   ) async {
-    switch (value) {
-      case _TileMenu.playNext:
-        await ref.read(audioPlayerServiceProvider).playNext(song);
-        await _syncActiveQueue(ref);
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('« ${song.title} » sera joué ensuite'),
-            ),
-          );
-        }
+    // onSelected takes a void callback, so this Future's errors would
+    // otherwise go unhandled. Catch them here and tell the user.
+    try {
+      switch (value) {
+        case _TileMenu.playNext:
+          await ref.read(audioPlayerServiceProvider).playNext(song);
+          await _syncActiveQueue(ref);
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('« ${song.title} » sera joué ensuite'),
+              ),
+            );
+          }
+      }
+    } catch (e) {
+      DebugLog.instance.error(
+        'Bibliothèque',
+        'Action du menu impossible',
+        error: e,
+      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Action impossible pour le moment'),
+          ),
+        );
+      }
     }
   }
 }
