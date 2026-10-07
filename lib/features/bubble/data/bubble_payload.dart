@@ -244,6 +244,12 @@ class BubblePayload {
       );
     } on FormatException {
       return null;
+    } catch (_) {
+      // A well-formed JSON with unexpected types (e.g. a string where a
+      // number was expected) throws TypeError on the casts above. Like any
+      // other undecodable payload, it must read as null — never crash the
+      // overlay isolate.
+      return null;
     }
   }
 }
