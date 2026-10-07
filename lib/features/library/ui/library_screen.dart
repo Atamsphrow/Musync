@@ -54,6 +54,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// caught in [didChangeMetrics] below.
   late final FocusNode _searchFocusNode;
 
+  /// Whether the keyboard was visible at the last metrics update. Used to
+  /// detect the keyboard actually *closing* (visible → hidden): the metrics
+  /// also fire while it is *opening* (bottom still 0 on the first frames),
+  /// and unfocusing there kills the keyboard before it appears.
+  bool _keyboardWasVisible = false;
+
   /// Drives the always-visible, draggable scrollbar: 868 tracks are a long
   /// way to swipe. Owned here, created once, disposed once.
   late final ScrollController _scrollController;
@@ -170,15 +176,20 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   @override
   void didChangeMetrics() {
-    // The keyboard went away without the field losing focus (system back
-    // button dismisses the keyboard but keeps focus): drop it, otherwise
-    // the cursor keeps blinking and the outline stays blue.
     final views = WidgetsBinding.instance.platformDispatcher.views;
-    final keyboardHidden =
-        views.isEmpty || views.first.viewInsets.bottom == 0;
-    if (keyboardHidden && _searchFocusNode.hasFocus) {
+    final keyboardVisible =
+        views.isNotEmpty && views.first.viewInsets.bottom > 0;
+    // Only the visible → hidden transition: the system back button dismisses
+    // the keyboard without dropping focus, so do it here — otherwise the
+    // cursor keeps blinking and the outline stays blue. Reacting to
+    // "bottom == 0" alone also fires while the keyboard is *opening* and
+    // would unfocus it before it appears.
+    if (_keyboardWasVisible &&
+        !keyboardVisible &&
+        _searchFocusNode.hasFocus) {
       _searchFocusNode.unfocus();
     }
+    _keyboardWasVisible = keyboardVisible;
   }
 
   /// Asks before closing Musync.
