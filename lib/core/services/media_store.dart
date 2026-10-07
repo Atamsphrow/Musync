@@ -105,6 +105,21 @@ abstract final class MediaStore {
     }
   }
 
+  /// The Android API level ([Build.VERSION.SDK_INT]), or null off-Android
+  /// and whenever the platform side cannot answer.
+  ///
+  /// Never throws.
+  static Future<int?> sdkInt() async {
+    if (!Platform.isAndroid) return null;
+    try {
+      return await _channel.invokeMethod<int>('sdkInt');
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
+
   /// Collects audio handed to Musync through the share sheet or "open with",
   /// and empties the platform-side queue.
   ///
