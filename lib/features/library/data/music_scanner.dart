@@ -129,9 +129,16 @@ class MusicScanner {
         mtimes[path] = key;
         dirty = true;
         if (_isMp3(path)) {
-          updated.add(
-            _withFileMetadata(song, await Id3Reader.readMetadata(path)),
-          );
+          try {
+            updated.add(
+              _withFileMetadata(song, await Id3Reader.readMetadata(path)),
+            );
+          } catch (_) {
+            // The file changed but can't be read (removed mid-scan, corrupt
+            // tag, I/O error): keep its previous metadata instead of
+            // aborting the whole refresh over one bad file.
+            updated.add(song);
+          }
           continue;
         }
       }
