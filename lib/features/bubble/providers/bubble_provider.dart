@@ -24,6 +24,7 @@ import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/bubble/data/bubble_payload.dart';
 import 'package:musync/features/bubble/data/bubble_sizing.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/player/data/playback_state_store.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
@@ -164,6 +165,12 @@ class LyricsBubbleController extends Notifier<BubbleState> {
         _overlayUp = true;
         _overlayUpSince = DateTime.now();
         _attach();
+      } else if ((await PlaybackStateStore().load()).bubbleActive) {
+        // Quit with the bubble on: pick it back up. It stays hidden while
+        // the app is in the foreground (visibility rules) and reappears
+        // over other apps — same as if the toggle had never been touched.
+        state = state.copyWith(active: true);
+        _attach();
       }
     } catch (error) {
       DebugLog.instance.warning(
@@ -216,6 +223,9 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     }
 
     state = state.copyWith(active: true);
+    // Remembered across restarts: quitting with the bubble on brings it back
+    // (it still only shows over other apps, never over Musync's own UI).
+    unawaited(PlaybackStateStore().update(bubbleActive: true));
     _attach();
     _syncOverlayVisibility();
     return BubbleStart.started;
@@ -224,6 +234,7 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   Future<void> _stopNow() async {
     _detach();
     state = state.copyWith(active: false);
+    unawaited(PlaybackStateStore().update(bubbleActive: false));
     _syncOverlayVisibility();
   }
 
