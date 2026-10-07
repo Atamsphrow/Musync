@@ -1,10 +1,10 @@
 // Regression tests for the bundled lyrics sources.
 //
-// The app ships two built-in sources — LRCLIB and lyrics.ovh, the latter
-// documented "On by default". For a while, a fresh install (no settings file)
-// only ever queried LRCLIB: the store's fallbacks returned LRCLIB alone, and
-// the settings notifier did the same. These tests pin the fallbacks to the
-// full bundled list.
+// The app ships one built-in source: LRCLIB. lyrics.ovh used to be bundled
+// "on by default", but the service proved too unreliable for that — it is
+// now a one-tap preset in the Sources tab, added back as a regular entry.
+// These tests pin the fallbacks to the bundled list, and the migration that
+// drops the legacy bundled lyrics.ovh entry from existing settings files.
 //
 // LyricsSourceStore normally reads the app's documents directory through
 // path_provider, which has no plugin in a unit test, so the file location is
@@ -31,19 +31,30 @@ void main() {
         File('${tempDir.path}${Platform.pathSeparator}$name'),
   );
 
+  Future<void> writeSources(List<Map<String, Object?>> entries) async {
+    final file = File(
+      '${tempDir.path}${Platform.pathSeparator}lyrics_sources.json',
+    );
+    await file.writeAsString(jsonEncode(entries));
+  }
+
   List<String> idsOf(List<LyricsSourceConfig> configs) => [
     for (final config in configs) config.id,
   ];
 
   group('LyricsSourceStore.load — bundled defaults', () {
-    test('with no file at all, both bundled sources are returned', () async {
+    test('with no file at all, only LRCLIB is returned', () async {
       final loaded = await storeFor('lyrics_sources.json').load();
 
-      expect(idsOf(loaded), ['lrclib', 'lyrics-ovh']);
+      expect(idsOf(loaded), ['lrclib']);
       expect(loaded.every((config) => config.enabled), isTrue);
     });
 
-    test('an unreadable file falls back to both bundled sources', () async {
+    test('an unreadable file falls back to LRCLIB alone', () async {
+      await writeSources([
+        {'oops': 'not a list'},
+      ]);
+      // Overwrite with actual garbage: the helper above writes a list.
       final file = File(
         '${tempDir.path}${Platform.pathSeparator}lyrics_sources.json',
       );
@@ -51,10 +62,10 @@ void main() {
 
       final loaded = await storeFor('lyrics_sources.json').load();
 
-      expect(idsOf(loaded), ['lrclib', 'lyrics-ovh']);
+      expect(idsOf(loaded), ['lrclib']);
     });
 
-    test('a non-list payload falls back to both bundled sources', () async {
+    test('a non-list payload falls back to LRCLIB alone', () async {
       final file = File(
         '${tempDir.path}${Platform.pathSeparator}lyrics_sources.json',
       );
@@ -62,48 +73,80 @@ void main() {
 
       final loaded = await storeFor('lyrics_sources.json').load();
 
-      expect(idsOf(loaded), ['lrclib', 'lyrics-ovh']);
+      expect(idsOf(loaded), ['lrclib']);
     });
 
     test(
-      'a file written before lyrics.ovh existed gains it on read, '
-      'keeping the stored flags',
+      'the legacy bundled lyrics.ovh entry is dropped on read',
       () async {
-        // A settings file from when LRCLIB was the only bundled source.
-        final file = File(
-          '${tempDir.path}${Platform.pathSeparator}lyrics_sources.json',
-        );
-        await file.writeAsString(
-          jsonEncode([
-            {
-              'id': 'lrclib',
-              'name': 'LRCLIB',
-              'baseUrl': 'https://lrclib.net/api',
-              'enabled': false,
-              'isBuiltIn': true,
-              'kind': 'lrclib',
-            },
-          ]),
-        );
+        // A settings file from when lyrics.ovh was bundled on by default.
+        await writeSources([
+          {
+            'id': 'lrclib',
+            'name': 'LRCLIB',
+            'baseUrl': 'https://lrclib.net/api',
+            'enabled': true,
+            'isBuiltIn': true,
+            'kind': 'lrclib',
+          },
+          {
+            'id': 'lyrics-ovh',
+            'name': 'lyrics.ovh',
+            'baseUrl': 'https://api.lyrics.ovh',
+            'enabled': true,
+            'isBuiltIn': true,
+            'kind': 'lyricsOvh',
+          },
+        ]);
+
+        final loaded = await storeFor('lyrics_sources.json').load();
+
+        expect(idsOf(loaded), ['lrclib']);
+      },
+    );
+
+    test(
+      'a user re-added lyrics.ovh survives the migration',
+      () async {
+        // Same id, but not marked built-in: the user put the preset back.
+        await writeSources([
+          {
+            'id': 'lrclib',
+            'name': 'LRCLIB',
+            'baseUrl': 'https://lrclib.net/api',
+            'enabled': true,
+            'isBuiltIn': true,
+            'kind': 'lrclib',
+          },
+          {
+            'id': 'lyrics-ovh',
+            'name': 'lyrics.ovh',
+            'baseUrl': 'https://api.lyrics.ovh',
+            'enabled': false,
+            'isBuiltIn': false,
+            'kind': 'lyricsOvh',
+          },
+        ]);
 
         final loaded = await storeFor('lyrics_sources.json').load();
 
         expect(idsOf(loaded), ['lrclib', 'lyrics-ovh']);
-        // The user's own toggle survives the upgrade...
-        expect(
-          loaded.firstWhere((config) => config.id == 'lrclib').enabled,
-          isFalse,
-        );
-        // ...and the new bundled source arrives switched on, as documented.
+        // The user's own toggle survives.
         expect(
           loaded.firstWhere((config) => config.id == 'lyrics-ovh').enabled,
-          isTrue,
+          isFalse,
         );
       },
     );
 
-    test('builtInSources really is both defaults, LRCLIB first', () {
-      expect(idsOf(builtInSources), ['lrclib', 'lyrics-ovh']);
+    test('builtInSources is LRCLIB alone', () {
+      expect(idsOf(builtInSources), ['lrclib']);
+    });
+
+    test('lyrics.ovh is a non-bundled preset of the right kind', () {
+      expect(lyricsOvhPreset.id, 'lyrics-ovh');
+      expect(lyricsOvhPreset.isBuiltIn, isFalse);
+      expect(lyricsOvhPreset.kind, LyricsSourceKind.lyricsOvh);
     });
   });
 }
