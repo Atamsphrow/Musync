@@ -119,23 +119,28 @@ const LyricsSourceConfig lrclibDefault = LyricsSourceConfig(
   isBuiltIn: true,
 );
 
-/// The bundled plain-lyrics fallback.
+/// lyrics.ovh as a one-tap preset. Plain words, never timings, and nothing
+/// to configure.
 ///
-/// On by default. It only ever speaks up when it has something, it ranks below
-/// any timed result, and what it returns is exactly what the sync editor needs
-/// to work on — so a track LRCLIB has never heard of stops being a dead end.
-const LyricsSourceConfig lyricsOvhDefault = LyricsSourceConfig(
+/// Not bundled anymore: the service is unreliable enough that it should
+/// not be queried by default. It only ever speaks up when it has
+/// something, it ranks below any timed result, and what it returns is
+/// exactly what the sync editor needs to work on — so a track LRCLIB
+/// has never heard of stops being a dead end, for whoever adds it back.
+///
+/// Added as a regular entry ([isBuiltIn] false): switchable, editable,
+/// deletable. The id is kept stable so the preset can never duplicate
+/// itself in the list.
+const LyricsSourceConfig lyricsOvhPreset = LyricsSourceConfig(
   id: 'lyrics-ovh',
   name: 'lyrics.ovh',
   baseUrl: 'https://api.lyrics.ovh',
-  isBuiltIn: true,
   kind: LyricsSourceKind.lyricsOvh,
 );
 
 /// Every bundled entry, in the order they are shown.
 const List<LyricsSourceConfig> builtInSources = [
   lrclibDefault,
-  lyricsOvhDefault,
 ];
 
 /// Reads and writes the sources list as JSON in the app's documents directory.
@@ -204,27 +209,42 @@ class LyricsSourceStore {
     );
   }
 
+  @visibleForTesting
+  static List<LyricsSourceConfig> withBuiltInForTest(
+    List<LyricsSourceConfig> configs,
+  ) =>
+      _withBuiltIn(configs);
+
   /// Puts the bundled entries back at the head of the list, keeping whatever
   /// enabled flag the user had set on each.
   ///
   /// Also how a new bundled source reaches someone who already has a saved
   /// file: it is simply absent from theirs, and appears here on the next read.
+  ///
+  /// Migration: lyrics.ovh used to be bundled. A stored entry with its id
+  /// that is still marked built-in is that legacy default, not something
+  /// the user added — it is dropped so the unreliable service stops being
+  /// queried by default. Whoever wants it back re-adds the preset, which
+  /// carries the same id but is not marked built-in, so it survives here.
   static List<LyricsSourceConfig> _withBuiltIn(
     List<LyricsSourceConfig> configs,
   ) {
     final builtInIds = builtInSources.map((c) => c.id).toSet();
+    final withoutLegacyOvh = configs
+        .where((c) => c.id != lyricsOvhPreset.id || !c.isBuiltIn)
+        .toList();
 
     return [
       for (final bundled in builtInSources)
         () {
-          final stored = configs.where((c) => c.id == bundled.id).firstOrNull;
+          final stored = withoutLegacyOvh.where((c) => c.id == bundled.id).firstOrNull;
           // Only the flag is the user's to keep: name, URL and kind are fixed
           // for a bundled entry, so a corrupted file cannot repoint it.
           return stored == null
               ? bundled
               : bundled.copyWith(enabled: stored.enabled);
         }(),
-      ...configs.where((c) => !builtInIds.contains(c.id)),
+      ...withoutLegacyOvh.where((c) => !builtInIds.contains(c.id)),
     ];
   }
 }
