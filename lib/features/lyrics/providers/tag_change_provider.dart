@@ -73,7 +73,13 @@ class TagChangeService {
 
     // The file changed again, so MediaStore is pointing at the wrong inode
     // until it is told — the same P0 reasoning as the write itself.
-    await MediaStore.rescan(filePath);
+    // This stays inside undo's no-throw contract: a rescan failure must
+    // not turn a successful restore into an exception from a snackbar.
+    try {
+      await MediaStore.rescan(filePath);
+    } catch (e) {
+      DebugLog.instance.warning('Annulation', 'Rescan impossible : $e');
+    }
     fileChanged(filePath);
 
     DebugLog.instance.info('Annulation', 'Tag restauré : $filePath');
