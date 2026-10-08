@@ -4,7 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
-import android.media.AudioManager.AudioDeviceCallback
+import android.media.AudioDeviceCallback
 import android.os.Handler
 import android.os.Looper
 
