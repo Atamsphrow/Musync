@@ -71,7 +71,8 @@ class PauseTool extends AiTool {
   String get description => 'Met la lecture en pause.';
 
   @override
-  Map<String, Object?> get parametersSchema => {'type': 'object'};
+  Map<String, Object?> get parametersSchema =>
+      {'type': 'object', 'properties': const {}};
 
   @override
   Future<String> describeAction(
@@ -100,7 +101,8 @@ class NextTool extends AiTool {
   String get description => 'Passe au morceau suivant dans la file.';
 
   @override
-  Map<String, Object?> get parametersSchema => {'type': 'object'};
+  Map<String, Object?> get parametersSchema =>
+      {'type': 'object', 'properties': const {}};
 
   @override
   Future<String> describeAction(
@@ -136,7 +138,8 @@ class PreviousTool extends AiTool {
   String get description => 'Revient au morceau précédent dans la file.';
 
   @override
-  Map<String, Object?> get parametersSchema => {'type': 'object'};
+  Map<String, Object?> get parametersSchema =>
+      {'type': 'object', 'properties': const {}};
 
   @override
   Future<String> describeAction(
@@ -174,7 +177,8 @@ class ToggleShuffleTool extends AiTool {
   String get description => 'Active ou désactive la lecture aléatoire.';
 
   @override
-  Map<String, Object?> get parametersSchema => {'type': 'object'};
+  Map<String, Object?> get parametersSchema =>
+      {'type': 'object', 'properties': const {}};
 
   @override
   Future<String> describeAction(
@@ -210,7 +214,8 @@ class CycleRepeatTool extends AiTool {
       'morceau → désactivé…';
 
   @override
-  Map<String, Object?> get parametersSchema => {'type': 'object'};
+  Map<String, Object?> get parametersSchema =>
+      {'type': 'object', 'properties': const {}};
 
   @override
   Future<String> describeAction(
