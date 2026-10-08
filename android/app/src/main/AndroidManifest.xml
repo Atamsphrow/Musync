@@ -50,10 +50,10 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
+    <!-- MusyncApp : enregistre la détection du branchement des
+         écouteurs (dynamique, obligatoire depuis Android 8). -->
     <application
         android:label="Musync"
-        <!-- MusyncApp : enregistre la détection du branchement des
-             écouteurs (dynamique, obligatoire depuis Android 8). -->
         android:name=".MusyncApp"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false">
