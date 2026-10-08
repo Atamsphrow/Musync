@@ -1,4 +1,8 @@
-/// Settings › Bibliothèque: directories the library scan must skip.
+/// Settings › Bibliothèque : ce que le scan de la bibliothèque doit sauter.
+///
+/// Dossiers entiers et fichiers individuels, dans deux sections. L'ajout ou
+/// le retrait d'une entrée invalide `songListProvider` — le rescan est
+/// automatique, le snackbar dit seulement qu'il est en cours.
 library;
 
 import 'package:file_picker/file_picker.dart';
@@ -8,32 +12,36 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/utils/snackbar.dart';
 import 'package:musync/features/library/data/excluded_dirs_store.dart';
 import 'package:musync/features/settings/providers/excluded_dirs_provider.dart';
+import 'package:musync/features/settings/providers/excluded_files_provider.dart';
 
-/// The folders excluded from the library scan, with their sub-folders.
-///
-/// Adding or removing a folder invalidates `songListProvider` — the rescan is
-/// automatic, the snackbar only says it is happening.
 class LibraryTab extends ConsumerWidget {
   const LibraryTab({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final excludedAsync = ref.watch(excludedDirsProvider);
+    final dirsAsync = ref.watch(excludedDirsProvider);
+    final filesAsync = ref.watch(excludedFilesProvider);
 
     return Scaffold(
-      body: excludedAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, _) => Center(child: Text('$error')),
-        data: (dirs) => dirs.isEmpty
-            ? const _EmptyState()
-            : ListView.separated(
-                padding: const EdgeInsets.fromLTRB(8, 8, 8, 88),
-                itemCount: dirs.length,
-                separatorBuilder: (_, _) => const Divider(height: 1),
-                itemBuilder: (context, index) =>
-                    _ExcludedDirTile(path: dirs[index]),
-              ),
-      ),
+      body: switch ((dirsAsync, filesAsync)) {
+        (AsyncData(:final value), AsyncData(value: final files)) => ListView(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 88),
+              children: [
+                const _SectionHeader(title: 'Dossiers exclus'),
+                if (value.isEmpty)
+                  const _EmptyLine(text: 'Aucun dossier exclu.')
+                else
+                  for (final dir in value) _ExcludedDirTile(path: dir),
+                const SizedBox(height: 4),
+                const _SectionHeader(title: 'Fichiers exclus'),
+                if (files.isEmpty)
+                  const _EmptyLine(text: 'Aucun fichier exclu.')
+                else
+                  for (final file in files) _ExcludedFileTile(path: file),
+              ],
+            ),
+        _ => const Center(child: CircularProgressIndicator()),
+      },
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _addDirectory(context, ref),
         icon: const Icon(Icons.create_new_folder_outlined),
@@ -43,21 +51,39 @@ class LibraryTab extends ConsumerWidget {
   }
 }
 
-class _EmptyState extends StatelessWidget {
-  const _EmptyState();
+class _SectionHeader extends StatelessWidget {
+  final String title;
+
+  const _SectionHeader({required this.title});
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Text(
-          'Aucun dossier exclu : toute la bibliothèque est analysée.',
-          textAlign: TextAlign.center,
-          style: textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-        ),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 12, 8, 4),
+      child: Text(
+        title,
+        style: textTheme.titleSmall?.copyWith(color: scheme.primary),
+      ),
+    );
+  }
+}
+
+class _EmptyLine extends StatelessWidget {
+  final String text;
+
+  const _EmptyLine({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      child: Text(
+        text,
+        style: textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
       ),
     );
   }
@@ -76,12 +102,30 @@ class _ExcludedDirTile extends ConsumerWidget {
       trailing: IconButton(
         icon: const Icon(Icons.delete_outline),
         tooltip: 'Retirer l\'exclusion',
-        onPressed: () => _confirmRemove(context, ref, path),
+        onPressed: () => _confirmRemove(context, ref, path, isFile: false),
       ),
     );
   }
 }
 
+class _ExcludedFileTile extends ConsumerWidget {
+  final String path;
+
+  const _ExcludedFileTile({required this.path});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return ListTile(
+      leading: const Icon(Icons.audio_file_outlined),
+      title: Text(path, maxLines: 1, overflow: TextOverflow.fade),
+      trailing: IconButton(
+        icon: const Icon(Icons.delete_outline),
+        tooltip: 'Retirer l\'exclusion',
+        onPressed: () => _confirmRemove(context, ref, path, isFile: true),
+      ),
+    );
+  }
+}
 /// Picks a folder, persisting it through [ExcludedDirsNotifier].
 ///
 /// `getDirectoryPath` throws on a platform failure rather than returning
@@ -126,8 +170,9 @@ Future<void> _addDirectory(BuildContext context, WidgetRef ref) async {
 Future<void> _confirmRemove(
   BuildContext context,
   WidgetRef ref,
-  String path,
-) async {
+  String path, {
+  required bool isFile,
+}) async {
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
@@ -147,11 +192,19 @@ Future<void> _confirmRemove(
   );
   if (confirmed != true) return;
 
-  await ref.read(excludedDirsProvider.notifier).remove(path);
+  if (isFile) {
+    await ref.read(excludedFilesProvider.notifier).remove(path);
+  } else {
+    await ref.read(excludedDirsProvider.notifier).remove(path);
+  }
   if (!context.mounted) return;
   ScaffoldMessenger.of(context).showOnly(
-    const SnackBar(
-      content: Text('Dossiers exclus mis à jour — rescan en cours.'),
+    SnackBar(
+      content: Text(
+        isFile
+            ? 'Fichiers exclus mis à jour — rescan en cours.'
+            : 'Dossiers exclus mis à jour — rescan en cours.',
+      ),
     ),
   );
 }
