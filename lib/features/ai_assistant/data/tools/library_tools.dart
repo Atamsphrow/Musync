@@ -161,7 +161,9 @@ class CreateNamedQueueTool extends AiTool {
   @override
   String get description =>
       'Crée une file nommée. Avec "query", à partir des résultats de '
-      'recherche ; sans, à partir de la file de lecture actuelle.';
+      'recherche ; sans, à partir de la file de lecture actuelle. '
+      '« shuffled: true » lance la file en aléatoire après création '
+      '(« crée une file de Billie Eilish mélangée »).';
 
   @override
   Map<String, Object?> get parametersSchema => {
@@ -170,6 +172,9 @@ class CreateNamedQueueTool extends AiTool {
           'name': 'string, requis — nom de la file',
           'query':
               'string, optionnel — si donné, la file contient les résultats',
+          'shuffled':
+              'bool, optionnel — si vrai, la file est lancée en aléatoire '
+              'après création',
         },
       };
 
@@ -201,6 +206,14 @@ class CreateNamedQueueTool extends AiTool {
         .read(namedQueuesProvider.notifier)
         .createFromSongs(name, songs);
     final word = songs.length > 1 ? 'morceaux' : 'morceau';
+    if (optBool(args, 'shuffled')) {
+      final service = ctx.ref.read(audioPlayerServiceProvider);
+      await service.playSong(songs.first, queue: songs, index: 0);
+      if (!service.isShuffleEnabled) await service.toggleShuffle();
+      return AiToolResult.ok(
+        'File « $name » créée (${songs.length} $word), lecture en aléatoire.',
+      );
+    }
     return AiToolResult.ok(
       'File « $name » créée (${songs.length} $word).',
     );
