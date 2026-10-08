@@ -31,7 +31,8 @@ class FetchLyricsTool extends AiTool {
       'configurées et les intègre au fichier (meilleur résultat).';
 
   @override
-  Map<String, Object?> get parametersSchema => {'type': 'object'};
+  Map<String, Object?> get parametersSchema =>
+      {'type': 'object', 'properties': const {}};
 
   @override
   Future<String> describeAction(
@@ -102,7 +103,8 @@ class PrepareLyricsForSyncTool extends AiTool {
       'de synchronisation. L’IA ne cale pas elle-même.';
 
   @override
-  Map<String, Object?> get parametersSchema => {'type': 'object'};
+  Map<String, Object?> get parametersSchema =>
+      {'type': 'object', 'properties': const {}};
 
   @override
   Future<String> describeAction(
