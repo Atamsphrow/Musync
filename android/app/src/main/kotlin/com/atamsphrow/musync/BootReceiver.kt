@@ -54,12 +54,17 @@ class BootReceiver : BroadcastReceiver() {
                 )
                 val showIntent =
                     context.packageManager.getLaunchIntentForPackage(context.packageName)
+                val showPending = showIntent?.let {
+                    PendingIntent.getActivity(
+                        context, 0, it, PendingIntent.FLAG_IMMUTABLE,
+                    )
+                }
                 alarmManager.setAlarmClock(
-                    AlarmManager.AlarmClockInfo(trigger, showIntent), pending,
+                    AlarmManager.AlarmClockInfo(trigger, showPending), pending,
                 )
             }
 
-            if (stale.isNotEmpty) {
+            if (stale.isNotEmpty()) {
                 val edit = prefs.edit()
                 for (id in stale) {
                     edit.remove("rc_$id").remove("trigger_$id")
