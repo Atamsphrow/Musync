@@ -2,7 +2,10 @@
 library;
 
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
+import 'package:flutter/services.dart';
+import 'package:musync/features/ai_assistant/data/app_knowledge.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
+import 'package:musync/features/bubble/providers/bubble_provider.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 
 /// Règle l'apparence des paroles (les mêmes réglages que l'onglet Apparences).
@@ -101,6 +104,12 @@ class SetAppearanceTool extends AiTool {
 ///
 /// L'outil rend un aide-mémoire ; c'est le LLM qui formule la réponse à
 /// l'utilisateur à partir de « answer ».
+/// Aide sur Musync, ANCRÉE et jamais générée librement.
+///
+/// Cherche par mots-clés dans la base de connaissances vérifiée
+/// ([appKnowledge]) et retourne la fiche telle quelle. Si rien ne matche, la
+/// réponse honnête « je ne sais pas » — inventer une procédure (sections de
+/// réglages imaginaires…) est exactement ce qu'on a déjà vu sur appareil.
 class AppHelpTool extends AiTool {
   const AppHelpTool();
 
@@ -109,15 +118,17 @@ class AppHelpTool extends AiTool {
 
   @override
   String get description =>
-      'Aide sur Musync : comment caler des paroles, la bulle, les sources, '
-      'les files… À appeler quand l’utilisateur pose une question sur '
-      'l’app plutôt qu’une commande.';
+      'Aide sur Musync : cherche dans la base de connaissances vérifiée '
+      '(bulle, calage des paroles, pull-to-refresh, sources, files nommées, '
+      'minuteur, Journal, exclusions, commandes !). « question » : la question '
+      'posée. À appeler pour TOUTE question sur l’app — ne jamais répondre '
+      'de tête.';
 
   @override
   Map<String, Object?> get parametersSchema => {
         'type': 'object',
         'properties': {
-          'question': 'string, optionnel — la question posée',
+          'question': 'string, requis — la question posée, en entier',
         },
       };
 
@@ -126,25 +137,118 @@ class AppHelpTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async =>
-      'Expliquer le fonctionnement de l’app.';
+      'Chercher dans l’aide vérifiée.';
 
   @override
   Future<AiToolResult> execute(
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
-    return AiToolResult.ok(
-      'Musync est un lecteur local avec paroles synchronisées. '
-      'Pour caler des paroles : ouvrir le morceau, appui long sur une ligne, '
-      '« Caler », puis taper chaque ligne au rythme de la musique. '
-      'La bulle flottante s’active depuis l’écran « Lecture en cours » '
-      'et ne s’affiche que par-dessus les autres applis, jamais dans Musync. '
-      'Tirer la liste vers le bas relance l’analyse (tags et paroles). '
-      'Les paroles viennent des sources de l’onglet Sources (LRCLIB par '
-      'défaut) ; le collage direct garde le texte exactement tel quel. '
-      'Les files nommées se créent depuis une recherche (« Créer une file »). '
-      'Le minuteur est dans « Lecture en cours ». '
-      'L’appui long sur le titre « Paramètres » affiche le Journal.',
-    );
+    final question = reqString(args, 'question');
+    final article = findHelpArticle(question);
+    if (article == null) {
+      return AiToolResult.ok(
+        'Je ne sais pas faire ça dans Musync — reformule ou demande autre '
+        'chose.',
+      );
+    }
+    return AiToolResult.ok(article.text);
+  }
+}
+
+/// Ferme l'application.
+///
+/// Non destructif et réversible (un tap la relance) : pas de confirmation.
+/// Demandé explicitement par l'utilisateur après un premier refus de l'IA.
+class CloseAppTool extends AiTool {
+  const CloseAppTool();
+
+  @override
+  String get name => 'close_app';
+
+  @override
+  String get description =>
+      'Ferme l’application Musync (comme le bouton retour système sur '
+      'l’écran d’accueil). Sans argument.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+        'type': 'object',
+        'properties': {},
+      };
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async =>
+      'Fermer l’application.';
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    // Comme le bouton système : l'activité se termine, le processus suit.
+    SystemNavigator.pop();
+    return AiToolResult.ok('Application fermée.');
+  }
+}
+
+/// Bascule la bulle flottante de paroles.
+///
+/// Branché sur le même notifier que le bouton de « Lecture en cours »
+/// (`lyricsBubbleProvider`) : un seul état, pas de doublon. Si la bulle est
+/// active elle se désactive, sinon elle démarre (la permission d'affichage
+/// par-dessus les autres applis peut être demandée par Android).
+class ToggleBubbleTool extends AiTool {
+  const ToggleBubbleTool();
+
+  @override
+  String get name => 'toggle_bubble';
+
+  @override
+  String get description =>
+      'Active ou désactive la bulle flottante de paroles (bascule). Sans '
+      'argument. La bulle ne s’affiche que par-dessus les autres applis, '
+      'jamais dans Musync.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+        'type': 'object',
+        'properties': {},
+      };
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async =>
+      'Basculer la bulle flottante.';
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final controller = ctx.ref.read(lyricsBubbleProvider.notifier);
+    if (ctx.ref.read(lyricsBubbleProvider).active) {
+      await controller.stop();
+      return AiToolResult.ok('Bulle flottante désactivée.');
+    }
+    switch (await controller.start()) {
+      case BubbleStart.started:
+        return AiToolResult.ok(
+          'Bulle flottante activée — elle s’affiche par-dessus les autres '
+          'applis.',
+        );
+      case BubbleStart.permissionDenied:
+        return AiToolResult.fail(
+          'Permission d’affichage par-dessus les autres applis refusée : '
+          'accordez-la dans les réglages Android.',
+        );
+      case BubbleStart.failed:
+        return AiToolResult.fail('La bulle n’a pas pu démarrer.');
+    }
   }
 }
