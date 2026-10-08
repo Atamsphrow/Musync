@@ -18,6 +18,7 @@ import 'package:musync/features/library/providers/library_provider.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/library/ui/widgets/song_tile.dart';
 import 'package:musync/features/ai_assistant/data/assistant_controller.dart';
+import 'package:musync/features/ai_assistant/ui/ai_chat_view.dart';
 import 'package:musync/features/lyrics/ui/batch_screen.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/player/ui/queues_sheet.dart';
@@ -65,9 +66,116 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// way to swipe. Owned here, created once, disposed once.
   late final ScrollController _scrollController;
 
+  /// Conversation IA : l'historique vit ici tant que le mode chat est actif.
+  /// La croix × (qui vide le champ) ou une recherche sans `!` le fait quitter
+  /// et vide l'historique.
+  final List<ChatMessage> _chatMessages = [];
+  bool _chatThinking = false;
+  late final ScrollController _chatScrollController;
+
+  /// Vrai quand le champ commence par `!` : la zone de contenu devient la
+  /// conversation au lieu de la liste des morceaux.
+  bool get _chatMode => _searchController.text.trim().startsWith('!');
+
   /// The last-played track is restored once, when the library first loads —
   /// never on a manual refresh.
   bool _restoreAttempted = false;
+
+  void _onSearchTextChanged() {
+    if (!mounted) return;
+    if (_searchController.text.isEmpty && _chatMessages.isNotEmpty) {
+      _chatMessages.clear();
+      _chatThinking = false;
+    }
+    setState(() {});
+  }
+
+  void _scrollChatToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_chatScrollController.hasClients) return;
+      _chatScrollController.jumpTo(
+        _chatScrollController.position.maxScrollExtent,
+      );
+    });
+  }
+
+  /// Une commande `!...` validée : bulle utilisateur, « L'IA réfléchit… »,
+  /// puis bulle IA (texte `answer` ou résumé du résultat d'outil). Les
+  /// confirmations restent modales par-dessus ; leur résultat arrive en bulle.
+  Future<void> _submitChatCommand(String command) async {
+    setState(() {
+      _chatMessages.add(ChatMessage(role: ChatRole.user, text: command));
+      _chatThinking = true;
+    });
+    _scrollChatToBottom();
+
+    final outcome =
+        await ref.read(assistantControllerProvider).handleCommand(command);
+    if (!mounted) return;
+
+    switch (outcome) {
+      case AssistantDone(
+          :final message,
+          :final navigateTo,
+          :final navigateArgs
+        ):
+        setState(() {
+          _chatThinking = false;
+          _chatMessages.add(
+            ChatMessage(role: ChatRole.assistant, text: message),
+          );
+        });
+        _scrollChatToBottom();
+        if (navigateTo != null) {
+          Navigator.of(context).pushNamed(navigateTo, arguments: navigateArgs);
+        }
+      case AssistantNeedsConfirmation(
+          :final tool,
+          :final args,
+          :final preview
+        ):
+        setState(() => _chatThinking = false);
+        final confirmed = await _confirmAssistantAction(context, preview);
+        if (confirmed != true || !mounted) return;
+        setState(() => _chatThinking = true);
+        final result =
+            await ref.read(assistantControllerProvider).runConfirmed(tool, args);
+        if (!mounted) return;
+        setState(() => _chatThinking = false);
+        if (result is AssistantDone) {
+          setState(() {
+            _chatMessages.add(
+              ChatMessage(role: ChatRole.assistant, text: result.message),
+            );
+          });
+          _scrollChatToBottom();
+          if (result.navigateTo != null) {
+            Navigator.of(context).pushNamed(
+              result.navigateTo!,
+              arguments: result.navigateArgs,
+            );
+          }
+        }
+      case AssistantFailed(:final message):
+        setState(() {
+          _chatThinking = false;
+          _chatMessages.add(
+            ChatMessage(role: ChatRole.assistant, text: message),
+          );
+        });
+        _scrollChatToBottom();
+    }
+  }
+
+  /// Quitte le mode chat : une recherche sans `!` pendant le chat revient à
+  /// la bibliothèque normale et vide l'historique.
+  void _exitChatMode() {
+    if (_chatMessages.isEmpty && !_chatThinking) return;
+    setState(() {
+      _chatMessages.clear();
+      _chatThinking = false;
+    });
+  }
 
   Future<void> _restoreLastPlayed() async {
     try {
@@ -87,6 +195,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     _searchController = TextEditingController();
     _searchFocusNode = FocusNode();
     _scrollController = ScrollController();
+    _chatScrollController = ScrollController();
+    // Bascule liste <-> conversation à la frappe, et vide l'historique quand
+    // la croix × vide le champ.
+    _searchController.addListener(_onSearchTextChanged);
     _tabController = TabController(
       length: LyricsStatus.values.length,
       vsync: this,
@@ -172,6 +284,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     _searchController.dispose();
     _searchFocusNode.dispose();
     _scrollController.dispose();
+    _chatScrollController.dispose();
     super.dispose();
   }
 
@@ -593,13 +706,21 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                 searchFocusNode: _searchFocusNode,
                 tabController: _tabController,
                 onBatch: () => _startBatch(songsAsync.valueOrNull),
+                onChatSubmit: _submitChatCommand,
+                onExitChat: _exitChatMode,
               ),
         body: permissionIssue != null
             ? _PermissionRequired(
                 outcome: permissionIssue,
                 onRetry: _requestPermissions,
               )
-            : GestureDetector(
+            : _chatMode
+                ? AiChatView(
+                    messages: _chatMessages,
+                    thinking: _chatThinking,
+                    scrollController: _chatScrollController,
+                  )
+                : GestureDetector(
                 onHorizontalDragEnd: _onHorizontalDragEnd,
                 child: RefreshIndicator(
                   onRefresh: _refreshLibrary,
@@ -734,12 +855,17 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
 
   final VoidCallback onBatch;
 
+  final ValueChanged<String> onChatSubmit;
+  final VoidCallback onExitChat;
+
   const _LibraryAppBar({
     required this.songsAsync,
     required this.searchController,
     required this.searchFocusNode,
     required this.tabController,
     required this.onBatch,
+    required this.onChatSubmit,
+    required this.onExitChat,
   });
 
   @override
@@ -815,6 +941,8 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
               child: _SearchField(
                 controller: searchController,
                 focusNode: searchFocusNode,
+                onChatSubmit: onChatSubmit,
+                onExitChat: onExitChat,
               ),
             ),
             TabBar(
@@ -863,58 +991,6 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
 /// Le résultat arrive en snackbar ; les outils à confirmation ouvrent un
 /// dialogue qui montre exactement ce qui va se passer, avant exécution.
 /// Pas de bouton dédié : le `!` suffit, comme décidé.
-Future<void> _runAssistantCommand(
-  BuildContext context,
-  WidgetRef ref,
-  String command,
-) async {
-  final controller = ref.read(assistantControllerProvider);
-  final messenger = ScaffoldMessenger.of(context);
-  messenger.showOnly(
-    const SnackBar(
-      content: Row(
-        children: [
-          SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          SizedBox(width: 12),
-          Text('L’IA réfléchit…'),
-        ],
-      ),
-      duration: Duration(seconds: 30),
-    ),
-  );
-
-  final outcome = await controller.handleCommand(command);
-  if (!context.mounted) return;
-
-  switch (outcome) {
-    case AssistantDone(:final message, :final navigateTo, :final navigateArgs):
-      messenger.showOnly(SnackBar(content: Text(message)));
-      if (navigateTo != null) {
-        Navigator.of(context).pushNamed(navigateTo, arguments: navigateArgs);
-      }
-    case AssistantNeedsConfirmation(:final tool, :final args, :final preview):
-      final confirmed = await _confirmAssistantAction(context, preview);
-      if (confirmed != true || !context.mounted) return;
-      final result = await controller.runConfirmed(tool, args);
-      if (!context.mounted) return;
-      if (result is AssistantDone) {
-        messenger.showOnly(SnackBar(content: Text(result.message)));
-        if (result.navigateTo != null) {
-          Navigator.of(context)
-              .pushNamed(result.navigateTo!, arguments: result.navigateArgs);
-        }
-      } else if (result is AssistantFailed) {
-        messenger.showOnly(SnackBar(content: Text(result.message)));
-      }
-    case AssistantFailed(:final message):
-      messenger.showOnly(SnackBar(content: Text(message)));
-  }
-}
-
 /// Dialogue de confirmation : montre exactement ce qui va se passer.
 Future<bool?> _confirmAssistantAction(BuildContext context, String preview) {
   return showDialog<bool>(
@@ -937,11 +1013,30 @@ Future<bool?> _confirmAssistantAction(BuildContext context, String preview) {
   );
 }
 
+/// Le texte du champ tel que le filtre bibliothèque doit le voir.
+///
+/// Une commande IA (`!...`) ne filtre pas la liste : pendant la frappe,
+/// le « ! » produirait sinon « Aucun résultat » avant même la soumission.
+/// Seul le submit (`onSubmitted`) déclenche l'assistant.
+@visibleForTesting
+String searchFilterFor(String text) =>
+    text.trim().startsWith('!') ? '' : text;
+
 class _SearchField extends ConsumerWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
+  final ValueChanged<String> onChatSubmit;
 
-  const _SearchField({required this.controller, required this.focusNode});
+  /// Appelé quand une recherche sans `!` est validée pendant le chat :
+  /// on revient à la bibliothèque normale.
+  final VoidCallback onExitChat;
+
+  const _SearchField({
+    required this.controller,
+    required this.focusNode,
+    required this.onChatSubmit,
+    required this.onExitChat,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -957,16 +1052,16 @@ class _SearchField extends ConsumerWidget {
         onSubmitted: (text) {
           if (text.trim().startsWith('!')) {
             final command = text.trim().substring(1).trim();
-            controller.clear();
-            ref.read(librarySearchProvider.notifier).state = '';
-            focusNode.unfocus();
-            if (command.isNotEmpty) {
-              _runAssistantCommand(context, ref, command);
-            }
+            // Le champ garde son texte : le mode chat reste actif pour la
+            // suite, et le clavier reste ouvert comme dans un chat normal.
+            if (command.isNotEmpty) onChatSubmit(command);
+          } else {
+            onExitChat();
           }
         },
         onChanged: (text) =>
-            ref.read(librarySearchProvider.notifier).state = text,
+            ref.read(librarySearchProvider.notifier).state =
+                searchFilterFor(text),
         decoration: InputDecoration(
           hintText: 'Titre ou artiste — ! pour commander l’IA',
           prefixIcon: const Icon(Icons.search),
