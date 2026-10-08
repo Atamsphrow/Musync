@@ -79,6 +79,14 @@ final songsByStatusProvider =
 /// every track, on every character typed, is roughly four thousand throwaway
 /// strings per keystroke on this library — which is exactly the kind of cost
 /// that shows up as a search box that stutters.
+/// Clé de recherche d'un morceau : EXACTEMENT ce que la recherche
+/// bibliothèque utilise (pliage insensible aux accents et à la casse).
+///
+/// Partagée avec les outils de l'assistant IA : « !lance … » doit trouver ce
+/// que la recherche trouve, sur toute la bibliothèque.
+String songSearchKey(Song song) =>
+    '${foldForSearch(song.title)}\n${foldForSearch(song.artist)}';
+
 final _searchKeysProvider = Provider<Map<String, String>>((ref) {
   final songs = ref.watch(songListProvider).valueOrNull;
   if (songs == null) return const {};
@@ -88,10 +96,7 @@ final _searchKeysProvider = Provider<Map<String, String>>((ref) {
   // text field cannot produce one, which keeps this exactly equivalent to the
   // two separate `contains` calls it replaces.
   return {
-    for (final song in songs)
-      song.filePath:
-          '${foldForSearch(song.title)}'
-          '\n${foldForSearch(song.artist)}',
+    for (final song in songs) song.filePath: songSearchKey(song),
   };
 });
 
