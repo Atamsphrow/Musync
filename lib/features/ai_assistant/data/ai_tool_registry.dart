@@ -60,6 +60,7 @@ AiToolRegistry buildAiToolRegistry() => AiToolRegistry([
       const SearchLibraryTool(),
       const PlayArtistShuffledTool(),
       const LibraryStatsTool(),
+      const FindDuplicatesTool(),
       const CreateNamedQueueTool(),
       // Paroles
       const FetchLyricsTool(),
