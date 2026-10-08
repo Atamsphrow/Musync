@@ -1,6 +1,7 @@
 package com.atamsphrow.musync
 
 import android.app.Activity
+import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -59,9 +60,17 @@ class MainActivity : AudioServiceActivity() {
     /// Held so a later intent can reach Dart without waiting to be asked.
     private var channel: MethodChannel? = null
 
+    /// Id de l'action planifiée dont l'alarme vient de sonner, en attente que
+    /// Dart le draine (`takeScheduledAction`). L'intent d'alarme arrive bien
+    /// avant que le moteur Dart soit prêt : on ne peut pas le pousser.
+    private var pendingScheduledActionId: String? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installCrashHandler()
         super.onCreate(savedInstanceState)
+        // Démarrage à froid par une alarme setAlarmClock : l'id attendra que
+        // Dart le draine dans AutomationRunner.init().
+        handleScheduledActionIntent(intent)
     }
 
     /// Records a crash on the Android side, which Dart structurally cannot see.
@@ -114,6 +123,73 @@ class MainActivity : AudioServiceActivity() {
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 channel?.invokeMethod("openBatchReview", null)
             }, 1200)
+        }
+
+        schedulerChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            SCHEDULER_CHANNEL,
+        )
+        schedulerChannel!!.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "scheduleAlarm" -> {
+                    val id = call.argument<String>("id")
+                    val trigger =
+                        (call.argument<Number>("triggerAtMillis"))?.toLong()
+                    val daily = call.argument<Boolean>("daily") ?: false
+                    if (id == null || trigger == null) {
+                        result.error("bad-args", "id/triggerAtMillis requis", null)
+                    } else {
+                        schedulerPrefs().edit()
+                            .putString("label_$id", call.argument<String>("label") ?: id)
+                            .apply()
+                        armAlarm(id, trigger, daily)
+                        result.success(null)
+                    }
+                }
+                "cancelAlarm" -> {
+                    val id = call.argument<String>("id")
+                    if (id == null) {
+                        result.error("bad-args", "id requis", null)
+                    } else {
+                        disarmAlarm(id)
+                        result.success(null)
+                    }
+                }
+                "syncAlarms" -> {
+                    @Suppress("UNCHECKED_CAST")
+                    val alarms =
+                        call.argument<List<Map<String, Any?>>>("alarms")
+                            ?: emptyList()
+                    val wanted =
+                        alarms.mapNotNull { it["id"] as? String }.toSet()
+                    val prefs = schedulerPrefs()
+                    for (key in prefs.all.keys) {
+                        if (!key.startsWith("trigger_")) continue
+                        val id = key.removePrefix("trigger_")
+                        if (id !in wanted) disarmAlarm(id)
+                    }
+                    for (alarm in alarms) {
+                        val id = alarm["id"] as? String ?: continue
+                        val trigger =
+                            (alarm["triggerAtMillis"] as? Number)?.toLong()
+                                ?: continue
+                        val daily = alarm["daily"] as? Boolean ?: false
+                        prefs.edit()
+                            .putString("label_$id", alarm["label"] as? String ?: id)
+                            .apply()
+                        armAlarm(id, trigger, daily)
+                    }
+                    result.success(null)
+                }
+                "takeScheduledAction" -> {
+                    result.success(
+                        pendingScheduledActionId.also {
+                            pendingScheduledActionId = null
+                        },
+                    )
+                }
+                else -> result.notImplemented()
+            }
         }
 
         channel!!.setMethodCallHandler { call, result ->
@@ -177,6 +253,8 @@ class MainActivity : AudioServiceActivity() {
             intent.removeExtra("musync_open_batch")
             runOnUiThread { channel?.invokeMethod("openBatchReview", null) }
         }
+
+        handleScheduledActionIntent(intent)
 
         val before = pendingSharedAudio.size
         queueSharedAudio(intent)
@@ -528,8 +606,109 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
+    /// Alarmes exactes des automatisations, via `AlarmManager.setAlarmClock`.
+    ///
+    /// Pourquoi setAlarmClock et pas setExactAndAllowWhileIdle (documenté aussi
+    /// côté Dart dans `scheduler_bridge.dart`) : exempté de SCHEDULE_EXACT_ALARM
+    /// (zéro permission à demander, zéro écran guide), ponctuel même en Doze,
+    /// et le PendingIntent « activity » est le motif canonique des réveils —
+    /// le système laisse ouvrir l'app depuis l'arrière-plan. Coût assumé :
+    /// l'icône de réveil reste visible tant qu'une automatisation est armée.
+    ///
+    /// Dart est la source de vérité : chaque changement (et chaque démarrage)
+    /// appelle `syncAlarms`, le natif ne fait que réarmer son miroir
+    /// (SharedPreferences `musync_scheduler`, relu par [BootReceiver]).
+    private fun schedulerPrefs() =
+        getSharedPreferences(SCHEDULER_PREFS, Context.MODE_PRIVATE)
+
+    /// Request code stable par id d'action. Le hashCode String de Dart n'est
+    /// pas stable entre deux démarrages, d'où ce compteur `next_rc` : sans
+    /// stabilité, `cancel` raterait son PendingIntent après un reboot.
+    private fun requestCodeFor(id: String): Int {
+        val prefs = schedulerPrefs()
+        val existing = prefs.getInt("rc_$id", 0)
+        if (existing != 0) return existing
+        val next = prefs.getInt("next_rc", 1)
+        prefs.edit().putInt("rc_$id", next).putInt("next_rc", next + 1).apply()
+        return next
+    }
+
+    private fun alarmIntent(id: String): Intent =
+        Intent(this, MainActivity::class.java).apply {
+            action = SCHEDULED_ACTION
+            putExtra(EXTRA_SCHEDULED_ACTION_ID, id)
+        }
+
+    private fun armAlarm(id: String, triggerAtMillis: Long, daily: Boolean) {
+        val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
+        schedulerPrefs().edit()
+            .putLong("trigger_$id", triggerAtMillis)
+            .putBoolean("daily_$id", daily)
+            .apply()
+        val pending = PendingIntent.getActivity(
+            this, requestCodeFor(id), alarmIntent(id),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        // Intent affiché à côté de l'icône de réveil ; null autorisé.
+        val showIntent = packageManager.getLaunchIntentForPackage(packageName)
+        alarmManager.setAlarmClock(
+            AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent), pending,
+        )
+    }
+
+    private fun disarmAlarm(id: String) {
+        val prefs = schedulerPrefs()
+        val rc = prefs.getInt("rc_$id", 0)
+        if (rc != 0) {
+            val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
+            val pending = PendingIntent.getActivity(
+                this, rc, alarmIntent(id),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            alarmManager.cancel(pending)
+            pending.cancel()
+        }
+        prefs.edit()
+            .remove("rc_$id").remove("trigger_$id")
+            .remove("label_$id").remove("daily_$id")
+            .apply()
+    }
+
+    /// L'alarme a sonné : l'id attend que Dart le draine. Si le moteur est
+    /// déjà prêt (app ouverte), on le prévient tout de suite ; sinon
+    /// `AutomationRunner.init()` drainera au démarrage.
+    private fun queueScheduledAction(id: String) {
+        pendingScheduledActionId = id
+        schedulerChannel?.invokeMethod("scheduledActionFired", null)
+    }
+
+    private fun handleScheduledActionIntent(intent: Intent?) {
+        val id = intent?.getStringExtra(EXTRA_SCHEDULED_ACTION_ID) ?: return
+        intent.removeExtra(EXTRA_SCHEDULED_ACTION_ID)
+        queueScheduledAction(id)
+    }
+
     private companion object {
         const val MEDIA_STORE_CHANNEL = "com.atamsphrow.musync/media_store"
+
+        const val SCHEDULER_CHANNEL = "com.atamsphrow.musync/scheduler"
+
+        /// Miroir natif des automatisations, relu par [BootReceiver] au boot.
+        /// Clés par action : `rc_<id>`, `trigger_<id>`, `label_<id>`,
+        /// `daily_<id>` ; plus le compteur `next_rc`.
+        const val SCHEDULER_PREFS = "musync_scheduler"
+
+        /// Action de l'intent qu'une alarme setAlarmClock envoie pour ouvrir
+        /// l'app, et son extra (l'id de l'action à exécuter).
+        const val SCHEDULED_ACTION = "com.atamsphrow.musync.SCHEDULED_ACTION"
+        const val EXTRA_SCHEDULED_ACTION_ID = "musync_scheduled_action"
+
+        /// Le canal Dart des automatisations, posé dans
+        /// [configureFlutterEngine]. [MusyncApp] s'en sert pour remonter le
+        /// branchement des écouteurs (`headphonesConnected`) ; peut être null
+        /// si le moteur n'est pas encore prêt — l'événement est alors perdu
+        /// sans bruit, Dart réarme de toute façon à chaque démarrage.
+        var schedulerChannel: MethodChannel? = null
 
         /// Request code for the `MediaStore.createWriteRequest` dialog.
         const val WRITE_ACCESS_REQUEST_CODE = 2401
