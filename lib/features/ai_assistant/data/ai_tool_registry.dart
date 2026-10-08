@@ -13,6 +13,7 @@ import 'package:musync/features/ai_assistant/data/tools/lyrics_tools.dart';
 import 'package:musync/features/ai_assistant/data/tools/playback_tools.dart';
 import 'package:musync/features/ai_assistant/data/tools/settings_tools.dart';
 import 'package:musync/features/ai_assistant/data/tools/timer_tools.dart';
+import 'package:musync/features/ai_assistant/data/tools/automation_tools.dart';
 
 class AiToolRegistry {
   final Map<String, AiTool> _byName;
@@ -68,9 +69,18 @@ AiToolRegistry buildAiToolRegistry() => AiToolRegistry([
       // Minuteur et planification
       const SleepTimerTool(),
       ScheduleActionTool(),
+      // Automatisations (phase 2 : survivent à l'app tuée et au reboot)
+      const ScheduleOnceTool(),
+      const ScheduleDailyTool(),
+      const ListScheduledActionsTool(),
+      const CancelScheduledActionTool(),
+      const SetHeadphoneTriggerTool(),
+      const ClearHeadphoneTriggerTool(),
       // Réglages et aide
       const SetAppearanceTool(),
       const AppHelpTool(),
+      const CloseAppTool(),
+      const ToggleBubbleTool(),
       // Fichiers (confirmations systématiques)
       const EditTagsTool(),
       const DeleteFileTool(),
