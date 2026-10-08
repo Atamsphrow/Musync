@@ -69,17 +69,21 @@ class AiToolArgError implements Exception {
 /// Ce dont un outil a besoin pour agir.
 ///
 /// [runTool] permet à un outil d'en appeler un autre (ex. `schedule_action`
-/// planifie `pause`) ; [hasTool] valide les noms sans exécuter.
+/// planifie `pause`) ; [hasTool] valide les noms sans exécuter ;
+/// [requiresConfirmation] dit si un outil exige une confirmation (les
+/// automatisations refusent ceux-là : personne ne confirme à 7h du matin).
 class AiToolContext {
   final Ref ref;
   final Future<AiToolResult> Function(String tool, Map<String, Object?> args)
       runTool;
   final bool Function(String tool) hasTool;
+  final bool Function(String tool) requiresConfirmation;
 
   const AiToolContext({
     required this.ref,
     required this.runTool,
     required this.hasTool,
+    required this.requiresConfirmation,
   });
 }
 
