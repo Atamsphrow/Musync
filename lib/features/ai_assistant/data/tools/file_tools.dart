@@ -164,9 +164,13 @@ class EditTagsTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
-    final target =
-        await _resolveSingleTarget(ctx, optString(args, 'query'));
-    if (target == null) return 'Morceau introuvable.';
+    final query = optString(args, 'query');
+    final target = await _resolveSingleTarget(ctx, query);
+    if (target == null) {
+      throw AiToolArgError(
+        'Morceau introuvable${query == null ? '' : ' : « $query »'}.',
+      );
+    }
     final lines = <String>[
       'Modifier les tags de ${songLabel(target)} :',
     ];
@@ -225,9 +229,13 @@ class DeleteFileTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
-    final target =
-        await _resolveSingleTarget(ctx, optString(args, 'query'));
-    if (target == null) return 'Morceau introuvable.';
+    final query = optString(args, 'query');
+    final target = await _resolveSingleTarget(ctx, query);
+    if (target == null) {
+      throw AiToolArgError(
+        'Morceau introuvable${query == null ? '' : ' : « $query »'}.',
+      );
+    }
     return 'Supprimer DÉFINITIVEMENT le fichier :\n'
         '${target.filePath}\n'
         '${songLabel(target)}';
@@ -306,7 +314,11 @@ class FixTagsFromFilenameTool extends AiTool {
     String? query,
   ) async {
     final target = await _resolveSingleTarget(ctx, query);
-    if (target == null) return const [];
+    if (target == null) {
+      throw AiToolArgError(
+        'Morceau introuvable${query == null ? '' : ' : « $query »'}.',
+      );
+    }
     final settings =
         await ctx.ref.read(aiSettingsStoreProvider).load();
     if (settings.usable.isEmpty) {
