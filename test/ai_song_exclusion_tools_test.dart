@@ -37,6 +37,7 @@ AiToolContext _ctx(ProviderContainer container) {
     ref: ref,
     runTool: (_, _) async => AiToolResult.fail('non'),
     hasTool: (_) => false,
+    requiresConfirmation: (_) => false,
   );
 }
 
