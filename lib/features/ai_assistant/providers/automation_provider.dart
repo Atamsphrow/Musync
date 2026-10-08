@@ -23,6 +23,14 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
   @override
   Future<AutomationsDoc> build() => ref.read(automationStoreProvider).load();
 
+  /// Attend la fin du build initial. Sans ça, une écriture manuelle faite
+  /// pendant le chargement serait écrasée par le résultat du build qui
+  /// arrive après — le bug classique des tests comme de l'alarme qui sonne
+  /// au tout premier démarrage.
+  Future<void> _ready() async {
+    await future;
+  }
+
   /// Sauvegarde + miroir natif. Le natif ne jette jamais (voir
   /// [SchedulerBridge]) : une alarme non armée est loggée, pas crashée.
   Future<void> _commit(AutomationsDoc next) async {
@@ -47,6 +55,7 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
     Map<String, Object?> args = const {},
     required String label,
   }) async {
+    await _ready();
     final action = ScheduledAction(
       id: 'sched-${DateTime.now().microsecondsSinceEpoch}',
       daily: false,
@@ -73,6 +82,7 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
     Map<String, Object?> args = const {},
     required String label,
   }) async {
+    await _ready();
     final now = DateTime.now();
     final action = ScheduledAction(
       id: 'sched-${now.microsecondsSinceEpoch}',
@@ -95,6 +105,7 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
   /// Après le tir d'une action : la quotidienne est avancée au lendemain et
   /// réarmée, l'unique est supprimée.
   Future<void> advanceAfterFire(String id) async {
+    await _ready();
     final current = state.valueOrNull ?? const AutomationsDoc();
     final action = current.byId(id);
     if (action == null) return;
@@ -116,6 +127,7 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
   }
 
   Future<void> cancel(String id) async {
+    await _ready();
     final current = state.valueOrNull ?? const AutomationsDoc();
     await _commit(AutomationsDoc(
       actions: [for (final a in current.actions) if (a.id != id) a],
@@ -128,6 +140,7 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
     Map<String, Object?> args = const {},
     required String label,
   }) async {
+    await _ready();
     final current = state.valueOrNull ?? const AutomationsDoc();
     await _commit(AutomationsDoc(
       actions: current.actions,
@@ -140,6 +153,7 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
   }
 
   Future<void> clearHeadphoneTrigger() async {
+    await _ready();
     final current = state.valueOrNull ?? const AutomationsDoc();
     await _commit(AutomationsDoc(actions: current.actions));
   }
