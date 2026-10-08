@@ -275,6 +275,14 @@ Règles :
         model: provider.model,
       );
     }
+    if (response.statusCode >= 500) {
+      throw AiReaderException(
+        '${provider.name} est en panne (erreur ${response.statusCode}). '
+        'Réessayez plus tard.',
+        statusCode: response.statusCode,
+        model: provider.model,
+      );
+    }
     if (response.statusCode != 200) {
       throw AiReaderException(
         '${provider.name} a répondu ${response.statusCode}.',
