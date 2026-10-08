@@ -651,8 +651,11 @@ class MainActivity : AudioServiceActivity() {
         )
         // Intent affiché à côté de l'icône de réveil ; null autorisé.
         val showIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val showPending = showIntent?.let {
+            PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE)
+        }
         alarmManager.setAlarmClock(
-            AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent), pending,
+            AlarmManager.AlarmClockInfo(triggerAtMillis, showPending), pending,
         )
     }
 
@@ -688,7 +691,7 @@ class MainActivity : AudioServiceActivity() {
         queueScheduledAction(id)
     }
 
-    private companion object {
+    companion object {
         const val MEDIA_STORE_CHANNEL = "com.atamsphrow.musync/media_store"
 
         const val SCHEDULER_CHANNEL = "com.atamsphrow.musync/scheduler"
