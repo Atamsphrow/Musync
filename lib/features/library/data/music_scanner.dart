@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:on_audio_query/on_audio_query.dart';
 import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/features/library/data/excluded_dirs_store.dart';
+import 'package:musync/features/library/data/excluded_files_store.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/data/tag_mtime_store.dart';
 
@@ -24,14 +25,17 @@ class MusicScanner {
   final OnAudioQuery _audioQuery;
   final TagMtimeStore _mtimeStore;
   final ExcludedDirsStore _excludedDirsStore;
+  final ExcludedFilesStore _excludedFilesStore;
 
   MusicScanner({
     OnAudioQuery? audioQuery,
     TagMtimeStore? mtimeStore,
     ExcludedDirsStore? excludedDirsStore,
+    ExcludedFilesStore? excludedFilesStore,
   }) : _audioQuery = audioQuery ?? OnAudioQuery(),
        _mtimeStore = mtimeStore ?? const TagMtimeStore(),
-       _excludedDirsStore = excludedDirsStore ?? const ExcludedDirsStore();
+       _excludedDirsStore = excludedDirsStore ?? const ExcludedDirsStore(),
+       _excludedFilesStore = excludedFilesStore ?? const ExcludedFilesStore();
 
   /// Only real music: MediaStore also indexes ringtones, notification sounds
   /// and voice recordings, none of which belong in a library screen.
@@ -54,6 +58,7 @@ class MusicScanner {
     // each scan: the scanner is long-lived, and the list changes from the
     // settings screen without the library being rebuilt.
     final excludedDirs = await _excludedDirsStore.load();
+    final excludedFiles = await _excludedFilesStore.load();
 
     final ignored = <IgnoredFile>[];
     final kept = <Song>[];
@@ -78,6 +83,10 @@ class MusicScanner {
       }
       if (ExcludedDirsStore.isExcluded(s.data, excludedDirs)) {
         ignored.add(IgnoredFile(path: s.data, reason: 'Dossier exclu'));
+        continue;
+      }
+      if (ExcludedFilesStore.isExcluded(s.data, excludedFiles)) {
+        ignored.add(IgnoredFile(path: s.data, reason: 'Fichier exclu'));
         continue;
       }
       kept.add(
