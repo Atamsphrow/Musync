@@ -125,7 +125,8 @@ class LibraryStatsTool extends AiTool {
       '« combien de morceaux sans paroles ? ».';
 
   @override
-  Map<String, Object?> get parametersSchema => {'type': 'object'};
+  Map<String, Object?> get parametersSchema =>
+      {'type': 'object', 'properties': const {}};
 
   @override
   Future<String> describeAction(
