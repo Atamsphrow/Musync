@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.AudioManager.AudioDeviceCallback
 import android.os.Handler
 import android.os.Looper
 
@@ -32,7 +33,7 @@ class MusyncApp : Application() {
         headphonesPresent = hasHeadset(audioManager)
         // minSdk 26, registerAudioDeviceCallback existe depuis l'API 23.
         audioManager.registerAudioDeviceCallback(
-            object : AudioManager.AudioDeviceCallback() {
+            object : AudioDeviceCallback() {
                 override fun onAudioDevicesAdded(added: Array<AudioDeviceInfo>) =
                     onDevicesChanged(audioManager)
 
