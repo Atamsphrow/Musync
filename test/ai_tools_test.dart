@@ -55,6 +55,7 @@ AiToolContext _ctx(Ref ref) => AiToolContext(
       ref: ref,
       runTool: (_, _) async => AiToolResult.fail('non'),
       hasTool: (_) => false,
+      requiresConfirmation: (_) => false,
     );
 
 final _refProbe = Provider<Ref>((ref) => ref);
