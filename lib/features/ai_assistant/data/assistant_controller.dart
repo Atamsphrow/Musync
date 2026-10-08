@@ -85,7 +85,8 @@ class AssistantController {
   final AiToolRegistry _registry;
   final AssistantHistory _history = AssistantHistory();
 
-  AssistantController(this._ref) : _registry = buildAiToolRegistry();
+  AssistantController(this._ref, {AiToolRegistry? registry})
+      : _registry = registry ?? buildAiToolRegistry();
 
   /// Parse strict d'une réponse brute du modèle. Testable sans réseau.
   ///
@@ -214,9 +215,13 @@ class AssistantController {
       return AssistantFailed(e.message);
     }
     _history.add(trimmed, raw);
+    return executePlan(plan);
+  }
 
+  /// Exécute un plan déjà validé. Public pour les tests (faux outils).
+  Future<AssistantOutcome> executePlan(AssistantPlan plan) {
     return switch (plan) {
-      AssistantAnswer(text: final t) => AssistantDone(t),
+      AssistantAnswer(text: final t) => Future.value(AssistantDone(t)),
       AssistantToolCall(tool: final name, args: final args) =>
         _runSingle(name, args),
       AssistantSteps(steps: final steps) => _runSteps(steps),
@@ -261,7 +266,11 @@ class AssistantController {
   /// multi-étapes ne passe pas par un dialogue au milieu.
   Future<AssistantOutcome> _runSteps(List<AssistantToolCall> steps) async {
     for (final step in steps) {
-      if (_registry[step.tool]!.requiresConfirmation) {
+      final tool = _registry[step.tool];
+      if (tool == null) {
+        return AssistantFailed('Outil inconnu : « ${step.tool} ».');
+      }
+      if (tool.requiresConfirmation) {
         return const AssistantFailed(
           'Une commande multi-étapes ne peut pas contenir d’action à '
           'confirmer — demandez-la séparément.',
