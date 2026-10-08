@@ -39,6 +39,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Automatisations phase 2 : les alarmes AlarmManager ne survivent
+         pas au reboot, BootReceiver les réarme depuis son miroir. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <!-- Floating lyrics bubble: drawn over other apps, started only by the
          user from the now-playing screen. The service is the plugin's; on
          Android 14 a foreground service needs a declared type, and
@@ -48,7 +52,9 @@
 
     <application
         android:label="Musync"
-        android:name="${applicationName}"
+        <!-- MusyncApp : enregistre la détection du branchement des
+             écouteurs (dynamique, obligatoire depuis Android 8). -->
+        android:name=".MusyncApp"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false">
 
@@ -127,6 +133,17 @@
                 <data android:mimeType="audio/*"/>
             </intent-filter>
         </activity>
+
+        <!-- Automatisations phase 2 : réarme les alarmes exactes après
+             un redémarrage, depuis le miroir SharedPreferences
+             (jamais le JSON de Dart). -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <!-- audio_service: background media playback service -->
         <service
