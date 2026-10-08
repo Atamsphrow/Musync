@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:musync/features/lyrics/data/ai_filename_reader.dart';
+import 'package:musync/features/ai_assistant/data/automation.dart';
+import 'package:musync/features/ai_assistant/providers/automation_provider.dart';
 import 'package:musync/features/settings/data/ai_provider_config.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
 
@@ -38,6 +40,8 @@ class AiTab extends ConsumerWidget {
                 ),
               ),
             ),
+
+            const _AutomationsSection(),
 
             const _InstructionCard(),
 
@@ -669,4 +673,161 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
       ],
     );
   }
+}
+/// Automatisations de l'assistant : actions planifiées et déclencheur
+/// écouteurs. Sobre : la liste, chacune supprimable, rien d'autre.
+///
+/// La création se fait en langage naturel depuis la recherche (« !tous les
+/// jours à 22h, minuteur 30 min ») — pas de formulaire ici, l'utilisateur
+/// déteste le fouillis.
+class _AutomationsSection extends ConsumerWidget {
+  const _AutomationsSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final textTheme = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final automationsAsync = ref.watch(automationsProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
+          child: Text(
+            'Automatisations',
+            style: textTheme.titleSmall?.copyWith(color: scheme.primary),
+          ),
+        ),
+        automationsAsync.when(
+          loading: () => const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+          error: (error, _) => Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Text('$error', style: textTheme.bodySmall),
+          ),
+          data: (doc) {
+            final actions = doc.actions;
+            final trigger = doc.headphoneTrigger;
+            if (actions.isEmpty && trigger == null) {
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: Text(
+                  'Aucune. Exemples : « !tous les jours à 22h, minuteur '
+                  '30 min », « !demain à 7h, joue ma file Nuit », « !quand '
+                  'je branche mes écouteurs, lance ma file Nuit ».',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              );
+            }
+            return Column(
+              children: [
+                if (trigger != null)
+                  _TriggerTile(
+                      trigger: trigger, key: const ValueKey('trigger')),
+                for (final action in actions)
+                  _ScheduledActionTile(
+                    action: action,
+                    key: ValueKey(action.id),
+                  ),
+                if (actions.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                    child: Text(
+                      'L’icône de réveil reste visible en barre de statut '
+                      'tant qu’une action est planifiée.',
+                      style: textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _ScheduledActionTile extends ConsumerWidget {
+  final ScheduledAction action;
+
+  const _ScheduledActionTile({super.key, required this.action});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return ListTile(
+      leading: Icon(
+        action.daily ? Icons.repeat_outlined : Icons.alarm_outlined,
+      ),
+      title: Text(action.label),
+      subtitle: Text(action.describeSchedule()),
+      trailing: IconButton(
+        icon: const Icon(Icons.delete_outline),
+        tooltip: 'Supprimer',
+        onPressed: () => _confirmAutomationDelete(
+          context,
+          'Supprimer « ${action.label} » ?',
+          () => ref.read(automationsProvider.notifier).cancel(action.id),
+        ),
+      ),
+    );
+  }
+}
+
+class _TriggerTile extends ConsumerWidget {
+  final HeadphoneTrigger trigger;
+
+  const _TriggerTile({super.key, required this.trigger});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return ListTile(
+      leading: const Icon(Icons.headphones_outlined),
+      title: const Text('Écouteurs branchés'),
+      subtitle: Text(trigger.label),
+      trailing: IconButton(
+        icon: const Icon(Icons.delete_outline),
+        tooltip: 'Supprimer',
+        onPressed: () => _confirmAutomationDelete(
+          context,
+          'Supprimer le déclencheur « ${trigger.label} » ?',
+          () =>
+              ref.read(automationsProvider.notifier).clearHeadphoneTrigger(),
+        ),
+      ),
+    );
+  }
+}
+
+/// Les suppressions d'automatisations demandent confirmation : c'est
+/// l'utilisateur qui les a créées en langage naturel, il ne faut pas les
+/// perdre d'un tap accidentel.
+Future<void> _confirmAutomationDelete(
+  BuildContext context,
+  String title,
+  Future<void> Function() onConfirm,
+) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(title),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Annuler'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Supprimer'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed == true) await onConfirm();
 }
