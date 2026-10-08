@@ -38,6 +38,23 @@ class PlaybackSettingsNotifier extends Notifier<PlaybackSettings> {
     // notify every listener for nothing.
     if (loaded != state) state = loaded;
   }
+
+  /// Règle le décalage d'affichage des paroles (assistant IA).
+  /// Borné à ±1000 ms comme le fichier : au-delà, les lignes dépassent
+  /// leurs voisines et c'est forcément une erreur.
+  Future<void> setOffset(Duration offset) async {
+    final ms = offset.inMilliseconds
+        .clamp(-PlaybackSettings.maxOffsetMs, PlaybackSettings.maxOffsetMs);
+    final next = state.copyWith(lyricsOffsetMs: ms);
+    if (next == state) return;
+    state = next;
+    try {
+      await ref.read(playbackSettingsStoreProvider).save(next);
+    } catch (_) {
+      // Le changement est déjà vrai dans l'app ; le perdre ne coûte que le
+      // prochain lancement. Même politique que les autres réglages.
+    }
+  }
 }
 
 /// Just the offset, so a widget watching it does not rebuild when an unrelated
