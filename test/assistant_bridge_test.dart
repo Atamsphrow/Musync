@@ -164,6 +164,34 @@ void main() {
       );
     });
 
+    test('answer déguisé en outil : intercepté avant la résolution', () {
+      // Bug appareil : le modèle a renvoyé {"tool": "answer", ...} et la
+      // snackbar a affiché « Outil inconnu : « answer » ». Le texte doit
+      // sortir en réponse, sans qu'aucun outil soit cherché ni exécuté.
+      final plan = _controller().parsePlan(
+        '{"tool": "answer", "args": {"text": "Je ne peux pas créer de file synchronisée."}}',
+      );
+      expect(plan, isA<AssistantAnswer>());
+      expect(
+        (plan as AssistantAnswer).text,
+        'Je ne peux pas créer de file synchronisée.',
+      );
+    });
+
+    test('answer déguisé : autres clés de texte acceptées', () {
+      final plan = _controller().parsePlan(
+        '{"tool": "answer", "args": {"message": "voilà"}}',
+      );
+      expect((plan as AssistantAnswer).text, 'voilà');
+    });
+
+    test('answer déguisé sans texte : refusé', () {
+      expect(
+        () => _controller().parsePlan('{"tool": "answer", "args": {}}'),
+        throwsA(isA<AssistantParseError>()),
+      );
+    });
+
     test('forme inconnue : refusée', () {
       expect(
         () => _controller().parsePlan('{"blabla": 1}'),
