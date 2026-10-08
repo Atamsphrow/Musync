@@ -19,6 +19,7 @@ import 'features/player/data/audio_player_service.dart';
 import 'features/player/providers/lyrics_provider.dart';
 import 'features/settings/providers/lyrics_appearance_provider.dart';
 import 'features/player/providers/player_provider.dart';
+import 'features/ai_assistant/data/automation_runner.dart';
 
 /// Wrapped so that nothing thrown during startup goes unrecorded.
 ///
@@ -180,6 +181,9 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Automatisations phase 2 : reprogramme les alarmes Android au démarrage
+    // et arme l'écoute du branchement des écouteurs.
+    unawaited(ref.read(automationRunnerProvider).init());
   }
 
   @override
