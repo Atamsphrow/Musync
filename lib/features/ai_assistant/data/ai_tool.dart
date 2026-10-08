@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/utils/text_search.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
+import 'package:musync/features/library/providers/catalogue_provider.dart';
 
 /// Un appel d'outil tel que le pont LLM l'a compris : un nom et des arguments.
 class AiToolCall {
@@ -177,18 +178,31 @@ Future<List<Song>> librarySongs(Ref ref) async {
   }
 }
 
-/// Les morceaux dont le titre ou l'artiste contient la requête.
+/// Les morceaux correspondant à [query], meilleur score d'abord.
 ///
-/// Même pliage que la recherche de la bibliothèque (`foldForSearch`) pour
-/// que « juice » trouve « Juice WRLD » comme dans l'app.
+/// EXACTEMENT le même pipeline que la recherche bibliothèque :
+/// - mêmes clés ([songSearchKey] : titre + artiste pliés par `foldForSearch`),
+/// - sur TOUTE la bibliothèque (`songListProvider`), jamais l'onglet courant.
+///
+/// Deux niveaux : la sous-chaîne exacte d'abord (c'est ce que la recherche
+/// trouve), puis tous-les-mots-dans-le-désordre — « Juice WRLD lean wit me »
+/// trouve « Lean Wit Me » de Juice WRLD alors que l'ordre diffère, ce que la
+/// sous-chaîne seule rate.
 List<Song> matchSongs(List<Song> songs, String query) {
   final q = foldForSearch(query.trim());
   if (q.isEmpty) return const [];
-  return [
-    for (final s in songs)
-      if ('${foldForSearch(s.title)}\n${foldForSearch(s.artist)}'.contains(q))
-        s,
-  ];
+  final words = q.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+  final exact = <Song>[];
+  final allWords = <Song>[];
+  for (final s in songs) {
+    final key = songSearchKey(s);
+    if (key.contains(q)) {
+      exact.add(s);
+    } else if (words.length > 1 && words.every(key.contains)) {
+      allWords.add(s);
+    }
+  }
+  return [...exact, ...allWords];
 }
 
 /// « « titre » — artiste », pour les messages.
