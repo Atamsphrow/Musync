@@ -17,6 +17,7 @@ import 'package:musync/features/library/providers/catalogue_provider.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/library/ui/widgets/song_tile.dart';
+import 'package:musync/features/ai_assistant/data/assistant_controller.dart';
 import 'package:musync/features/lyrics/ui/batch_screen.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/player/ui/queues_sheet.dart';
@@ -857,6 +858,85 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
 /// Listens to the controller rather than holding its own copy of the text, so
 /// the clear button appears and disappears without a StatefulWidget whose
 /// lifecycle would have to be managed alongside the controller's.
+/// Exécute une commande de l'assistant IA (préfixe `!` dans la recherche).
+
+/// Le résultat arrive en snackbar ; les outils à confirmation ouvrent un
+/// dialogue qui montre exactement ce qui va se passer, avant exécution.
+/// Pas de bouton dédié : le `!` suffit, comme décidé.
+Future<void> _runAssistantCommand(
+  BuildContext context,
+  WidgetRef ref,
+  String command,
+) async {
+  final controller = ref.read(assistantControllerProvider);
+  final messenger = ScaffoldMessenger.of(context);
+  messenger.showOnly(
+    const SnackBar(
+      content: Row(
+        children: [
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: 12),
+          Text('L’IA réfléchit…'),
+        ],
+      ),
+      duration: Duration(seconds: 30),
+    ),
+  );
+
+  final outcome = await controller.handleCommand(command);
+  if (!context.mounted) return;
+
+  switch (outcome) {
+    case AssistantDone(:final message, :final navigateTo, :final navigateArgs):
+      messenger.showOnly(SnackBar(content: Text(message)));
+      if (navigateTo != null) {
+        Navigator.of(context).pushNamed(navigateTo, arguments: navigateArgs);
+      }
+    case AssistantNeedsConfirmation(:final tool, :final args, :final preview):
+      final confirmed = await _confirmAssistantAction(context, preview);
+      if (confirmed != true || !context.mounted) return;
+      final result = await controller.runConfirmed(tool, args);
+      if (!context.mounted) return;
+      if (result is AssistantDone) {
+        messenger.showOnly(SnackBar(content: Text(result.message)));
+        if (result.navigateTo != null) {
+          Navigator.of(context)
+              .pushNamed(result.navigateTo!, arguments: result.navigateArgs);
+        }
+      } else if (result is AssistantFailed) {
+        messenger.showOnly(SnackBar(content: Text(result.message)));
+      }
+    case AssistantFailed(:final message):
+      messenger.showOnly(SnackBar(content: Text(message)));
+  }
+}
+
+/// Dialogue de confirmation : montre exactement ce qui va se passer.
+Future<bool?> _confirmAssistantAction(BuildContext context, String preview) {
+  return showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      icon: const Icon(Icons.smart_toy_outlined),
+      title: const Text('Confirmer ?'),
+      content: Text(preview),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Annuler'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('Confirmer'),
+        ),
+      ],
+    ),
+  );
+}
+
 class _SearchField extends ConsumerWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
@@ -874,10 +954,21 @@ class _SearchField extends ConsumerWidget {
         // outline leaves its blue focused state, and the keyboard follows.
         onTapOutside: (_) => focusNode.unfocus(),
         textInputAction: TextInputAction.search,
+        onSubmitted: (text) {
+          if (text.trim().startsWith('!')) {
+            final command = text.trim().substring(1).trim();
+            controller.clear();
+            ref.read(librarySearchProvider.notifier).state = '';
+            focusNode.unfocus();
+            if (command.isNotEmpty) {
+              _runAssistantCommand(context, ref, command);
+            }
+          }
+        },
         onChanged: (text) =>
             ref.read(librarySearchProvider.notifier).state = text,
         decoration: InputDecoration(
-          hintText: 'Titre ou artiste',
+          hintText: 'Titre ou artiste — ! pour commander l’IA',
           prefixIcon: const Icon(Icons.search),
           suffixIcon: value.text.isEmpty
               ? null
