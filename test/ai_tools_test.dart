@@ -33,6 +33,12 @@ const _expectedTools = [
   'edit_tags',
   'delete_file',
   'fix_tags_from_filename',
+  'exclude_folder',
+  'include_folder',
+  'list_excluded_folders',
+  'exclude_song',
+  'include_song',
+  'list_excluded_songs',
 ];
 
 /// Les outils destructeurs : confirmation systématique, un fichier à la fois.
@@ -41,6 +47,8 @@ const _confirmingTools = {
   'delete_file',
   'fix_tags_from_filename',
   'batch_fetch_lyrics',
+  'exclude_folder',
+  'exclude_song',
 };
 
 AiToolContext _ctx(Ref ref) => AiToolContext(
@@ -62,7 +70,7 @@ Song _song(int id, String title, String artist) => Song(
 
 void main() {
   group('registre', () {
-    test('contient les 21 outils attendus', () {
+    test('contient tous les outils attendus', () {
       final registry = buildAiToolRegistry();
       expect(registry.length, _expectedTools.length);
       for (final name in _expectedTools) {
