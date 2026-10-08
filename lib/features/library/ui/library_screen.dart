@@ -67,15 +67,26 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   late final ScrollController _scrollController;
 
   /// Conversation IA : l'historique vit ici tant que le mode chat est actif.
-  /// La croix × (qui vide le champ) ou une recherche sans `!` le fait quitter
-  /// et vide l'historique.
+  /// Seule la croix × le fait quitter (et vide l'historique) : une fois la
+  /// conversation commencée, le `!` est insupprimable au clavier.
   final List<ChatMessage> _chatMessages = [];
   bool _chatThinking = false;
   late final ScrollController _chatScrollController;
 
-  /// Vrai quand le champ commence par `!` : la zone de contenu devient la
-  /// conversation au lieu de la liste des morceaux.
-  bool get _chatMode => _searchController.text.trim().startsWith('!');
+  /// Mode chat explicite : passe à vrai au premier `!` validé, ne repasse à
+  /// faux que par la croix ×. Tant qu'il est actif, le `!` en tête du champ
+  /// est restauré dès que le clavier le supprime.
+  bool _chatMode = false;
+
+  /// Garde anti-récursion : réécrire la valeur du champ redéclenche le
+  /// listener, qui ne doit pas restaurer le `!` une seconde fois.
+  bool _restoringBang = false;
+
+  /// La zone de contenu affiche la conversation dès que le champ commence
+  /// par `!`, même avant le premier envoi ; le mode persistant, lui, ne
+  /// s'active qu'au premier `!` validé.
+  bool get _showChat =>
+      _chatMode || _searchController.text.trim().startsWith('!');
 
   /// The last-played track is restored once, when the library first loads —
   /// never on a manual refresh.
@@ -83,9 +94,19 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   void _onSearchTextChanged() {
     if (!mounted) return;
-    if (_searchController.text.isEmpty && _chatMessages.isNotEmpty) {
-      _chatMessages.clear();
-      _chatThinking = false;
+    // `!` persistant : en mode chat, le clavier ne peut pas supprimer le
+    // préfixe — on le restaure aussitôt en gardant le curseur. Seule la
+    // croix × (via _exitChatMode) quitte la conversation.
+    if (_chatMode &&
+        !_restoringBang &&
+        !_searchController.text.startsWith('!')) {
+      _restoringBang = true;
+      final rest = _searchController.text;
+      _searchController.value = TextEditingValue(
+        text: '!$rest',
+        selection: TextSelection.collapsed(offset: rest.length + 1),
+      );
+      _restoringBang = false;
     }
     setState(() {});
   }
@@ -104,6 +125,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// confirmations restent modales par-dessus ; leur résultat arrive en bulle.
   Future<void> _submitChatCommand(String command) async {
     setState(() {
+      // Premier `!` validé : la conversation commence, le `!` devient
+      // persistant jusqu'à la croix ×.
+      _chatMode = true;
       _chatMessages.add(ChatMessage(role: ChatRole.user, text: command));
       _chatThinking = true;
     });
@@ -167,11 +191,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     }
   }
 
-  /// Quitte le mode chat : une recherche sans `!` pendant le chat revient à
-  /// la bibliothèque normale et vide l'historique.
+  /// Quitte le mode chat et vide l'historique. Appelé uniquement par la
+  /// croix × : le clavier ne peut plus faire quitter la conversation.
   void _exitChatMode() {
-    if (_chatMessages.isEmpty && !_chatThinking) return;
+    if (!_chatMode && _chatMessages.isEmpty && !_chatThinking) return;
     setState(() {
+      _chatMode = false;
       _chatMessages.clear();
       _chatThinking = false;
     });
@@ -714,7 +739,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                 outcome: permissionIssue,
                 onRetry: _requestPermissions,
               )
-            : _chatMode
+            : _showChat
                 ? AiChatView(
                     messages: _chatMessages,
                     thinking: _chatThinking,
@@ -1027,8 +1052,9 @@ class _SearchField extends ConsumerWidget {
   final FocusNode focusNode;
   final ValueChanged<String> onChatSubmit;
 
-  /// Appelé quand une recherche sans `!` est validée pendant le chat :
-  /// on revient à la bibliothèque normale.
+  /// Quitte le mode chat : appelé par la croix × (seule sortie possible
+  /// une fois la conversation commencée) et par sécurité au submit d'une
+  /// recherche sans `!`.
   final VoidCallback onExitChat;
 
   const _SearchField({
@@ -1071,6 +1097,10 @@ class _SearchField extends ConsumerWidget {
                   icon: const Icon(Icons.clear),
                   tooltip: 'Effacer',
                   onPressed: () {
+                    // Seule la croix quitte le mode chat : le `!` est
+                    // insupprimable au clavier une fois la conversation
+                    // commencée, donc elle doit passer par ici.
+                    onExitChat();
                     controller.clear();
                     ref.read(librarySearchProvider.notifier).state = '';
                   },
