@@ -13,34 +13,22 @@ import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:musync/features/ai_assistant/providers/automation_provider.dart';
 
 /// Valide l'outil embarqué : il existe et ne demande pas de confirmation.
+///
+/// Le flag vient du registre via le contexte (le contrôleur le mappe) : pas
+/// de liste codée en dur qui dériverait du registre. Une automatisation ne
+/// doit jamais dépendre d'un dialogue.
 String _checkedTool(AiToolContext ctx, Map<String, Object?> args) {
   final tool = reqString(args, 'tool').trim();
   if (!ctx.hasTool(tool)) {
     throw AiToolArgError('Outil inconnu : « $tool ».');
   }
-  // requiresConfirmation est connu du registre, pas du contexte : on passe
-  // par une exécution à blanc impossible — non. Le registre n'est pas exposé
-  // ici ; la vérification se fait via runStoredTool au tir, et ici on refuse
-  // les noms connus pour exiger une confirmation.
-  if (_confirmingTools.contains(tool)) {
+  if (ctx.requiresConfirmation(tool)) {
     throw AiToolArgError(
       '« $tool » exige une confirmation et ne peut pas être automatisé.',
     );
   }
   return tool;
 }
-
-/// Noms d'outils à confirmation — miroir de `_confirmingTools` des tests.
-/// Redondance assumée : le registre n'expose pas le flag au contexte, et une
-/// automatisation ne doit jamais dépendre d'un dialogue.
-const _confirmingTools = {
-  'edit_tags',
-  'delete_file',
-  'fix_tags_from_filename',
-  'batch_fetch_lyrics',
-  'exclude_folder',
-  'exclude_song',
-};
 
 Map<String, Object?> _nestedArgs(Map<String, Object?> args) =>
     optMap(args, 'args');
