@@ -128,11 +128,39 @@ class AssistantController {
       return AssistantSteps([for (final s in steps) _parseToolCall(s)]);
     }
 
-    if (map.containsKey('tool')) return _parseToolCall(map);
+    if (map.containsKey('tool')) {
+      // Certains modèles renvoient {"tool": "answer", "args": {...}}
+      // au lieu de {"answer": "..."} : on intercepte avant toute
+      // résolution d'outil, sinon « answer » finit en « Outil inconnu ».
+      if (map['tool'] == 'answer') {
+        return AssistantAnswer(_extractAnswerText(map['args']));
+      }
+      return _parseToolCall(map);
+    }
 
     throw const AssistantParseError(
       'Réponse du modèle incompréhensible.',
     );
+  }
+
+  /// Le texte d'une réponse « answer » déguisée en appel d'outil.
+  ///
+  /// Regarde les clés habituelles (`text`, `answer`, `message`), puis
+  /// n'importe quelle valeur textuelle non vide.
+  String _extractAnswerText(Object? args) {
+    if (args is Map) {
+      final map = Map<String, Object?>.from(args);
+      for (final key in ['text', 'answer', 'message', 'content']) {
+        final v = map[key];
+        if (v is String && v.trim().isNotEmpty) return v.trim();
+      }
+      for (final v in map.values) {
+        if (v is String && v.trim().isNotEmpty) return v.trim();
+      }
+    } else if (args is String && args.trim().isNotEmpty) {
+      return args.trim();
+    }
+    throw const AssistantParseError('Réponse du modèle incompréhensible.');
   }
 
   AssistantToolCall _parseToolCall(Object? node) {
@@ -226,6 +254,28 @@ class AssistantController {
         _runSingle(name, args),
       AssistantSteps(steps: final steps) => _runSteps(steps),
     };
+  }
+
+  /// Exécute un outil stocké (automatisation planifiée ou déclencheur).
+  ///
+  /// Jamais de confirmation ici : les outils à confirmation ne peuvent
+  /// pas être planifiés (refusé à la création), et ce garde-fou bloque
+  /// ce qui aurait filtré entre-temps. Rend un [AiToolResult], pas un
+  /// [AssistantOutcome] : il n'y a pas d'utilisateur devant l'écran.
+  Future<AiToolResult> runStoredTool(
+    String toolName,
+    Map<String, Object?> args,
+  ) async {
+    final tool = _registry[toolName];
+    if (tool == null) {
+      return AiToolResult.fail('Outil inconnu : « $toolName ».');
+    }
+    if (tool.requiresConfirmation) {
+      return AiToolResult.fail(
+        '« $toolName » exige une confirmation et ne peut pas être automatisé.',
+      );
+    }
+    return _executeTool(toolName, args);
   }
 
   /// Exécute un outil après confirmation de l'utilisateur (dialogue T3).
@@ -327,6 +377,8 @@ class AssistantController {
         ref: _ref,
         runTool: (name, args) => _executeTool(name, args),
         hasTool: _registry.contains,
+        requiresConfirmation: (name) =>
+            _registry[name]?.requiresConfirmation ?? true,
       );
 }
 
