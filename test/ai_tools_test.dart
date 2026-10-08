@@ -39,6 +39,14 @@ const _expectedTools = [
   'exclude_song',
   'include_song',
   'list_excluded_songs',
+  'schedule_once',
+  'schedule_daily',
+  'list_scheduled_actions',
+  'cancel_scheduled_action',
+  'set_headphone_trigger',
+  'clear_headphone_trigger',
+  'close_app',
+  'toggle_bubble',
 ];
 
 /// Les outils destructeurs : confirmation systématique, un fichier à la fois.
