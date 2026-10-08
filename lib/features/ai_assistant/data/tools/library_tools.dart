@@ -4,6 +4,7 @@ library;
 
 import 'package:musync/core/utils/text_search.dart';
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
+import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
 import 'package:musync/features/library/providers/catalogue_provider.dart';
 import 'package:musync/features/player/providers/named_queue_provider.dart';
@@ -148,6 +149,72 @@ class LibraryStatsTool extends AiTool {
       '${n(LyricsStatus.synced)} synchronisés, '
       '${n(LyricsStatus.plain)} simples, '
       '${n(LyricsStatus.none)} sans paroles.',
+    );
+  }
+}
+
+class FindDuplicatesTool extends AiTool {
+  const FindDuplicatesTool();
+
+  @override
+  String get name => 'find_duplicates';
+
+  @override
+  String get description =>
+      'Trouve les morceaux en double : même titre et même artiste (insensible '
+      'à la casse et aux accents), mais fichiers différents — les noms de '
+      'fichiers peuvent différer. Rend chaque groupe avec les chemins et la '
+      'durée, pour décider quoi garder. Ne supprime rien : la suppression se '
+      'fait ensuite morceau par morceau avec delete_file.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+        'type': 'object',
+        'properties': const {},
+      };
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async =>
+      'Chercher les morceaux en double.';
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final groups = <String, List<Song>>{};
+    for (final s in await librarySongs(ctx.ref)) {
+      // Des tags vides ne forment pas un « doublon » : on les ignore.
+      if (s.title.trim().isEmpty && s.artist.trim().isEmpty) continue;
+      final key = '${foldForSearch(s.title)}|${foldForSearch(s.artist)}';
+      groups.putIfAbsent(key, () => []).add(s);
+    }
+    final dupes = groups.values.where((g) => g.length > 1).toList()
+      ..sort((a, b) => b.length.compareTo(a.length));
+    if (dupes.isEmpty) {
+      return AiToolResult.ok(
+        'Aucun doublon : chaque couple titre+artiste est unique.',
+      );
+    }
+    String dur(Song s) {
+      final sec = (s.duration / 1000).round();
+      return '${sec ~/ 60}:${(sec % 60).toString().padLeft(2, '0')}';
+    }
+
+    final total = dupes.fold<int>(0, (n, g) => n + g.length);
+    final shown = dupes.take(8).map((g) {
+      final files = g.map((s) => '${s.filePath} (${dur(s)})').join(' ; ');
+      return '${songLabel(g.first)} — ${g.length} fichiers : $files';
+    }).join('\n');
+    final more =
+        dupes.length > 8 ? '\n(+${dupes.length - 8} autres groupes)' : '';
+    final gw = dupes.length > 1 ? 'groupes' : 'groupe';
+    final fw = total > 1 ? 'fichiers' : 'fichier';
+    return AiToolResult.ok(
+      '$total $fw en double, ${dupes.length} $gw :\n$shown$more',
     );
   }
 }
