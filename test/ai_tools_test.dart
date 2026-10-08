@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:musync/features/ai_assistant/data/ai_tool_registry.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/library/providers/library_provider.dart';
 
 const _expectedTools = [
   'play',
@@ -21,6 +22,7 @@ const _expectedTools = [
   'search_library',
   'play_artist_shuffled',
   'library_stats',
+  'find_duplicates',
   'create_named_queue',
   'fetch_lyrics',
   'prepare_lyrics_for_sync',
@@ -283,4 +285,88 @@ void main() {
       expect(tool.execute(ctx, {}), throwsA(isA<AiToolArgError>()));
     });
   });
+
+  group('find_duplicates', () {
+    Song dup(int id, String title, String artist, String file) => Song(
+          id: id,
+          title: title,
+          artist: artist,
+          album: '',
+          duration: 200000,
+          filePath: file,
+        );
+
+    ProviderContainer containerWith(List<Song> songs) {
+      final container = ProviderContainer(
+        overrides: [
+          songListProvider.overrideWith(
+            () => _FakeSongList(songs),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      return container;
+    }
+
+    test('regroupe par titre+artiste malgré des noms de fichiers différents',
+        () async {
+      final container = containerWith([
+        dup(1, 'Lean Wit Me', 'Juice WRLD', '/a/lean_wit_me.mp3'),
+        dup(2, 'Lean Wit Me', 'Juice WRLD', '/b/juice - lean.mp3'),
+        dup(3, 'Autre Titre', 'Autre', '/a/autre.mp3'),
+      ]);
+      final ctx = _ctx(container.read(_refProbe));
+      final tool = buildAiToolRegistry()['find_duplicates']!;
+      final result = await tool.execute(ctx, {});
+      expect(result.ok, isTrue);
+      expect(result.message, contains('Lean Wit Me'));
+      expect(result.message, contains('/a/lean_wit_me.mp3'));
+      expect(result.message, contains('/b/juice - lean.mp3'));
+      expect(result.message, isNot(contains('Autre Titre')));
+    });
+
+    test('insensible à la casse et aux accents', () async {
+      final container = containerWith([
+        dup(1, 'Café del Mar', 'Énergie', '/a/cafe.mp3'),
+        dup(2, 'CAFE DEL MAR', 'energie', '/b/cafe2.mp3'),
+      ]);
+      final ctx = _ctx(container.read(_refProbe));
+      final tool = buildAiToolRegistry()['find_duplicates']!;
+      final result = await tool.execute(ctx, {});
+      expect(result.ok, isTrue);
+      expect(result.message, contains('2 fichiers en double'));
+    });
+
+    test('aucun doublon → message clair', () async {
+      final container = containerWith([
+        dup(1, 'Titre A', 'Artiste', '/a/a.mp3'),
+        dup(2, 'Titre B', 'Artiste', '/a/b.mp3'),
+      ]);
+      final ctx = _ctx(container.read(_refProbe));
+      final tool = buildAiToolRegistry()['find_duplicates']!;
+      final result = await tool.execute(ctx, {});
+      expect(result.ok, isTrue);
+      expect(result.message, contains('Aucun doublon'));
+    });
+
+    test('les tags vides ne forment pas un faux groupe', () async {
+      final container = containerWith([
+        dup(1, '', '', '/a/x.mp3'),
+        dup(2, '', '', '/b/y.mp3'),
+      ]);
+      final ctx = _ctx(container.read(_refProbe));
+      final tool = buildAiToolRegistry()['find_duplicates']!;
+      final result = await tool.execute(ctx, {});
+      expect(result.ok, isTrue);
+      expect(result.message, contains('Aucun doublon'));
+    });
+  });
+}
+
+class _FakeSongList extends SongListNotifier {
+  final List<Song> songs;
+  _FakeSongList(this.songs);
+
+  @override
+  Future<List<Song>> build() async => songs;
 }
