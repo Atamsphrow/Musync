@@ -9,6 +9,8 @@
 ///   la fermeture de l'app et au redémarrage du téléphone.
 library;
 
+import 'dart:io' show Platform;
+
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:musync/features/ai_assistant/providers/automation_provider.dart';
 
@@ -49,7 +51,7 @@ class ScheduleOnceTool extends AiTool {
   String get description =>
       'Planifie une action UNE fois, à une date et heure précises (heure du '
       'téléphone). Marche même si l’app est fermée ou le téléphone redémarré. '
-      '« datetime » ISO local (ex. "2026-10-09T07:00", dans le futur), '
+      '« datetime » ISO local (ex. "2026-10-09T07:00", dans le futur, Android uniquement), '
       '« tool » l’outil à exécuter, « args » ses arguments, « label » un nom '
       'court en français. Jamais un outil à confirmation.';
 
@@ -78,6 +80,12 @@ class ScheduleOnceTool extends AiTool {
     Map<String, Object?> args,
   ) async {
     final tool = _checkedTool(ctx, args);
+    if (Platform.isIOS) {
+      return AiToolResult.fail(
+        'Non disponible sur iPhone : iOS ne permet pas à une application '
+        'fermée de démarrer la lecture à une heure précise.',
+      );
+    }
     final raw = reqString(args, 'datetime').trim();
     final DateTime at;
     try {
@@ -114,7 +122,7 @@ class ScheduleDailyTool extends AiTool {
   @override
   String get description =>
       'Planifie une action TOUS LES JOURS à heure fixe (heure du téléphone). '
-      'Marche même si l’app est fermée ou le téléphone redémarré. « hour » '
+      'Marche même si l’app est fermée ou le téléphone redémarré (Android uniquement). « hour » '
       '(0-23), « minute » (0-59), « tool » l’outil à exécuter, « args » ses '
       'arguments, « label » un nom court en français. Jamais un outil à '
       'confirmation.';
@@ -144,6 +152,12 @@ class ScheduleDailyTool extends AiTool {
     Map<String, Object?> args,
   ) async {
     final tool = _checkedTool(ctx, args);
+    if (Platform.isIOS) {
+      return AiToolResult.fail(
+        'Non disponible sur iPhone : iOS ne permet pas à une application '
+        'fermée de démarrer la lecture à une heure précise.',
+      );
+    }
     final hour = reqInt(args, 'hour');
     final minute = reqInt(args, 'minute');
     if (hour < 0 || hour > 23) {
@@ -279,7 +293,7 @@ class SetHeadphoneTriggerTool extends AiTool {
   @override
   String get description =>
       'Définit ce qui se passe quand des écouteurs sont branchés (jack, USB '
-      'ou Bluetooth). « tool » l’outil à exécuter, « args » ses arguments, '
+      'ou Bluetooth) (Android uniquement). « tool » l’outil à exécuter, « args » ses arguments, '
       '« label » un nom court en français. Ne se déclenche que si rien ne '
       'joue déjà, et seulement quand l’app est en mémoire. Remplace le '
       'déclencheur précédent. Jamais un outil à confirmation.';
@@ -307,6 +321,12 @@ class SetHeadphoneTriggerTool extends AiTool {
     Map<String, Object?> args,
   ) async {
     final tool = _checkedTool(ctx, args);
+    if (Platform.isIOS) {
+      return AiToolResult.fail(
+        'Non disponible sur iPhone : iOS ne prévient pas les applications '
+        'du branchement d’écouteurs.',
+      );
+    }
     final label = _label(args, tool);
     await ctx.ref.read(automationsProvider.notifier).setHeadphoneTrigger(
           tool: tool,
