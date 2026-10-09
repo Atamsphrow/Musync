@@ -3,6 +3,8 @@
 /// bubble. The bubble's own settings live here too now.
 library;
 
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/features/bubble/ui/lyrics_bubble_button.dart';
@@ -146,8 +148,11 @@ class AppearanceTab extends ConsumerWidget {
               update(appearance.copyWith(bubbleColorMode: s.first)),
           showSelectedIcon: false,
         ),
-        const Divider(height: 32),
-        const _BubbleSetting(),
+        // iOS : la bulle flottante n'existe pas sur iPhone.
+        if (!Platform.isIOS) ...[
+          const Divider(height: 32),
+          const _BubbleSetting(),
+        ],
       ],
     );
   }
