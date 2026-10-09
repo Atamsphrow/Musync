@@ -5,6 +5,8 @@
 /// automatique, le snackbar dit seulement qu'il est en cours.
 library;
 
+import 'dart:io' show Platform;
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -27,6 +29,7 @@ class LibraryTab extends ConsumerWidget {
         (AsyncData(:final value), AsyncData(value: final files)) => ListView(
               padding: const EdgeInsets.fromLTRB(8, 8, 8, 88),
               children: [
+                if (Platform.isIOS) const _IosImportHelp(),
                 const _SectionHeader(title: 'Dossiers exclus'),
                 if (value.isEmpty)
                   const _EmptyLine(text: 'Aucun dossier exclu.')
@@ -46,6 +49,36 @@ class LibraryTab extends ConsumerWidget {
         onPressed: () => _addDirectory(context, ref),
         icon: const Icon(Icons.create_new_folder_outlined),
         label: const Text('Ajouter un dossier'),
+      ),
+    );
+  }
+}
+
+/// iOS : explique comment remplir la bibliothèque depuis l'app Fichiers.
+///
+/// Sur iPhone il n'y a pas de dossier Musique partagé : les morceaux vivent
+/// dans le dossier Documents de l'app, que le partage de fichiers iTunes
+/// rend visible dans l'app Fichiers (onglet « Sur mon iPhone » › Musync).
+class _IosImportHelp extends StatelessWidget {
+  const _IosImportHelp();
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Text(
+          'Pour ajouter de la musique sur iPhone : ouvre l\u2019app Fichiers, '
+          'va dans « Sur mon iPhone » › Musync, et copies-y tes fichiers '
+          'audio (MP3, M4A\u2026). Reviens ici et tire la bibliothèque vers '
+          'le bas pour les voir appara\u00eetre.',
+          style: textTheme.bodySmall?.copyWith(
+            color: scheme.onSurfaceVariant,
+          ),
+        ),
       ),
     );
   }
