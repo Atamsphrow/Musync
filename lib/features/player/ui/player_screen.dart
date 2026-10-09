@@ -315,7 +315,8 @@ class _TopBar extends ConsumerWidget {
               ),
             ),
           ),
-          if (hasSynced) const LyricsBubbleButton(),
+          // iOS : pas de fenêtre flottante par-dessus les autres applis.
+          if (hasSynced && !Platform.isIOS) const LyricsBubbleButton(),
           IconButton(
             icon: const Icon(Icons.open_in_new),
             tooltip: 'Ouvrir dans Musicolet',
