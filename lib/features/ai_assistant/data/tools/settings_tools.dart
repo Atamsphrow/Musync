@@ -1,6 +1,8 @@
 /// Outils de réglages et d'aide : apparence des paroles, questions sur l'app.
 library;
 
+import 'dart:io' show Platform;
+
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:flutter/services.dart';
 import 'package:musync/features/ai_assistant/data/app_knowledge.dart';
@@ -211,7 +213,7 @@ class ToggleBubbleTool extends AiTool {
   String get description =>
       'Active ou désactive la bulle flottante de paroles (bascule). Sans '
       'argument. La bulle ne s’affiche que par-dessus les autres applis, '
-      'jamais dans Musync.';
+      'jamais dans Musync. (Android uniquement)';
 
   @override
   Map<String, Object?> get parametersSchema => {
@@ -231,6 +233,12 @@ class ToggleBubbleTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
+    if (Platform.isIOS) {
+      return AiToolResult.fail(
+        'Non disponible sur iPhone : iOS n’autorise pas les fenêtres '
+        'flottantes par-dessus les autres applications.',
+      );
+    }
     final controller = ctx.ref.read(lyricsBubbleProvider.notifier);
     if (ctx.ref.read(lyricsBubbleProvider).active) {
       await controller.stop();
