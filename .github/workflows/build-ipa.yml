@@ -1,0 +1,45 @@
+name: Build IPA
+
+# Build iOS manuel de Musync (version iPhone, pour sideload).
+#
+# Produit un IPA NON SIGNÉ : GitHub sert uniquement de machine de compilation
+# (macOS requis pour Xcode). Installation via Sideloadly ou AltStore avec un
+# identifiant Apple — un compte gratuit donne un certificat de 7 jours, à
+# rafraîchir chaque semaine (AltStore le fait seul en WiFi).
+#
+# Ne touche pas au workflow Android (build-apk.yml).
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build iOS (sans signature)
+        run: flutter build ios --release --no-codesign
+
+      - name: Empaqueter l'IPA
+        run: |
+          rm -rf Payload musync-ios-unsigned.ipa
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -r -y musync-ios-unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: musync-ipa
+          path: musync-ios-unsigned.ipa
