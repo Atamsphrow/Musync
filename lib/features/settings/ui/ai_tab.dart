@@ -1,6 +1,8 @@
 /// Settings › IA: the models, their keys, and what they are told to do.
 library;
 
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -41,7 +43,8 @@ class AiTab extends ConsumerWidget {
               ),
             ),
 
-            const _AutomationsSection(),
+            // iOS : pas d'alarmes exactes ni de déclencheur écouteurs.
+            if (!Platform.isIOS) const _AutomationsSection(),
 
             const _InstructionCard(),
 
