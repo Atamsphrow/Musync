@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:on_audio_query/on_audio_query.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/features/library/data/excluded_dirs_store.dart';
 import 'package:musync/features/library/data/excluded_files_store.dart';
@@ -47,6 +48,10 @@ class MusicScanner {
   List<IgnoredFile> lastIgnored = const [];
 
   Future<List<Song>> scanAllSongs() async {
+    // iOS : pas de MediaStore. La bibliothèque, c'est le dossier Documents
+    // de l'app, rempli depuis l'app Fichiers de l'iPhone (partage de
+    // fichiers iTunes activé dans Info.plist).
+    if (Platform.isIOS) return _scanDocuments();
     final songs = await _audioQuery.querySongs(
       sortType: SongSortType.TITLE,
       orderType: OrderType.ASC_OR_SMALLER,
@@ -103,6 +108,102 @@ class MusicScanner {
     }
     lastIgnored = List.unmodifiable(ignored);
     return kept;
+  }
+
+  /// Extensions audio reconnues dans le dossier Documents (iOS).
+  static const _audioExtensions = {
+    '.mp3', '.m4a', '.mp4', '.flac', '.ogg', '.oga', '.opus', '.wav', '.aac',
+  };
+
+  /// Id stable d'un morceau iOS, dérivé de son chemin (FNV-1a 32 bits).
+  ///
+  /// `String.hashCode` n'est pas contractuellement stable d'un lancement à
+  /// l'autre ; ce hash-ci l'est, ce qui évite que toute la bibliothèque
+  /// change d'identifiant à chaque redémarrage.
+  static int stableIdForPath(String path) {
+    var hash = 0x811c9dc5;
+    for (final unit in path.codeUnits) {
+      hash ^= unit;
+      hash = (hash * 0x01000193) & 0xffffffff;
+    }
+    return hash;
+  }
+
+  /// Scan iOS : marche le dossier Documents de l'app et construit les
+  /// morceaux depuis les fichiers eux-mêmes (tags ID3 pour les MP3, nom de
+  /// fichier sinon). Pas de filtre de durée : il n'y a ni sonneries ni
+  /// notifications dans Documents, et la durée n'est pas lisible sans
+  /// décoder.
+  Future<List<Song>> _scanDocuments() async {
+    final ignored = <IgnoredFile>[];
+    final kept = <Song>[];
+    late final Directory docs;
+    try {
+      docs = await getApplicationDocumentsDirectory();
+    } catch (_) {
+      lastIgnored = const [];
+      return const [];
+    }
+    if (!await docs.exists()) {
+      lastIgnored = const [];
+      return const [];
+    }
+    final excludedDirs = await _excludedDirsStore.load();
+    final excludedFiles = await _excludedFilesStore.load();
+    await for (final entity in docs.list(recursive: true, followLinks: false)) {
+      if (entity is! File) continue;
+      final path = entity.path;
+      final dot = path.lastIndexOf('.');
+      final ext = dot < 0 ? '' : path.substring(dot).toLowerCase();
+      if (!_audioExtensions.contains(ext)) continue;
+      if (ExcludedDirsStore.isExcluded(path, excludedDirs)) {
+        ignored.add(IgnoredFile(path: path, reason: 'Dossier exclu'));
+        continue;
+      }
+      if (ExcludedFilesStore.isExcluded(path, excludedFiles)) {
+        ignored.add(IgnoredFile(path: path, reason: 'Fichier exclu'));
+        continue;
+      }
+      kept.add(await _songFromFile(path));
+    }
+    lastIgnored = List.unmodifiable(ignored);
+    return kept;
+  }
+
+  /// Construit un [Song] depuis un fichier (iOS) : tags ID3 pour les MP3,
+  /// nom de fichier nettoyé pour le reste.
+  Future<Song> _songFromFile(String path) async {
+    var title = _basenameWithoutExtension(path);
+    var artist = unknownArtist;
+    var album = unknownAlbum;
+    if (path.toLowerCase().endsWith('.mp3')) {
+      try {
+        final meta = await Id3Reader.readMetadata(path);
+        final t = meta.title?.trim();
+        if (t != null && t.isNotEmpty) title = t;
+        final a = meta.artist?.trim();
+        if (a != null && a.isNotEmpty && a != '<unknown>') artist = a;
+        final al = meta.album?.trim();
+        if (al != null && al.isNotEmpty && al != '<unknown>') album = al;
+      } catch (_) {
+        // Tag illisible : on garde le nom de fichier.
+      }
+    }
+    return Song(
+      id: stableIdForPath(path),
+      title: title,
+      artist: artist,
+      album: album,
+      duration: 0,
+      filePath: path,
+    );
+  }
+
+  static String _basenameWithoutExtension(String path) {
+    final sep = path.lastIndexOf(Platform.pathSeparator);
+    final base = sep < 0 ? path : path.substring(sep + 1);
+    final dot = base.lastIndexOf('.');
+    return (dot < 0 ? base : base.substring(0, dot)).replaceAll('_', ' ');
   }
 
   /// Re-reads title/artist/album straight from the audio files whose content
@@ -219,6 +320,9 @@ class MusicScanner {
   }
 
   Future<Uint8List?> getArtwork(int songId) {
+    // iOS : les morceaux viennent du dossier Documents, pas de la
+    // bibliothèque Apple Music — aucun artwork requêtable par id.
+    if (Platform.isIOS) return Future.value();
     return _audioQuery.queryArtwork(
       songId,
       ArtworkType.AUDIO,
