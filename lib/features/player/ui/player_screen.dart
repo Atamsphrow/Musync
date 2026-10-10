@@ -644,6 +644,7 @@ class _LyricsPane extends ConsumerWidget {
             lyrics: synced,
             onSearchOnline: searchOnline,
             song: song,
+            unsynced: pair.unsynced,
           );
         }
 
