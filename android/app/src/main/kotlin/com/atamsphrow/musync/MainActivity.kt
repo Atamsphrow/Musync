@@ -347,7 +347,10 @@ class MainActivity : AudioServiceActivity() {
                     emptyList()
                 }
             Intent.ACTION_SEND_MULTIPLE ->
-                getParcelableArrayListCompat(intent, Intent.EXTRA_STREAM)
+                // Some senders put several files in ClipData instead of
+                // EXTRA_STREAM; take both — the dedup below collapses overlaps.
+                getParcelableArrayListCompat(intent, Intent.EXTRA_STREAM) +
+                    getClipDataUris(intent)
             Intent.ACTION_VIEW ->
                 // VIEW can carry multiple items via ClipData (e.g. file managers
                 // sharing several files with "open with").
