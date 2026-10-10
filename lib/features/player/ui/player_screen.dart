@@ -87,6 +87,25 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with RouteAware {
   /// nothing at all — the gesture read as broken rather than as unavailable.
   double _dragOffset = 0;
 
+  /// Minimum fling speed (logical pixels per second) for a horizontal swipe
+  /// on the cover/lyrics pane. Below it, the gesture is ignored: slow drags
+  /// belong to whoever else might want them.
+  static const _queueSwipeVelocity = 500.0;
+
+  /// Glissement horizontal sur la zone pochette/paroles :
+  /// vers la droite la file d'attente en cours, vers la gauche les files
+  /// d'attente. Mêmes destinations que le menu ⋮.
+  void _onHorizontalSwipe(DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0;
+    if (velocity >= _queueSwipeVelocity) {
+      Navigator.of(
+        context,
+      ).push(MaterialPageRoute(builder: (_) => const QueueScreen()));
+    } else if (velocity <= -_queueSwipeVelocity) {
+      showQueuesSheet(context);
+    }
+  }
+
   /// Distance past which letting go dismisses, however slowly the finger moved.
   static const double _dismissDistance = 110;
 
@@ -144,21 +163,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with RouteAware {
     if (ref.read(currentSongProvider) != args.song) {
       // Fire-and-forget, but a corrupt or missing file must not fail
       // silently: surface it instead of opening a mute player.
-      ref.read(audioPlayerServiceProvider).playSong(
-        args.song,
-        queue: args.queue,
-        index: args.index,
-      ).catchError((Object e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showOnly(
-            const SnackBar(
-              content: Text(
-                'Fichier illisible ou corrompu : impossible de le lire.',
-              ),
-            ),
-          );
-        }
-      });
+      ref
+          .read(audioPlayerServiceProvider)
+          .playSong(args.song, queue: args.queue, index: args.index)
+          .catchError((Object e) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showOnly(
+                const SnackBar(
+                  content: Text(
+                    'Fichier illisible ou corrompu : impossible de le lire.',
+                  ),
+                ),
+              );
+            }
+          });
     }
     // The floating bubble hides while this screen is visible (RouteAware
     // callbacks below publish the changes). subscribe() does not replay the
@@ -169,7 +187,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with RouteAware {
       _routeSubscribed = true;
       _publishPlayerVisible(route.isCurrent);
     }
-
   }
 
   @override
@@ -232,33 +249,41 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with RouteAware {
                 ),
               ),
               Expanded(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 300),
-                  child: _showLyrics
-                      ? GestureDetector(
-                          key: const ValueKey('lyrics'),
-                          // Opaque, so the whole pane answers — not only the
-                          // pixels a child happens to occupy. The default
-                          // (`deferToChild`) meant that on a track with no
-                          // lyrics, where the pane is mostly empty space around
-                          // a "Chercher en ligne" button, tapping anywhere but
-                          // that button did nothing and there was no way back
-                          // to the cover.
-                          //
-                          // The button still wins: a child's gesture is
-                          // resolved before its parent's.
-                          behavior: HitTestBehavior.opaque,
-                          onTap: tapOnLyrics,
-                          child: _LyricsPane(song: song),
-                        )
-                      : _ArtworkPane(
-                          song: song,
-                          key: const ValueKey('artwork'),
-                          // Always available: every track's cover opens its words.
-                          onTap: song == null ? null : _toggleLyrics,
-                          onVerticalDragUpdate: _onDragUpdate,
-                          onVerticalDragEnd: _onDragEnd,
-                        ),
+                child: GestureDetector(
+                  // Opaque: the whole pane answers, not only the pixels the
+                  // child fills. The inner panes keep their own gestures —
+                  // a vertical scroll still scrolls, a tap still taps; only
+                  // a horizontal fling reaches here.
+                  behavior: HitTestBehavior.opaque,
+                  onHorizontalDragEnd: _onHorizontalSwipe,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 300),
+                    child: _showLyrics
+                        ? GestureDetector(
+                            key: const ValueKey('lyrics'),
+                            // Opaque, so the whole pane answers — not only the
+                            // pixels a child happens to occupy. The default
+                            // (`deferToChild`) meant that on a track with no
+                            // lyrics, where the pane is mostly empty space around
+                            // a "Chercher en ligne" button, tapping anywhere but
+                            // that button did nothing and there was no way back
+                            // to the cover.
+                            //
+                            // The button still wins: a child's gesture is
+                            // resolved before its parent's.
+                            behavior: HitTestBehavior.opaque,
+                            onTap: tapOnLyrics,
+                            child: _LyricsPane(song: song),
+                          )
+                        : _ArtworkPane(
+                            song: song,
+                            key: const ValueKey('artwork'),
+                            // Always available: every track's cover opens its words.
+                            onTap: song == null ? null : _toggleLyrics,
+                            onVerticalDragUpdate: _onDragUpdate,
+                            onVerticalDragEnd: _onDragEnd,
+                          ),
+                  ),
                 ),
               ),
               if (song != null) _SongTitle(song: song),
@@ -409,7 +434,9 @@ class _ArtworkPane extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: 32),
         child: GestureDetector(
           onTap: onTap,
-          onLongPress: song == null ? null : () => _showArtworkMenu(context, ref),
+          onLongPress: song == null
+              ? null
+              : () => _showArtworkMenu(context, ref),
           onVerticalDragUpdate: onVerticalDragUpdate,
           onVerticalDragEnd: onVerticalDragEnd,
           child: AspectRatio(
@@ -560,17 +587,15 @@ class _ArtworkPane extends ConsumerWidget {
     } catch (_) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showOnly(
-        const SnackBar(
-          content: Text('Changement de pochette impossible.'),
-        ),
+        const SnackBar(content: Text('Changement de pochette impossible.')),
       );
       return;
     }
 
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showOnly(
-      const SnackBar(content: Text('Pochette mise à jour')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showOnly(const SnackBar(content: Text('Pochette mise à jour')));
   }
 
   Future<Uint8List?> _readCoverBytes(String imagePath) async {
@@ -700,11 +725,7 @@ class _PlainLyrics extends ConsumerWidget {
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-            child: Text(
-              text,
-              textAlign: textAlign,
-              style: style,
-            ),
+            child: Text(text, textAlign: textAlign, style: style),
           ),
         ),
         TextButton.icon(
@@ -779,14 +800,13 @@ class _SeekBarState extends ConsumerState<_SeekBar> {
     // Rounded to ~100 ms: positionProvider ticks up to 60 Hz, and rebuilding
     // the slider that often is pure waste — a tenth of a second is invisible
     // on a seek bar.
-    final position =
-        ref.watch(
-          positionProvider.select(
-            (p) => Duration(
-              milliseconds: (p.valueOrNull?.inMilliseconds ?? 0) ~/ 100 * 100,
-            ),
-          ),
-        );
+    final position = ref.watch(
+      positionProvider.select(
+        (p) => Duration(
+          milliseconds: (p.valueOrNull?.inMilliseconds ?? 0) ~/ 100 * 100,
+        ),
+      ),
+    );
     final duration =
         ref.watch(durationProvider).valueOrNull ??
         widget.song?.durationValue ??
@@ -854,14 +874,12 @@ class _LyricsActions extends ConsumerWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               TextButton.icon(
-                onPressed:
-                    song == null ? null : () => _openSheet(context, ref),
+                onPressed: song == null ? null : () => _openSheet(context, ref),
                 icon: const Icon(Icons.tune, size: 18),
                 label: const Text('Paroles'),
               ),
               TextButton.icon(
-                onPressed:
-                    song == null ? null : () => _openTagEditor(context),
+                onPressed: song == null ? null : () => _openTagEditor(context),
                 icon: const Icon(Icons.edit, size: 18),
                 label: const Text('Tags'),
               ),
@@ -874,10 +892,9 @@ class _LyricsActions extends ConsumerWidget {
           onSelected: (value) {
             switch (value) {
               case 'queue':
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                      builder: (_) => const QueueScreen()),
-                );
+                Navigator.of(
+                  context,
+                ).push(MaterialPageRoute(builder: (_) => const QueueScreen()));
               case 'queues':
                 showQueuesSheet(context);
               case 'timer':
