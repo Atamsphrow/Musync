@@ -3,49 +3,121 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/id3/lrc_parser.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/features/lyrics/ui/embed_lyrics_action.dart';
-import 'package:musync/features/player/providers/lyrics_provider.dart';
 
 /// Opens the quick ±100 ms timing sheet for one synced line.
 ///
-/// Each tap nudges the line in the file and refreshes the lyrics providers,
-/// so the player screen, the mini-player line and the bubble all follow.
-void showNudgeLineSheet(
+/// Taps apply instantly in memory — no file write between taps, so a burst
+/// of five or six stays fluid. The accumulated nudge is written once, when
+/// the sheet closes: one backup, one history entry, one snackbar with the
+/// total.
+///
+/// Writing per tap used to stack a full backup + invalidate cascade on every
+/// tap, and rapid taps crashed the app (`Concurrent modification during
+/// iteration` inside Riverpod). One write per session removes the race at
+/// the root.
+Future<void> showNudgeLineSheet(
   BuildContext context,
   WidgetRef ref, {
   required String filePath,
   required SyncedLyrics synced,
   required UnsyncedLyrics? unsynced,
   required int index,
-}) {
-  showModalBottomSheet<void>(
+}) async {
+  final session = _NudgeSession(initialSynced: synced);
+  await showModalBottomSheet<void>(
     context: context,
     builder: (_) => _NudgeLineSheet(
       filePath: filePath,
-      synced: synced,
       unsynced: unsynced,
       index: index,
+      session: session,
     ),
   );
+  if (!session.dirty) return;
+  if (!context.mounted) return;
+  final totalMs = session.totalDelta.inMilliseconds.abs();
+  await embedLyrics(
+    context,
+    ref,
+    filePath: filePath,
+    synced: session.synced,
+    unsynced: unsynced,
+    // This sheet owns the whole synced state for the session, like the sync
+    // editor does — a plain-text write must not wipe the timings.
+    onPlainOverSynced: PlainOverSynced.replace,
+    successMessage:
+        '« ${session.lineText} » ${session.totalDelta.isNegative ? '−' : '+'}$totalMs ms.',
+  );
+}
+
+/// The taps of one sheet session, accumulated in memory.
+///
+/// A plain mutable holder, shared with the sheet's state: however the sheet
+/// closes (drag, tap outside, back), the caller reads [dirty] afterwards.
+/// No PopScope dance needed.
+class _NudgeSession {
+  _NudgeSession({required SyncedLyrics initialSynced})
+      : _synced = initialSynced;
+
+  SyncedLyrics _synced;
+  SyncedLyrics get synced => _synced;
+
+  /// Sum of the deltas actually applied (a −100 ms tap on a 50 ms timestamp
+  /// only moves 50 ms). Zero means nothing changed: no write, no history.
+  Duration totalDelta = Duration.zero;
+
+  /// The line's text at the last tap, for the summary snackbar.
+  String lineText = '';
+
+  bool get dirty => totalDelta != Duration.zero;
+
+  /// Applies one step in memory and returns the updated state, or null when
+  /// the tap changes nothing.
+  ({SyncedLyrics synced, int index})? nudge(
+    int index,
+    Duration delta,
+  ) {
+    if (index < 0 || index >= _synced.lines.length) return null;
+    final line = _synced.lines[index];
+    final timestamp = line.timestamp;
+    // Untimed lines never reach SyncedLyrics, but never trust it blindly.
+    if (timestamp == null) return null;
+    // Floored at zero, like SyncedLyrics.offsetAll.
+    final next = timestamp + delta < Duration.zero
+        ? Duration.zero
+        : timestamp + delta;
+    if (next == timestamp) return null;
+    final nudgedLine = line.copyWith(timestamp: next);
+    // The constructor re-sorts, so re-locate the line by identity instead of
+    // trusting the old index.
+    final nudged = SyncedLyrics([
+      for (var i = 0; i < _synced.lines.length; i++)
+        i == index ? nudgedLine : _synced.lines[i],
+    ]);
+    totalDelta += next - timestamp;
+    lineText = nudgedLine.text.trim();
+    _synced = nudged;
+    return (synced: nudged, index: nudged.lines.indexOf(nudgedLine));
+  }
 }
 
 /// Quick per-line timing fix.
 ///
-/// The line's own ±100 ms nudge buttons, saved to the file on every tap — no
-/// trip through the full sync editor. The song and line are captured when the
-/// sheet opens: playback keeps running underneath, so a live line index would
-/// be the wrong target by the second tap.
+/// The song and line are captured when the sheet opens: playback keeps
+/// running underneath, so a live line index would be the wrong target by the
+/// second tap.
 class _NudgeLineSheet extends ConsumerStatefulWidget {
   const _NudgeLineSheet({
     required this.filePath,
-    required this.synced,
     required this.unsynced,
     required this.index,
+    required this.session,
   });
 
   final String filePath;
-  final SyncedLyrics synced;
   final UnsyncedLyrics? unsynced;
   final int index;
+  final _NudgeSession session;
 
   @override
   ConsumerState<_NudgeLineSheet> createState() => _NudgeLineSheetState();
@@ -56,54 +128,21 @@ class _NudgeLineSheetState extends ConsumerState<_NudgeLineSheet> {
 
   late SyncedLyrics _synced;
   late int _index;
-  bool _saving = false;
 
   @override
   void initState() {
     super.initState();
-    _synced = widget.synced;
+    _synced = widget.session.synced;
     _index = widget.index;
   }
 
-  Future<void> _nudge(Duration delta) async {
-    if (_saving || _index < 0 || _index >= _synced.lines.length) return;
-    final line = _synced.lines[_index];
-    final timestamp = line.timestamp;
-    // Untimed lines never reach SyncedLyrics, but never trust it blindly.
-    if (timestamp == null) return;
-    setState(() => _saving = true);
-    // Floored at zero, like SyncedLyrics.offsetAll.
-    final next = timestamp + delta < Duration.zero
-        ? Duration.zero
-        : timestamp + delta;
-    final nudgedLine = line.copyWith(timestamp: next);
-    // The constructor re-sorts, so re-locate the line by identity for the
-    // next tap instead of trusting the old index.
-    final nudged = SyncedLyrics([
-      for (var i = 0; i < _synced.lines.length; i++)
-        i == _index ? nudgedLine : _synced.lines[i],
-    ]);
-    final outcome = await embedLyrics(
-      context,
-      ref,
-      filePath: widget.filePath,
-      synced: nudged,
-      unsynced: widget.unsynced,
-      // This sheet owns the whole synced state for the tap, like the sync
-      // editor does — a plain-text write must not wipe the timings.
-      onPlainOverSynced: PlainOverSynced.replace,
-      successMessage:
-          '« ${line.text.trim()} » ${delta.isNegative ? '−' : '+'}100 ms.',
-    );
-    if (!mounted) return;
-    if (outcome == EmbedOutcome.written) {
-      _synced = nudged;
-      _index = nudged.lines.indexOf(nudgedLine);
-      // The player screen, the mini-player line and the bubble all read
-      // through this provider.
-      ref.invalidate(currentLyricsProvider);
-    }
-    setState(() => _saving = false);
+  void _nudge(Duration delta) {
+    final updated = widget.session.nudge(_index, delta);
+    if (updated == null) return;
+    setState(() {
+      _synced = updated.synced;
+      _index = updated.index;
+    });
   }
 
   @override
@@ -140,16 +179,12 @@ class _NudgeLineSheetState extends ConsumerState<_NudgeLineSheet> {
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
                 FilledButton.tonalIcon(
-                  onPressed: _saving || timestamp == null
-                      ? null
-                      : () => _nudge(-_step),
+                  onPressed: timestamp == null ? null : () => _nudge(-_step),
                   icon: const Icon(Icons.remove),
                   label: const Text('100 ms'),
                 ),
                 FilledButton.tonalIcon(
-                  onPressed: _saving || timestamp == null
-                      ? null
-                      : () => _nudge(_step),
+                  onPressed: timestamp == null ? null : () => _nudge(_step),
                   icon: const Icon(Icons.add),
                   label: const Text('100 ms'),
                 ),
