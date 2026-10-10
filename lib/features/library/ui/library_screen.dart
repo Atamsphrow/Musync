@@ -482,16 +482,30 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// search was open the guard stayed shut, and a second share arriving in that
   /// time was ignored and left waiting in the queue. That was "sharing several
   /// times in a row does nothing".
-  bool _handlingShare = false;
+  /// Serializes share handling: a share arriving while another is processed
+  /// waits its turn instead of being silently dropped.
+  ///
+  /// The old `_handlingShare` guard dropped every share that landed while the
+  /// player (or batch screen) opened by the previous share was still on
+  /// screen — `_routeSharedSongs` awaits the pushed route, so the guard stayed
+  /// up the whole time and the new arrival never got past it. The routing step
+  /// is now detached from the pipeline, so a new share replaces the open
+  /// player, as `_routeSharedSongs` always intended.
+  Future<void> _sharePipeline = Future.value();
 
-  Future<void> _openSharedAudio() async {
+  Future<void> _openSharedAudio() {
     // Startup can reach here twice — once the permission is granted, and again
-    // on the first `resumed`. The platform queue drains on the first read, but
-    // overlapping runs would still race on the lookup below.
-    if (_handlingShare) return;
-    // The flag goes up before the first await: two overlapping calls must not
-    // both slip through while the permission check is in flight.
-    _handlingShare = true;
+    // on the first `resumed`. The platform queue drains on the first read; the
+    // second pass just finds it empty.
+    // The trailing catchError keeps one bad pass from breaking the chain and
+    // swallowing every later share — the pass itself already logs.
+    _sharePipeline = _sharePipeline
+        .then((_) => _drainSharedAudio())
+        .catchError((Object _) {});
+    return _sharePipeline;
+  }
+
+  Future<void> _drainSharedAudio() async {
     try {
       // Never drain the native share queue while the library is unreadable: the
       // first `resumed` fires before the permission grant, and draining now would
@@ -502,7 +516,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       final songs = await _resolveSharedSongs();
       if (songs.isEmpty || !mounted) return;
 
-      await _routeSharedSongs(songs);
+      // Detached on purpose: the player (or batch) screen stays open after this
+      // returns, and holding the pipeline across it is what used to swallow
+      // every share that followed the first.
+      unawaited(
+        _routeSharedSongs(songs).catchError((Object e) {
+          DebugLog.instance.error(
+            'Partage',
+            'Routage du partage impossible',
+            error: e,
+          );
+        }),
+      );
     } catch (e) {
       // Called via unawaited() from lifecycle hooks and listeners: an
       // exception here has nowhere to go, so log it instead of surfacing
@@ -512,8 +537,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         'Ouverture du partage impossible',
         error: e,
       );
-    } finally {
-      _handlingShare = false;
     }
   }
 
