@@ -9,6 +9,8 @@ import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.media.MediaScannerConnection
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -207,6 +209,16 @@ class MainActivity : AudioServiceActivity() {
                         call.argument<String>("targetPackage"),
                         result,
                     )
+                    "isWifiConnected" -> {
+                        // ACCESS_NETWORK_STATE is a normal permission:
+                        // granted at install, no runtime prompt.
+                        val cm = getSystemService(Context.CONNECTIVITY_SERVICE)
+                            as ConnectivityManager
+                        val capabilities = cm.activeNetwork?.let(cm::getNetworkCapabilities)
+                        result.success(
+                            capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true,
+                        )
+                    }
                     "takeSharedAudio" -> {
                         // Draining is deliberate: a share is a one-shot event,
                         // and re-serving it would reopen the editor on every
