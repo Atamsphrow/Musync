@@ -69,19 +69,15 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     if (!_scrollController.hasClients) return;
     _lastCenteredIndex = index;
 
-    // The list carries `viewportHeight / 2` of padding at each end, which is
-    // what lets the first and last lines reach the middle of the screen at all.
-    // Line `index` therefore starts at `viewportHeight / 2 + index * extent`,
-    // and centring its midpoint means scrolling to:
+    // No end padding: the list is a plain list, so the first line rests at
+    // the very top and the last at the very bottom — never floating mid-screen.
+    // Centring a line's midpoint means scrolling to:
     //
-    //     (viewportHeight / 2 + index * extent + extent / 2) - viewportHeight / 2
+    //     index * extent + extent / 2 - viewportHeight / 2
     //
-    // which is simply `index * extent + extent / 2` — the two halves cancel.
-    //
-    // The previous version subtracted the half-viewport without adding the
-    // padding back, landing half a screen short every time. That is why the
-    // active line drifted to the bottom edge and stuck there.
-    final target = (index * _lineExtent) + (_lineExtent / 2);
+    // clamped to what the list can actually scroll.
+    final target =
+        (index * _lineExtent) + (_lineExtent / 2) - (viewportHeight / 2);
 
     // One fixed, quick glide per line: 250 ms, ease-out. Measured
     // frame-by-frame on Musicolet's lyrics view: the step starts fast and
@@ -91,6 +87,14 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
       duration: const Duration(milliseconds: 250),
       curve: Curves.easeOutCubic,
     );
+  }
+
+  @override
+  void didUpdateWidget(covariant SyncedLyricsView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A new song (or retimed lyrics) must not inherit the old scroll anchor:
+    // the next line change re-centres from wherever the list happens to be.
+    if (oldWidget.lyrics != widget.lyrics) _lastCenteredIndex = null;
   }
 
   @override
@@ -121,7 +125,6 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
           controller: _scrollController,
           itemCount: widget.lyrics.length,
           itemExtent: _lineExtent,
-          padding: EdgeInsets.symmetric(vertical: constraints.maxHeight / 2),
           itemBuilder: (context, index) {
             final line = widget.lyrics.lines[index];
             final isCurrent = index == currentIndex;
