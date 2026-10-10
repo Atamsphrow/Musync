@@ -386,6 +386,8 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
             }
           },
           onAction: (action) => _handleAction(action, index, state),
+          onEditTimestamp: () =>
+              _editTimestamp(index, state.lines[index].timestamp),
         );
       },
     );
@@ -403,8 +405,6 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
         _editor.nudgeLine(index, const Duration(milliseconds: -kLineNudgeMs));
       case LyricLineAction.nudgeForward:
         _editor.nudgeLine(index, const Duration(milliseconds: kLineNudgeMs));
-      case LyricLineAction.editTimestamp:
-        _editTimestamp(index, state.lines[index].timestamp);
       case LyricLineAction.retime:
         _editor.resetLineTiming(index);
       case LyricLineAction.clearTimestamp:
