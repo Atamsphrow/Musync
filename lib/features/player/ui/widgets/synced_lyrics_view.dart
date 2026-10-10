@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
-import 'package:musync/core/router/app_router.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
+import 'package:musync/features/player/ui/widgets/nudge_line_sheet.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 import 'package:musync/features/library/data/models/song.dart';
@@ -15,15 +15,20 @@ class SyncedLyricsView extends ConsumerStatefulWidget {
   final VoidCallback? onSearchOnline;
 
   /// The currently playing song. Required for the long-press action, which
-  /// needs to navigate to the sync editor for this track. Null only when the
+  /// nudges the pressed line's timing straight in the file. Null only when the
   /// view is shown without a player behind it (preview, etc).
   final Song? song;
+
+  /// The track's plain lyrics, passed through untouched when the long-press
+  /// nudge rewrites the timings.
+  final UnsyncedLyrics? unsynced;
 
   const SyncedLyricsView({
     super.key,
     required this.lyrics,
     this.onSearchOnline,
     this.song,
+    this.unsynced,
   });
 
   @override
@@ -131,14 +136,19 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
               // Non-null: this view renders SyncedLyrics, which is timed-only.
               onTap: () =>
                   ref.read(audioPlayerServiceProvider).seekTo(line.timestamp!),
+              // Long-press: nudge this line's timing directly (±100 ms),
+              // without opening the full sync editor. The editor stays
+              // available from the player's "Ajuster la synchronisation"
+              // menu entry.
               onLongPress: widget.song == null
                   ? null
-                  : () => Navigator.of(context).pushNamed(
-                        AppRoutes.syncEditor,
-                        arguments: SongRouteArgs(
-                          song: widget.song!,
-                          initialLineIndex: index,
-                        ),
+                  : () => showNudgeLineSheet(
+                        context,
+                        ref,
+                        filePath: widget.song!.filePath,
+                        synced: widget.lyrics,
+                        unsynced: widget.unsynced,
+                        index: index,
                       ),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
