@@ -14,7 +14,6 @@ const String _nudgeForwardLabel = 'Avancer de $kLineNudgeMs ms';
 /// Action chosen from a line's overflow menu.
 enum LyricLineAction {
   editText,
-  editTimestamp,
   nudgeBack,
   nudgeForward,
 
@@ -52,6 +51,10 @@ class LyricLineTile extends StatelessWidget {
 
   final ValueChanged<LyricLineAction> onAction;
 
+  /// Opens the timestamp dialog for direct typing. The timestamp chip
+  /// calls this; the overflow menu no longer carries a redundant entry.
+  final VoidCallback onEditTimestamp;
+
   const LyricLineTile({
     super.key,
     required this.line,
@@ -61,6 +64,7 @@ class LyricLineTile extends StatelessWidget {
     required this.onStamp,
     required this.onSelect,
     required this.onAction,
+    required this.onEditTimestamp,
   });
 
   @override
@@ -83,7 +87,7 @@ class LyricLineTile extends StatelessWidget {
                   // spec asks for the exact time to be reachable by hand, and a
                   // chip showing a number is where a hand goes looking for it —
                   // stamping keeps the big "Caler" button and the long-press.
-                  onTap: () => onAction(LyricLineAction.editTimestamp),
+                  onTap: onEditTimestamp,
                   onLongPress: onStamp,
                 ),
                 const SizedBox(width: 10),
@@ -114,7 +118,7 @@ class LyricLineTile extends StatelessWidget {
                 onSelected: onAction,
                 tooltip: 'Options de la ligne',
                 icon: Icon(Icons.more_vert, color: scheme.onSurfaceVariant),
-                itemBuilder: (context) => const [
+                itemBuilder: (context) => [
                   PopupMenuItem(
                     value: LyricLineAction.editText,
                     child: ListTile(
@@ -124,34 +128,8 @@ class LyricLineTile extends StatelessWidget {
                       visualDensity: VisualDensity.compact,
                     ),
                   ),
-                  PopupMenuItem(
-                    value: LyricLineAction.editTimestamp,
-                    child: ListTile(
-                      leading: Icon(Icons.schedule),
-                      title: Text('Saisir l\'horodatage'),
-                      contentPadding: EdgeInsets.zero,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ),
                   PopupMenuDivider(),
-                  PopupMenuItem(
-                    value: LyricLineAction.nudgeBack,
-                    child: ListTile(
-                      leading: Icon(Icons.fast_rewind),
-                      title: Text(_nudgeBackLabel),
-                      contentPadding: EdgeInsets.zero,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: LyricLineAction.nudgeForward,
-                    child: ListTile(
-                      leading: Icon(Icons.fast_forward),
-                      title: Text(_nudgeForwardLabel),
-                      contentPadding: EdgeInsets.zero,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ),
+                  _NudgeMenuEntry(onNudge: onAction),
                   PopupMenuDivider(),
                   PopupMenuItem(
                     value: LyricLineAction.retime,
@@ -263,6 +241,84 @@ class _TimestampChip extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The line's own +/-100 ms step, as a menu entry that does not dismiss the
+/// menu.
+///
+/// A plain PopupMenuItem always pops the menu route on tap — the SDK does it
+/// unconditionally — which turned repeated nudging into a reopen-the-menu
+/// loop. These two buttons call straight through to [onNudge] without
+/// popping, so the menu stays open for the five or six taps a real
+/// adjustment takes. Tapping out, or picking any other entry, still closes
+/// it as usual.
+class _NudgeMenuEntry extends PopupMenuEntry<LyricLineAction> {
+  const _NudgeMenuEntry({required this.onNudge});
+
+  final ValueChanged<LyricLineAction> onNudge;
+
+  @override
+  double get height => kMinInteractiveDimension;
+
+  @override
+  bool represents(LyricLineAction? value) =>
+      value == LyricLineAction.nudgeBack ||
+      value == LyricLineAction.nudgeForward;
+
+  @override
+  State<_NudgeMenuEntry> createState() => _NudgeMenuEntryState();
+}
+
+class _NudgeMenuEntryState extends State<_NudgeMenuEntry> {
+  Widget _button({
+    required IconData icon,
+    required String label,
+    required String tooltip,
+    required LyricLineAction action,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Expanded(
+      child: Tooltip(
+        message: tooltip,
+        // Deliberately not popping the menu route: the whole point is that
+        // repeated taps keep working without reopening the overflow menu.
+        child: InkWell(
+          onTap: () => widget.onNudge(action),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 20, color: scheme.onSurface),
+                const SizedBox(width: 6),
+                Text(label, style: TextStyle(color: scheme.onSurface)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        _button(
+          icon: Icons.fast_rewind,
+          label: '\u2212$kLineNudgeMs ms',
+          tooltip: _nudgeBackLabel,
+          action: LyricLineAction.nudgeBack,
+        ),
+        _button(
+          icon: Icons.fast_forward,
+          label: '+$kLineNudgeMs ms',
+          tooltip: _nudgeForwardLabel,
+          action: LyricLineAction.nudgeForward,
+        ),
+      ],
     );
   }
 }
