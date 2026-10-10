@@ -238,4 +238,22 @@ abstract final class MediaStore {
       // A notification is a courtesy, never a failure.
     }
   }
+
+  /// True when the active network is WiFi. Gates the whole-library background
+  /// lyrics sweep: that much traffic stays off mobile data.
+  static Future<bool> isWifiConnected() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await _channel
+              .invokeMethod<bool>('isWifiConnected')
+              .timeout(_timeout) ??
+          false;
+    } on TimeoutException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
 }
