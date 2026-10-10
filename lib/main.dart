@@ -20,6 +20,7 @@ import 'features/player/providers/lyrics_provider.dart';
 import 'features/settings/providers/lyrics_appearance_provider.dart';
 import 'features/player/providers/player_provider.dart';
 import 'features/ai_assistant/data/automation_runner.dart';
+import 'features/lyrics/providers/background_lyrics_provider.dart';
 
 /// Wrapped so that nothing thrown during startup goes unrecorded.
 ///
@@ -184,6 +185,10 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
     // Automatisations phase 2 : reprogramme les alarmes Android au démarrage
     // et arme l'écoute du branchement des écouteurs.
     unawaited(ref.read(automationRunnerProvider).init());
+    // Paroles en arrière-plan : un morceau sans paroles (ou en texte seul)
+    // écouté assez longtemps se voit proposer une version synchronisée,
+    // écrite sans confirmation si la correspondance est sûre.
+    ref.read(backgroundLyricsServiceProvider).start();
   }
 
   @override
