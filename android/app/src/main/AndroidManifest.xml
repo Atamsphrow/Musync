@@ -31,6 +31,9 @@
     <!-- Internet for LRCLIB API requests -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Checking WiFi state for the background lyrics sweep (normal permission, no prompt) -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- Notifications for media playback controls -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
