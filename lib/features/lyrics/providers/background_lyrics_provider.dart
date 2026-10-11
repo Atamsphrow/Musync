@@ -16,6 +16,7 @@ import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.
 import 'package:musync/features/lyrics/providers/search_provider.dart';
 import 'package:musync/features/lyrics/providers/tag_change_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
+import 'package:musync/features/settings/providers/ai_settings_provider.dart';
 import 'package:musync/features/settings/providers/backup_provider.dart';
 
 /// App-scoped service. Started once from the root widget's `initState`,
@@ -29,11 +30,10 @@ final backgroundLyricsServiceProvider = Provider<BackgroundLyricsService>(
 /// * The playing track: when a track with no lyrics — or plain, untimed
 ///   lyrics — starts playing, the service first checks the device is actually
 ///   online (otherwise it does nothing at all), resolves a trustworthy
-///   artist/title (tags first, then the same filename heuristic as the search
-///   screen's « Deviner Artiste/Titre » when the tags are blank), and asks
-///   the lyrics sources for a synced version. A confident hit is written
-///   straight into the file: no confirmation dialog, just the usual quiet
-///   snackbar (with undo).
+///   artist/title (tags first, then the filename heuristic, then the AI
+///   reader as a last resort), and asks the lyrics sources for a synced
+///   version. A confident hit is written straight into the file: no
+///   confirmation dialog, just the usual quiet snackbar (with undo).
 /// * The whole library: some time after startup, and only on WiFi, every
 ///   track that still lacks synced lyrics gets the same treatment, one after
 ///   another with a breather between searches.
@@ -53,10 +53,6 @@ class BackgroundLyricsService {
   /// A silent write only happens above it.
   static const _minConfidence = 0.8;
 
-  /// Delay after startup before the library sweep begins: the startup scan
-  /// gets the disk to itself first.
-  static const _sweepDelay = Duration(seconds: 60);
-
   /// Politeness gap between two searches: LRCLIB is a free service, and a
   /// library-wide sweep must not hammer it.
   static const _searchGap = Duration(seconds: 2);
@@ -70,8 +66,10 @@ class BackgroundLyricsService {
       _onSongChanged(previous, next);
     });
     _onSongChanged(null, _ref.read(currentSongProvider));
-    // The whole-library sweep, once per launch, WiFi only.
-    Timer(_sweepDelay, () => unawaited(_sweepLibrary()));
+    // The whole-library sweep, once per launch, WiFi only. No startup delay:
+    // the sweep awaits the song list and the status scan first, so it
+    // naturally starts the moment the library is ready.
+    unawaited(_sweepLibrary());
   }
 
   void _onSongChanged(Song? previous, Song? next) {
@@ -84,8 +82,17 @@ class BackgroundLyricsService {
   }
 
   Future<void> _maybeFetch(Song song) async {
+    // The connectivity probe and the local status read run together: neither
+    // waits for the other, so the pre-check costs a single round trip.
+    final onlineFuture = _hasInternet();
+    final statusFuture = _ref
+        .read(lyricsStatusScannerProvider)
+        .statusOf(song.filePath)
+        .then<LyricsStatus?>((s) => s)
+        .catchError((_) => null);
+    final precheck = await Future.wait([onlineFuture, statusFuture]);
     // First of all: offline, the service does nothing.
-    if (!await _hasInternet()) return;
+    if (precheck[0] != true) return;
     // The user moved on while the check ran.
     if (_ref.read(currentSongProvider)?.filePath != song.filePath) return;
     // Only for something actually being listened to.
@@ -96,15 +103,8 @@ class BackgroundLyricsService {
     _attempted.add(song.filePath);
 
     // Local check first: a synced track needs nothing.
-    final LyricsStatus status;
-    try {
-      status = await _ref
-          .read(lyricsStatusScannerProvider)
-          .statusOf(song.filePath);
-    } catch (_) {
-      return;
-    }
-    if (status == LyricsStatus.synced) return;
+    final status = precheck[1] as LyricsStatus?;
+    if (status == null || status == LyricsStatus.synced) return;
     if (_ref.read(currentSongProvider)?.filePath != song.filePath) return;
 
     final canUndo = await _searchAndWrite(song);
@@ -172,9 +172,9 @@ class BackgroundLyricsService {
   /// when nothing was written. The backup behind the undo is what puts the
   /// write in Settings › Historique.
   Future<bool?> _searchAndWrite(Song song) async {
-    // A search is only as good as its query: blank tags get the Deviner
-    // heuristic before anything goes out.
-    final query = _resolveQuery(song);
+    // A search is only as good as its query: tags first, then the filename
+    // heuristic, then the AI reader as a last resort.
+    final query = await _resolveQuery(song);
     if (query == null) return null;
 
     final repository = _ref.read(lyricsRepositoryProvider);
@@ -255,16 +255,32 @@ class BackgroundLyricsService {
   /// The artist/title the search runs on.
   ///
   /// The tags first; when they are blank, the same filename heuristic as the
-  /// search screen's « Deviner Artiste/Titre » button fills the gaps. Null
-  /// when neither yields something searchable: a blind search is worse than
-  /// none, and the confidence gate would reject its results anyway.
-  ({String title, String artist})? _resolveQuery(Song song) {
+  /// search screen's « Deviner Artiste/Titre » button fills the gaps; when
+  /// that still leaves blanks, the configured AI providers get one shot at
+  /// reading the file name. Null when nothing yields something searchable:
+  /// a blind search is worse than none, and the confidence gate would reject
+  /// its results anyway.
+  Future<({String title, String artist})?> _resolveQuery(Song song) async {
     var title = song.title.trim();
     var artist = song.artist.trim();
     if (title.isEmpty || artist.isEmpty) {
       final guess = FilenameParser.parse(song.filePath);
       if (title.isEmpty) title = guess.title.trim();
       if (artist.isEmpty) artist = guess.artist.trim();
+    }
+    if (title.isEmpty || artist.isEmpty) {
+      final settings = _ref.read(aiSettingsProvider).valueOrNull;
+      if (settings != null && settings.usable.isNotEmpty) {
+        final fileName = song.filePath.split(RegExp(r'[/\\]')).last;
+        final resolution = await _ref
+            .read(aiFilenameResolverProvider)
+            .resolve(settings: settings, fileName: fileName);
+        final guess = resolution.guess;
+        if (guess != null) {
+          if (title.isEmpty) title = guess.title.trim();
+          if (artist.isEmpty) artist = guess.artist.trim();
+        }
+      }
     }
     if (title.isEmpty || artist.isEmpty) return null;
     return (title: title, artist: artist);
