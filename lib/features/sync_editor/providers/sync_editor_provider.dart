@@ -354,6 +354,20 @@ class SyncEditorNotifier extends StateNotifier<SyncEditorState> {
     // line's timestamp, silently dropping that line's timing — the same trap
     // [LrcParser.parse] guards against.
     final content = text.startsWith('\uFEFF') ? text.substring(1) : text;
+
+    // Clearing the field means deleting the lyrics, not keeping one empty
+    // line: without this, ''.split('\n') yields [''], and the stale
+    // timestamps preserved below would survive on it — the file would keep
+    // a timing with no words, and the save would look like a no-op.
+    if (content.trim().isEmpty) {
+      state = state.copyWith(
+        lines: const [],
+        cursor: 0,
+        hasChanges: true,
+      );
+      return;
+    }
+
     final incoming = content.split('\n');
 
     if (incoming.any((line) => LrcParser.leadingTimestamps(line).isNotEmpty)) {
