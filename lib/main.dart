@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio_background/just_audio_background.dart';
+import 'package:workmanager/workmanager.dart';
 
 import 'core/router/app_router.dart';
 import 'features/lyrics/ui/batch_screen.dart';
@@ -21,6 +23,7 @@ import 'features/settings/providers/lyrics_appearance_provider.dart';
 import 'features/player/providers/player_provider.dart';
 import 'features/ai_assistant/data/automation_runner.dart';
 import 'features/lyrics/providers/background_lyrics_provider.dart';
+import 'features/lyrics/providers/lyrics_sweep_worker.dart';
 
 /// Wrapped so that nothing thrown during startup goes unrecorded.
 ///
@@ -32,6 +35,17 @@ void main() => runGuarded(_start);
 
 Future<void> _start() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Headless lyrics sweep (WorkManager): the OS can wake the dispatcher with
+  // the app closed. Before everything else that can fail; a failure here
+  // only costs the background sweep, never the launch.
+  if (Platform.isAndroid) {
+    try {
+      await Workmanager().initialize(lyricsSweepDispatcher);
+    } catch (_) {
+      // Background sweeps unavailable — the in-app sweep still runs.
+    }
+  }
 
   // Tapping the "batch search done" notification asks native to open the
   // review screen. The navigator key lets this fire without a BuildContext.
