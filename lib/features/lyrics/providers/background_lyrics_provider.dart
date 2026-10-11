@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/core/services/permission_service.dart';
@@ -18,6 +19,7 @@ import 'package:musync/features/lyrics/providers/tag_change_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
 import 'package:musync/features/settings/providers/backup_provider.dart';
+import 'package:workmanager/workmanager.dart';
 
 /// App-scoped service. Started once from the root widget's `initState`,
 /// alongside the automation runner.
@@ -44,6 +46,10 @@ final backgroundLyricsServiceProvider = Provider<BackgroundLyricsService>(
 class BackgroundLyricsService {
   final Ref _ref;
 
+  /// WorkManager task name for the headless sweep. Shared with the
+  /// dispatcher in `lyrics_sweep_worker.dart`.
+  static const sweepTaskName = 'musyncLyricsSweep';
+
   /// Tracks already checked this session, so a replay — or the sweep meeting
   /// the playing track — doesn't search twice.
   final Set<String> _attempted = {};
@@ -67,7 +73,36 @@ class BackgroundLyricsService {
     // the sweep awaits the song list and the status scan first, so it
     // naturally starts the moment the library is ready.
     unawaited(_sweepLibrary());
+    // ... and once a day with the app closed: WiFi, battery not low.
+    unawaited(_registerBackgroundSweep());
   }
+
+  /// Daily headless sweep (WorkManager): the library stays complete even when
+  /// the app is never opened. Android only; a failure here never affects the
+  /// in-app sweep.
+  Future<void> _registerBackgroundSweep() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await Workmanager().registerPeriodicTask(
+        'musync-lyrics-sweep',
+        sweepTaskName,
+        frequency: const Duration(hours: 24),
+        constraints: Constraints(
+          networkType: NetworkType.unmetered,
+          requiresBatteryNotLow: true,
+        ),
+        existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+      );
+    } catch (_) {
+      // Plugin unavailable — the in-app sweep still runs.
+    }
+  }
+
+  /// Entry point for the WorkManager background task (app closed).
+  ///
+  /// The same sweep as at startup, minus the AI fallback: no API-quota burn
+  /// while the user sleeps. Every UI touch inside is null-safe on its own.
+  Future<void> runHeadlessSweep() => _sweepLibrary(aiFallback: false);
 
   void _onSongChanged(Song? previous, Song? next) {
     if (next == null) return;
@@ -131,7 +166,7 @@ class BackgroundLyricsService {
   /// WiFi only, sequential, with a breather between searches. Stops early if
   /// WiFi drops; next launch resumes where it left off, since synced tracks
   /// are skipped by status.
-  Future<void> _sweepLibrary() async {
+  Future<void> _sweepLibrary({bool aiFallback = true}) async {
     if (!await MediaStore.isWifiConnected()) return;
     DebugLog.instance.info('Paroles auto', 'Balayage bibliothèque (WiFi)');
 
@@ -151,7 +186,9 @@ class BackgroundLyricsService {
       _attempted.add(song.filePath);
       // WiFi dropped mid-sweep: stop here, next launch resumes.
       if (!await MediaStore.isWifiConnected()) break;
-      if (await _searchAndWrite(song) != null) written++;
+      if (await _searchAndWrite(song, aiFallback: aiFallback) != null) {
+        written++;
+      }
       await Future.delayed(_searchGap);
     }
 
@@ -173,10 +210,13 @@ class BackgroundLyricsService {
   /// whether an undo is available and whether the written lyrics are synced,
   /// or null when nothing was written. The backup behind the undo is what
   /// puts the write in Settings › Historique.
-  Future<({bool canUndo, bool synced})?> _searchAndWrite(Song song) async {
+  Future<({bool canUndo, bool synced})?> _searchAndWrite(
+    Song song, {
+    bool aiFallback = true,
+  }) async {
     // A search is only as good as its query: tags first, then the filename
     // heuristic, then the AI reader as a last resort.
-    final query = await _resolveQuery(song);
+    final query = await _resolveQuery(song, aiFallback: aiFallback);
     if (query == null) return null;
 
     final repository = _ref.read(lyricsRepositoryProvider);
@@ -200,6 +240,19 @@ class BackgroundLyricsService {
     final match = results.where((r) => r.hasSyncedLyrics).firstOrNull ??
         results.where((r) => r.hasUnsyncedLyrics).firstOrNull;
     if (match == null) return null;
+    // Idempotent: a repeated sweep must not rewrite identical lyrics and
+    // spam the Historique with no-op writes.
+    try {
+      final current = await Id3Reader.readLyrics(song.filePath);
+      final sameSynced = match.hasSyncedLyrics &&
+          current.synced != null &&
+          current.synced == match.syncedLyrics;
+      final samePlain = !match.hasSyncedLyrics &&
+          current.unsynced == match.unsyncedLyrics;
+      if (sameSynced || samePlain) return null;
+    } catch (_) {
+      // Unreadable tags: fall through and let the write try.
+    }
     // No permission prompt from the background: without write access there is
     // simply no silent write.
     if (!await PermissionService.hasWriteAccess()) return null;
@@ -262,7 +315,10 @@ class BackgroundLyricsService {
   /// reading the file name. Null when nothing yields something searchable:
   /// a blind search is worse than none, and the confidence gate would reject
   /// its results anyway.
-  Future<({String title, String artist})?> _resolveQuery(Song song) async {
+  Future<({String title, String artist})?> _resolveQuery(
+    Song song, {
+    bool aiFallback = true,
+  }) async {
     var title = song.title.trim();
     var artist = song.artist.trim();
     if (title.isEmpty || artist.isEmpty) {
@@ -270,7 +326,7 @@ class BackgroundLyricsService {
       if (title.isEmpty) title = guess.title.trim();
       if (artist.isEmpty) artist = guess.artist.trim();
     }
-    if (title.isEmpty || artist.isEmpty) {
+    if ((title.isEmpty || artist.isEmpty) && aiFallback) {
       final settings = _ref.read(aiSettingsProvider).valueOrNull;
       if (settings != null && settings.usable.isNotEmpty) {
         final fileName = song.filePath.split(RegExp(r'[/\\]')).last;
