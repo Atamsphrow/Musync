@@ -206,10 +206,13 @@ class BackgroundLyricsService {
   /// Searches for lyrics for [song] and silently writes the best hit.
   ///
   /// Ranked best-first by the repository: the first synced hit wins, no
-  /// confidence gate; otherwise the first hit with plain text. Returns
-  /// whether an undo is available and whether the written lyrics are synced,
-  /// or null when nothing was written. The backup behind the undo is what
-  /// puts the write in Settings › Historique.
+  /// confidence gate; otherwise the first hit with plain text. When the
+  /// tag-based query finds nothing, the AI gets one shot at reading the
+  /// file name and the search runs a second time with its guess — never
+  /// twice with the same query. Returns whether an undo is available and
+  /// whether the written lyrics are synced, or null when nothing was
+  /// written. The backup behind the undo is what puts the write in
+  /// Settings › Historique.
   Future<({bool canUndo, bool synced})?> _searchAndWrite(
     Song song, {
     bool aiFallback = true,
@@ -220,7 +223,7 @@ class BackgroundLyricsService {
     if (query == null) return null;
 
     final repository = _ref.read(lyricsRepositoryProvider);
-    final List<LyricsSearchResult> results;
+    List<LyricsSearchResult> results;
     try {
       results = await repository.searchAll(
         title: query.title,
@@ -235,10 +238,32 @@ class BackgroundLyricsService {
       );
       return null;
     }
-    // Ranked best-first by the repository: the first synced hit wins;
-    // otherwise the first hit with plain text, when that is all there is.
-    final match = results.where((r) => r.hasSyncedLyrics).firstOrNull ??
-        results.where((r) => r.hasUnsyncedLyrics).firstOrNull;
+    var match = _bestMatch(results);
+    // The tags led nowhere: one AI guess from the file name, then a second
+    // search with it.
+    if (match == null && aiFallback && !query.aiUsed) {
+      final aiGuess = await _aiGuess(song);
+      final aiTitle = aiGuess?.title.trim() ?? '';
+      final aiArtist = aiGuess?.artist.trim() ?? '';
+      final sameQuery = aiTitle.toLowerCase() == query.title.toLowerCase() &&
+          aiArtist.toLowerCase() == query.artist.toLowerCase();
+      if (aiTitle.isNotEmpty && aiArtist.isNotEmpty && !sameQuery) {
+        DebugLog.instance.info(
+          'Paroles auto',
+          'Nouvel essai via IA pour ${song.title}',
+        );
+        try {
+          results = await repository.searchAll(
+            title: aiTitle,
+            artist: aiArtist,
+            durationMs: song.duration,
+          );
+        } catch (_) {
+          return null;
+        }
+        match = _bestMatch(results);
+      }
+    }
     if (match == null) return null;
     // Idempotent: a repeated sweep must not rewrite identical lyrics and
     // spam the Historique with no-op writes.
@@ -307,40 +332,52 @@ class BackgroundLyricsService {
     }
   }
 
+  /// Best-first: the first synced hit wins, otherwise the first hit with
+  /// plain text, when that is all there is.
+  LyricsSearchResult? _bestMatch(List<LyricsSearchResult> results) =>
+      results.where((r) => r.hasSyncedLyrics).firstOrNull ??
+      results.where((r) => r.hasUnsyncedLyrics).firstOrNull;
+
   /// The artist/title the search runs on.
   ///
   /// The tags first; when they are blank, the same filename heuristic as the
   /// search screen's « Deviner Artiste/Titre » button fills the gaps; when
   /// that still leaves blanks, the configured AI providers get one shot at
   /// reading the file name. Null when nothing yields something searchable:
-  /// a blind search is worse than none, and the confidence gate would reject
-  /// its results anyway.
-  Future<({String title, String artist})?> _resolveQuery(
+  /// a blind search is worse than none.
+  Future<({String title, String artist, bool aiUsed})?> _resolveQuery(
     Song song, {
     bool aiFallback = true,
   }) async {
     var title = song.title.trim();
     var artist = song.artist.trim();
+    var aiUsed = false;
     if (title.isEmpty || artist.isEmpty) {
       final guess = FilenameParser.parse(song.filePath);
       if (title.isEmpty) title = guess.title.trim();
       if (artist.isEmpty) artist = guess.artist.trim();
     }
     if ((title.isEmpty || artist.isEmpty) && aiFallback) {
-      final settings = _ref.read(aiSettingsProvider).valueOrNull;
-      if (settings != null && settings.usable.isNotEmpty) {
-        final fileName = song.filePath.split(RegExp(r'[/\\]')).last;
-        final resolution = await _ref
-            .read(aiFilenameResolverProvider)
-            .resolve(settings: settings, fileName: fileName);
-        final guess = resolution.guess;
-        if (guess != null) {
-          if (title.isEmpty) title = guess.title.trim();
-          if (artist.isEmpty) artist = guess.artist.trim();
-        }
+      final aiGuess = await _aiGuess(song);
+      if (aiGuess != null) {
+        if (title.isEmpty) title = aiGuess.title.trim();
+        if (artist.isEmpty) artist = aiGuess.artist.trim();
+        aiUsed = true;
       }
     }
     if (title.isEmpty || artist.isEmpty) return null;
-    return (title: title, artist: artist);
+    return (title: title, artist: artist, aiUsed: aiUsed);
+  }
+
+  /// One AI shot at reading the artist/title out of the file name.
+  /// Null when no provider is configured or none could answer.
+  Future<FilenameGuess?> _aiGuess(Song song) async {
+    final settings = _ref.read(aiSettingsProvider).valueOrNull;
+    if (settings == null || settings.usable.isEmpty) return null;
+    final fileName = song.filePath.split(RegExp(r'[/\\]')).last;
+    final resolution = await _ref
+        .read(aiFilenameResolverProvider)
+        .resolve(settings: settings, fileName: fileName);
+    return resolution.guess;
   }
 }
