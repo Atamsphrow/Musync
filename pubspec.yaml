@@ -68,6 +68,7 @@ dependencies:
   # Picking a settings export back from the Downloads folder (system picker,
   # no storage permission needed).
   file_picker: ^13.1.0
+  workmanager: ^0.10.10
 
 dev_dependencies:
   flutter_test:
