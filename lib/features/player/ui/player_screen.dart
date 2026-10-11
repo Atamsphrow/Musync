@@ -961,7 +961,7 @@ class _LyricsActions extends ConsumerWidget {
               leading: const Icon(Icons.travel_explore),
               title: const Text('Rechercher des paroles en ligne'),
               subtitle: const Text(
-                'LRCLIB pour les paroles calées, lyrics.ovh pour le texte',
+                'Paroles calées et texte via LRCLIB',
               ),
               onTap: () {
                 Navigator.pop(sheetContext);
