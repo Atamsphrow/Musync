@@ -66,6 +66,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// way to swipe. Owned here, created once, disposed once.
   late final ScrollController _scrollController;
 
+  /// Locates the playing track on long-press of the mini player.
+  ///
+  /// The target row gets this key so it can be brought into view precisely
+  /// after the tab switch; [_locateIndex] marks which row carries it, -1
+  /// when no locate is in flight.
+  final GlobalKey _locateKey = GlobalKey();
+  int _locateIndex = -1;
+
   /// Conversation IA : l'historique vit ici tant que le mode chat est actif.
   /// Seule la croix × le fait quitter (et vide l'historique) : une fois la
   /// conversation commencée, le `!` est insupprimable au clavier.
@@ -214,6 +222,69 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     }
   }
 
+  /// Scrolls the library to the playing track (mini player long-press).
+  ///
+  /// Clears any search/chat filter that could hide the track, switches to
+  /// its lyrics-status tab, then scrolls to its row in two phases: a jump
+  /// near the tile so it gets built, then a precise alignment once it has a
+  /// context. The row already carries the playing indicator, so the eye
+  /// finds it without extra highlighting.
+  Future<void> _locateCurrentSong() async {
+    final song = ref.read(currentSongProvider);
+    if (song == null || !mounted) return;
+
+    if (_chatMode) _exitChatMode();
+    if (ref.read(librarySearchProvider).isNotEmpty) {
+      _searchController.clear();
+      ref.read(librarySearchProvider.notifier).state = '';
+    }
+
+    final status =
+        await ref.read(lyricsStatusScannerProvider).statusOf(song.filePath);
+    if (!mounted) return;
+    _tabController.animateTo(LyricsStatus.values.indexOf(status));
+    ref.read(libraryTabProvider.notifier).state = status;
+
+    // Let the tab animation and the rebuilt list settle.
+    await Future.delayed(const Duration(milliseconds: 450));
+    if (!mounted) return;
+
+    final songs = ref.read(filteredSongsProvider).valueOrNull;
+    final index =
+        songs?.indexWhere((s) => s.filePath == song.filePath) ?? -1;
+    if (index < 0) return;
+
+    setState(() => _locateIndex = index);
+    if (_scrollController.hasClients) {
+      // Rough tile height: close enough to bring the row into the built
+      // viewport; the precise alignment below corrects the rest.
+      const estimatedTileHeight = 72.0;
+      _scrollController.jumpTo(
+        (index * estimatedTileHeight).clamp(
+          0.0,
+          _scrollController.position.maxScrollExtent,
+        ),
+      );
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = _locateKey.currentContext;
+      if (target != null && mounted) {
+        Scrollable.ensureVisible(
+          target,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOutCubic,
+          alignment: 0.35,
+        );
+      }
+      // The key has served: drop it so later rebuilds don't carry a stale one.
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted && _locateIndex == index) {
+          setState(() => _locateIndex = -1);
+        }
+      });
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -248,6 +319,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // the library has loaded and the track can be found by its path. Paused,
     // at the saved position — never on a manual refresh.
     unawaited(_restoreLastPlayed());
+
+    // Long-press on the mini player: jump to the playing track.
+    ref.listen<int>(locateCurrentSongProvider, (_, _) {
+      unawaited(_locateCurrentSong());
+    });
 
     // The scan needs the audio permission, so ask before anything tries to
     // read MediaStore. Post-frame because a permission dialog cannot be raised
@@ -814,6 +890,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                           SliverList.builder(
                             itemCount: value.length,
                             itemBuilder: (context, index) => SongTile(
+                              // The locate-target row carries the key, so it
+                              // can be brought into view precisely.
+                              key: index == _locateIndex ? _locateKey : null,
                               song: value[index],
                               // Every row in this list shares the tab's status by
                               // construction; showing it keeps a row readable
