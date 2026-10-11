@@ -74,6 +74,17 @@ class NamedQueuesController extends Notifier<NamedQueuesState> {
       final current = state;
       final active = current.active;
       if (active == null || active.isEmpty) return;
+      // The stored marker only says which queue was activated last — the
+      // resume position must follow the player's index only while the
+      // player is actually playing this queue's songs. Without this, a
+      // library session would silently rewrite another queue's resume
+      // position.
+      if (!_sameSongs(
+        active.songs,
+        ref.read(audioPlayerServiceProvider).queue,
+      )) {
+        return;
+      }
       if (index >= active.length || index == active.currentIndex) return;
       final updated = active.copyWith(currentIndex: index);
       state = current.copyWith(
@@ -84,6 +95,23 @@ class NamedQueuesController extends Notifier<NamedQueuesState> {
       unawaited(_persist());
     });
     return const NamedQueuesState();
+  }
+
+  /// Whether the player is right now playing [queue]'s songs.
+  ///
+  /// Order-insensitive: reordering the live queue does not stop it from
+  /// being "the" queue. This — not the stored [activeId] — is what the
+  /// "Active" badge shows: the stored marker would keep lying after
+  /// playback starts from anywhere else (library, search, AI tools).
+  bool isPlaying(NamedQueue queue) =>
+      _sameSongs(queue.songs, ref.read(audioPlayerServiceProvider).queue);
+
+  /// Same songs, any order. Empty never matches: an activated-but-empty
+  /// queue has nothing playing.
+  static bool _sameSongs(List<Song> a, List<Song> b) {
+    if (a.isEmpty || a.length != b.length) return false;
+    final ids = <int>{for (final s in b) s.id};
+    return ids.length == b.length && a.every((s) => ids.contains(s.id));
   }
 
   Future<void> _load() async {
