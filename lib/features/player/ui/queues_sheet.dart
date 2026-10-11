@@ -5,6 +5,7 @@ import 'package:musync/core/utils/snackbar.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/data/named_queue.dart';
 import 'package:musync/features/player/providers/named_queue_provider.dart';
+import 'package:musync/features/player/providers/player_provider.dart';
 
 /// Ouvre le bottom sheet de gestion des files d'attente (F6).
 Future<void> showQueuesSheet(BuildContext context) {
@@ -24,6 +25,9 @@ class QueuesSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(namedQueuesProvider);
+    // Rebuild the badges when playback moves: the "Active" badge reflects
+    // what is actually playing, not the last queue tapped.
+    ref.watch(currentSongProvider.select((s) => s?.id));
 
     return SafeArea(
       child: Column(
@@ -61,7 +65,12 @@ class QueuesSheet extends ConsumerWidget {
                 final queue = state.queues[index];
                 return _QueueTile(
                   queue: queue,
-                  isActive: queue.id == state.activeId,
+                  // Derived from the live player queue: the stored marker
+                  // would still point at the last tapped queue after
+                  // playback moved elsewhere (library, search, AI…).
+                  isActive: ref
+                      .read(namedQueuesProvider.notifier)
+                      .isPlaying(queue),
                 );
               },
             ),
