@@ -32,8 +32,9 @@ final backgroundLyricsServiceProvider = Provider<BackgroundLyricsService>(
 ///   online (otherwise it does nothing at all), resolves a trustworthy
 ///   artist/title (tags first, then the filename heuristic, then the AI
 ///   reader as a last resort), and asks the lyrics sources for a synced
-///   version. A confident hit is written straight into the file: no
-///   confirmation dialog, just the usual quiet snackbar (with undo).
+///   version. The best hit is written straight into the file, synced or
+///   plain — no confidence gate, no confirmation dialog, just the usual
+///   quiet snackbar (with undo).
 /// * The whole library: some time after startup, and only on WiFi, every
 ///   track that still lacks synced lyrics gets the same treatment, one after
 ///   another with a breather between searches.
@@ -48,10 +49,6 @@ class BackgroundLyricsService {
   final Set<String> _attempted = {};
 
   bool _started = false;
-
-  /// Same bar as the batch screen's auto-select: below it, a human picks.
-  /// A silent write only happens above it.
-  static const _minConfidence = 0.8;
 
   /// Politeness gap between two searches: LRCLIB is a free service, and a
   /// library-wide sweep must not hammer it.
@@ -107,15 +104,19 @@ class BackgroundLyricsService {
     if (status == null || status == LyricsStatus.synced) return;
     if (_ref.read(currentSongProvider)?.filePath != song.filePath) return;
 
-    final canUndo = await _searchAndWrite(song);
-    if (canUndo == null) return;
+    final written = await _searchAndWrite(song);
+    if (written == null) return;
     if (_ref.read(currentSongProvider)?.filePath != song.filePath) return;
 
     appMessengerKey.currentState?.showOnly(
       SnackBar(
-        content: const Text('Paroles synchronisées ajoutées.'),
+        content: Text(
+          written.synced
+              ? 'Paroles synchronisées ajoutées.'
+              : 'Paroles ajoutées (non synchronisées).',
+        ),
         duration: const Duration(seconds: 6),
-        action: canUndo
+        action: written.canUndo
             ? SnackBarAction(
                 label: 'Annuler',
                 onPressed: () => _undo(song.filePath),
@@ -160,18 +161,19 @@ class BackgroundLyricsService {
     );
     if (written > 0) {
       appMessengerKey.currentState?.showOnly(
-        SnackBar(content: Text('$written paroles synchronisées ajoutées.')),
+        SnackBar(content: Text('$written paroles ajoutées.')),
       );
     }
   }
 
-  /// Searches for synced lyrics for [song] and silently writes the best
-  /// confident hit.
+  /// Searches for lyrics for [song] and silently writes the best hit.
   ///
-  /// Returns whether an undo is available when lyrics were written, or null
-  /// when nothing was written. The backup behind the undo is what puts the
-  /// write in Settings › Historique.
-  Future<bool?> _searchAndWrite(Song song) async {
+  /// Ranked best-first by the repository: the first synced hit wins, no
+  /// confidence gate; otherwise the first hit with plain text. Returns
+  /// whether an undo is available and whether the written lyrics are synced,
+  /// or null when nothing was written. The backup behind the undo is what
+  /// puts the write in Settings › Historique.
+  Future<({bool canUndo, bool synced})?> _searchAndWrite(Song song) async {
     // A search is only as good as its query: tags first, then the filename
     // heuristic, then the AI reader as a last resort.
     final query = await _resolveQuery(song);
@@ -193,10 +195,10 @@ class BackgroundLyricsService {
       );
       return null;
     }
-    // Ranked best-first by the repository: the first confident synced hit.
-    final match = results
-        .where((r) => r.hasSyncedLyrics && r.confidence >= _minConfidence)
-        .firstOrNull;
+    // Ranked best-first by the repository: the first synced hit wins;
+    // otherwise the first hit with plain text, when that is all there is.
+    final match = results.where((r) => r.hasSyncedLyrics).firstOrNull ??
+        results.where((r) => r.hasUnsyncedLyrics).firstOrNull;
     if (match == null) return null;
     // No permission prompt from the background: without write access there is
     // simply no silent write.
@@ -225,7 +227,7 @@ class BackgroundLyricsService {
     }
     if (canUndo) await backups.markWritten(song.filePath);
     changes.fileChanged(song.filePath);
-    return canUndo;
+    return (canUndo: canUndo, synced: match.hasSyncedLyrics);
   }
 
   Future<void> _undo(String filePath) async {
