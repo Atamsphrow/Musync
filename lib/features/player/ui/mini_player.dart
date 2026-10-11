@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:on_audio_query/on_audio_query.dart';
 import 'package:musync/core/router/app_router.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
+import 'package:musync/features/library/providers/catalogue_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
@@ -47,6 +48,12 @@ class MiniPlayer extends ConsumerWidget {
               index: service.currentIndex,
             ),
           );
+        },
+        // Long-press: jump the library to the playing track — switch to its
+        // tab and scroll to its row. The library screen consumes the request.
+        onLongPress: () {
+          HapticFeedback.lightImpact();
+          ref.read(locateCurrentSongProvider.notifier).state++;
         },
         child: Column(
           mainAxisSize: MainAxisSize.min,
