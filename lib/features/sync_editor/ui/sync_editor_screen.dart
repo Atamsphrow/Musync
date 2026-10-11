@@ -157,9 +157,11 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
       unsynced: state.asUnsyncedLyrics,
       // Simple mode saves plain text, not timings — the message must say
       // what was actually written, not count synced lines that don't exist.
-      successMessage: state.mode == SyncMode.simple
-          ? 'Texte enregistré.'
-          : '${state.asSyncedLyrics.length} lignes calées enregistrées.',
+      successMessage: state.isEmpty
+          ? 'Paroles supprimées.'
+          : state.mode == SyncMode.simple
+              ? 'Texte enregistré.'
+              : '${state.asSyncedLyrics.length} lignes calées enregistrées.',
       // The editor owns this track's whole lyric state, clearing a
       // timing included, so it is the one caller allowed to replace.
       onPlainOverSynced: PlainOverSynced.replace,
@@ -273,7 +275,10 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
               IconButton(
                 icon: const Icon(Icons.save_outlined),
                 tooltip: 'Enregistrer dans le fichier',
-                onPressed: state.isEmpty ? null : () => _save(state),
+                // Saving is about changes, not about content: clearing every
+                // line must be savable too, otherwise wrong lyrics can never
+                // be deleted.
+                onPressed: state.hasChanges ? () => _save(state) : null,
               ),
             // Typed on a real enum, not on `void`.
             //
