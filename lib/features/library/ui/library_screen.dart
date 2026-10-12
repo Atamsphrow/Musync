@@ -256,15 +256,27 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
     setState(() => _locateIndex = index);
     if (_scrollController.hasClients) {
-      // Rough tile height: close enough to bring the row into the built
-      // viewport; the precise alignment below corrects the rest.
-      const estimatedTileHeight = 72.0;
-      _scrollController.jumpTo(
-        (index * estimatedTileHeight).clamp(
-          0.0,
-          _scrollController.position.maxScrollExtent,
-        ),
-      );
+      // Proportional jump, refined over a few frames: the target's fractional
+      // position in the list is exact, and the scroll extent is measured, not
+      // estimated. A hardcoded tile height drifts with the index (a couple of
+      // px off per row is a thousand px by the middle of the library), which
+      // used to leave the row unbuilt — the precise alignment below then had
+      // no context to grab, and the long-press landed nowhere near the track.
+      final count = songs?.length ?? 0;
+      for (var attempt = 0; attempt < 3; attempt++) {
+        final position = _scrollController.position;
+        final fraction = count <= 1 ? 0.0 : index / (count - 1);
+        position.jumpTo(
+          (fraction * position.maxScrollExtent).clamp(
+            0.0,
+            position.maxScrollExtent,
+          ),
+        );
+        // Let the jumped-to rows build so the next measurement sees how the
+        // extent grew.
+        await Future.delayed(const Duration(milliseconds: 120));
+        if (!mounted) return;
+      }
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final target = _locateKey.currentContext;
