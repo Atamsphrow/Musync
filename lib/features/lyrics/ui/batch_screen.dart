@@ -191,8 +191,11 @@ class _BatchScreenState extends ConsumerState<BatchScreen> with RouteAware {
           unsynced: match.unsyncedLyrics,
           // Skip rather than ask: a dialog per file is not a review, and the
           // answer would be the same every time. A track that already has timed
-          // lyrics is left exactly as it was, and counted.
+          // lyrics is left exactly as it was, and counted. Plain results only
+          // land where the file has no lyrics at all: swapping one plain
+          // guess for another across a library is churn, not progress.
           onPlainOverSynced: PlainOverSynced.skip,
+          skipPlainOverPlain: true,
           // No per-track snackbar: a hundred of them stacked up would bury the
           // screen. The summary at the end says what happened.
           successMessage: '',
@@ -302,7 +305,7 @@ class _Searching extends StatelessWidget {
 /// them is not a review screen, it is a haystack. And the reverse view matters
 /// just as much — the failures are the evidence for T12, and until now there
 /// was no way to look at them at all.
-enum _Filter { found, confident, missing, all }
+enum _Filter { found, confident, unsure, missing, all }
 
 class _Review extends ConsumerStatefulWidget {
   final BatchState state;
@@ -324,6 +327,7 @@ class _ReviewState extends ConsumerState<_Review> {
     _Filter.all => true,
     _Filter.found => candidate.hasMatch,
     _Filter.confident => candidate.isConfident,
+    _Filter.unsure => candidate.hasMatch && !candidate.isConfident,
     _Filter.missing => !candidate.hasMatch,
   };
 
@@ -336,6 +340,9 @@ class _ReviewState extends ConsumerState<_Review> {
 
     final foundCount = state.found.length;
     final confidentCount = state.candidates.where((c) => c.isConfident).length;
+    final unsureCount = state.candidates
+        .where((c) => c.hasMatch && !c.isConfident)
+        .length;
 
     // Indices are carried alongside, because toggling a row addresses it by its
     // position in the whole batch — filtering the list must not renumber it.
@@ -396,6 +403,10 @@ class _ReviewState extends ConsumerState<_Review> {
               ButtonSegment(
                 value: _Filter.confident,
                 label: Text("Sûres ($confidentCount)"),
+              ),
+              ButtonSegment(
+                value: _Filter.unsure,
+                label: Text("Non sûres ($unsureCount)"),
               ),
               ButtonSegment(
                 value: _Filter.missing,
@@ -634,8 +645,8 @@ class _Done extends ConsumerWidget {
                 kept == 0
                     ? "${written.length} morceau(x) écrit(s)."
                     : "${written.length} morceau(x) écrit(s), $kept laissé(s) "
-                          "tels quels : ils avaient déjà des paroles calées, "
-                          "et le résultat trouvé n'a que du texte.",
+                          "tels quels : ils avaient déjà des paroles, "
+                          "et le résultat trouvé n'avait que du texte.",
                 style: textTheme.titleMedium,
               ),
               const SizedBox(height: 6),
