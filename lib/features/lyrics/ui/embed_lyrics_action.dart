@@ -28,8 +28,9 @@ import 'package:musync/features/settings/providers/backup_provider.dart';
 enum EmbedOutcome {
   written,
 
-  /// Refused: the incoming lyrics are untimed and the file already holds timed
-  /// ones. Writing would have deleted them.
+  /// Refused: nothing was written and nothing went wrong. The file already
+  /// held lyrics the incoming result must not replace — timed ones, or
+  /// plain ones when the caller asked to keep them.
   keptSynced,
 
   /// Permission refused, an unsupported tag, or a write that failed. The reason
@@ -75,6 +76,13 @@ Future<EmbedOutcome> embedLyrics(
   /// See [PlainOverSynced]. Defaults to asking, so a caller that has not
   /// thought about it cannot destroy a timing by omission.
   PlainOverSynced onPlainOverSynced = PlainOverSynced.ask,
+
+  /// When true, a plain-text result is only written to a file that has
+  /// no lyrics at all: a file that already carries plain text keeps
+  /// it, even when the incoming text differs. The batch passes this —
+  /// replacing one plain guess with another across a library is churn,
+  /// not progress.
+  bool skipPlainOverPlain = false,
 
   /// Shown with the undo action once the write lands. Callers pass their own
   /// wording — "76 lignes calées", "12 lignes importées" — because only they
@@ -141,6 +149,21 @@ Future<EmbedOutcome> embedLyrics(
 
       if (replace != true) return EmbedOutcome.keptSynced;
       if (!context.mounted) return EmbedOutcome.failed;
+    }
+
+    // Plain over plain: with [skipPlainOverPlain] the incoming text
+    // only lands where the file has nothing. Read from the file, same
+    // as above — the decision is per file, not per cache entry.
+    if (skipPlainOverPlain) {
+      final plain = existing.unsynced;
+      if (plain != null && plain.isNotEmpty) {
+        DebugLog.instance.info(
+          'Id3Writer',
+          'Texte seul propose pour $filePath, qui a deja du texte : '
+              'conserve',
+        );
+        return EmbedOutcome.keptSynced;
+      }
     }
   }
 
