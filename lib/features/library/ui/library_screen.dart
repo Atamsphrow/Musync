@@ -20,6 +20,7 @@ import 'package:musync/features/library/ui/widgets/song_tile.dart';
 import 'package:musync/features/ai_assistant/data/assistant_controller.dart';
 import 'package:musync/features/ai_assistant/ui/ai_chat_view.dart';
 import 'package:musync/features/lyrics/ui/batch_screen.dart';
+import 'package:musync/features/lyrics/providers/background_lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/player/ui/queues_sheet.dart';
 import 'package:musync/features/player/ui/mini_player.dart';
@@ -225,10 +226,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// Scrolls the library to the playing track (mini player long-press).
   ///
   /// Clears any search/chat filter that could hide the track, switches to
-  /// its lyrics-status tab, then scrolls to its row in two phases: a jump
-  /// near the tile so it gets built, then a precise alignment once it has a
-  /// context. The row already carries the playing indicator, so the eye
-  /// finds it without extra highlighting.
+  /// its lyrics-status tab, then jumps to its row: the list has a fixed item
+  /// extent, so the offset is exact, and a temporary outline marks the row —
+  /// the Musicolet-style "show it" effect. The row already carries the
+  /// playing indicator permanently; the outline is just the landing flash.
   Future<void> _locateCurrentSong() async {
     final song = ref.read(currentSongProvider);
     if (song == null || !mounted) return;
@@ -255,44 +256,36 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     if (index < 0) return;
 
     setState(() => _locateIndex = index);
-    if (_scrollController.hasClients) {
-      // Proportional jump, refined over a few frames: the target's fractional
-      // position in the list is exact, and the scroll extent is measured, not
-      // estimated. A hardcoded tile height drifts with the index (a couple of
-      // px off per row is a thousand px by the middle of the library), which
-      // used to leave the row unbuilt — the precise alignment below then had
-      // no context to grab, and the long-press landed nowhere near the track.
-      final count = songs?.length ?? 0;
-      for (var attempt = 0; attempt < 3; attempt++) {
-        final position = _scrollController.position;
-        final fraction = count <= 1 ? 0.0 : index / (count - 1);
-        position.jumpTo(
-          (fraction * position.maxScrollExtent).clamp(
-            0.0,
-            position.maxScrollExtent,
-          ),
-        );
-        // Let the jumped-to rows build so the next measurement sees how the
-        // extent grew.
-        await Future.delayed(const Duration(milliseconds: 120));
-        if (!mounted) return;
-      }
-    }
+    // The list has a fixed item extent (kSongTileHeight), so the target offset
+    // is exact: index × height, no estimation, no drift down a long list.
+    // Jump after the frame where the key was attached, then align precisely
+    // once the jumped-to row has built.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final target = _locateKey.currentContext;
-      if (target != null && mounted) {
-        Scrollable.ensureVisible(
-          target,
-          duration: const Duration(milliseconds: 350),
-          curve: Curves.easeOutCubic,
-          alignment: 0.35,
+      if (!mounted) return;
+      if (_scrollController.hasClients) {
+        final position = _scrollController.position;
+        position.jumpTo(
+          (index * kSongTileHeight).clamp(0.0, position.maxScrollExtent),
         );
       }
-      // The key has served: drop it so later rebuilds don't carry a stale one.
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted && _locateIndex == index) {
-          setState(() => _locateIndex = -1);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final target = _locateKey.currentContext;
+        if (target != null) {
+          Scrollable.ensureVisible(
+            target,
+            duration: const Duration(milliseconds: 350),
+            curve: Curves.easeOutCubic,
+            alignment: 0.35,
+          );
         }
+        // The key and the outline have served: drop them so later rebuilds
+        // don't carry a stale one.
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted && _locateIndex == index) {
+            setState(() => _locateIndex = -1);
+          }
+        });
       });
     });
   }
@@ -604,7 +597,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       final songs = await _resolveSharedSongs();
       if (songs.isEmpty || !mounted) return;
 
-      // Detached on purpose: the player (or batch) screen stays open after this
+      // Detached on purpose: the player screen stays open after this
       // returns, and holding the pipeline across it is what used to swallow
       // every share that followed the first.
       unawaited(
@@ -724,58 +717,49 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // than stacking a second one. Only players are closed: the sync editor may
     // hold edits nobody saved, and popping it would drop them.
     final navigator = Navigator.of(context);
-    String? top;
-    navigator.popUntil((route) {
-      top = route.settings.name;
-      return true;
-    });
-    // A search is running and owns the one shared batch state; starting another
-    // now would trample it.
-    if (top == AppRoutes.batch) {
-      ScaffoldMessenger.of(context).showOnly(
-        const SnackBar(
-          content: Text(
-            'Une recherche est déjà en cours. Repartage ce morceau ensuite.',
-          ),
-        ),
-      );
-      return;
-    }
     navigator.popUntil((route) => route.settings.name != AppRoutes.player);
 
-    if (needSearch.isEmpty) {
-      // The player screen is about to open: hide the floating bubble right
-      // now instead of waiting for the route callbacks, so a share never
-      // leaves the bubble sitting on top of "Lecture en cours".
-      ref.read(playerScreenVisibleProvider.notifier).state = true;
-      // All shared tracks already have synced lyrics. If several were shared,
-      // queue them up instead of silently dropping all but the first.
-      if (songs.length == 1) {
-        await Navigator.pushNamed(
-          context,
-          AppRoutes.player,
-          arguments: SongRouteArgs(song: songs.first),
-        );
-      } else {
-        await Navigator.pushNamed(
-          context,
-          AppRoutes.player,
-          arguments: SongRouteArgs(song: songs.first, queue: songs.skip(1).toList()),
-        );
-        if (mounted) {
-          ScaffoldMessenger.of(context).showOnly(
-            SnackBar(
-              content: Text(
-                '${songs.length} morceaux partagés : lecture du premier, '
-                'les autres sont en file d\u2019attente.',
-              ),
+    // Every shared track lands in the player: the first plays, the rest queue
+    // up behind it — whether or not they already carry synced lyrics. The
+    // player screen is about to open: hide the floating bubble right now
+    // instead of waiting for the route callbacks, so a share never leaves the
+    // bubble sitting on top of "Lecture en cours".
+    ref.read(playerScreenVisibleProvider.notifier).state = true;
+    if (songs.length == 1) {
+      await Navigator.pushNamed(
+        context,
+        AppRoutes.player,
+        arguments: SongRouteArgs(song: songs.first),
+      );
+    } else {
+      await Navigator.pushNamed(
+        context,
+        AppRoutes.player,
+        arguments: SongRouteArgs(
+          song: songs.first,
+          queue: songs.skip(1).toList(),
+        ),
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showOnly(
+          SnackBar(
+            content: Text(
+              '${songs.length} morceaux partagés : lecture du premier, '
+              'les autres sont en file d\u2019attente.',
             ),
-          );
-        }
+          ),
+        );
       }
-      return;
     }
-    await _startBatch(needSearch, filenameFirst: true);
+
+    // And the ones missing synced lyrics are searched for silently in the
+    // background — no batch screen, nothing shown: WiFi only, one at a time.
+    // Each write lands in Settings › Historique with its undo.
+    if (needSearch.isNotEmpty) {
+      unawaited(
+        ref.read(backgroundLyricsServiceProvider).fetchForShared(needSearch),
+      );
+    }
   }
 
   /// Runs a bulk search over whatever the current tab is showing.
@@ -899,12 +883,17 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                                 query: query,
                               ),
                             ),
-                          SliverList.builder(
+                          SliverFixedExtentList.builder(
+                            // Fixed extent: every row is exactly kSongTileHeight
+                            // tall, so the locate jump below is precise.
+                            itemExtent: kSongTileHeight,
                             itemCount: value.length,
                             itemBuilder: (context, index) => SongTile(
                               // The locate-target row carries the key, so it
-                              // can be brought into view precisely.
+                              // can be brought into view precisely, and a
+                              // temporary outline so the eye finds it.
                               key: index == _locateIndex ? _locateKey : null,
+                              highlighted: index == _locateIndex,
                               song: value[index],
                               // Every row in this list shares the tab's status by
                               // construction; showing it keeps a row readable
