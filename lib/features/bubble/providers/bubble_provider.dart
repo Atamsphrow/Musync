@@ -291,9 +291,16 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   void _attach() {
     if (_feeds.isNotEmpty || _fromOverlay != null) return;
     _feeds.add(
+      // Deferred like the feeds below: _syncOverlayVisibility touches
+      // provider state (it re-reads currentLyricsProvider), and doing that
+      // synchronously inside the notification cycle risks "Concurrent
+      // modification during iteration". The save path invalidates this very
+      // provider on every write, so this listener fires on every save.
       ref.listen(currentLyricsProvider, (_, _) {
-        _push();
-        _syncOverlayVisibility();
+        Future.microtask(() {
+          _push();
+          _syncOverlayVisibility();
+        });
       }),
     );
     // An appearance change (size, italic, color) repushes so the bubble
