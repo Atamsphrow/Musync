@@ -10,6 +10,14 @@ import 'package:musync/features/player/providers/player_provider.dart';
 /// Actions of the tile's ⋯ menu.
 enum _TileMenu { playNext }
 
+/// Exact height of every [SongTile]: 3 + 3 outer padding, 8 + 8 inner
+/// padding, and a 48 px content row (artwork and buttons are 48 px tall, the
+/// two single-line texts stay below that).
+///
+/// The library list uses this as its fixed item extent, so jumping to a row
+/// by index is exact — no estimation, no drift down a long list.
+const double kSongTileHeight = 70.0;
+
 class SongTile extends ConsumerWidget {
   final Song song;
   final VoidCallback onTap;
@@ -18,11 +26,17 @@ class SongTile extends ConsumerWidget {
   /// songs without having resolved their tags, like the player queue.
   final LyricsStatus? status;
 
+  /// Temporary "look here" outline, used by the mini player's long-press when
+  /// it jumps to the playing track. Painted inside the tile so the fixed
+  /// [kSongTileHeight] never changes.
+  final bool highlighted;
+
   const SongTile({
     super.key,
     required this.song,
     required this.onTap,
     this.status,
+    this.highlighted = false,
   });
 
   String _formatDuration(int milliseconds) {
@@ -45,8 +59,17 @@ class SongTile extends ConsumerWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
       child: Material(
-        color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(16),
+        color: highlighted
+            ? scheme.primaryContainer.withValues(alpha: 0.35)
+            : scheme.surfaceContainerLow,
+        // A shape replaces borderRadius when both are set; keep the rounded
+        // corners in both branches.
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: highlighted
+              ? BorderSide(color: scheme.primary, width: 2)
+              : BorderSide.none,
+        ),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
