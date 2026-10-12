@@ -422,8 +422,21 @@ class AudioPlayerService {
     final match = queue[index];
     try {
       AudioBackendCheck.ensureIntercepted();
+      final previousQueue = _queue;
       _queue = List.unmodifiable(queue);
       await _warmArtwork(index);
+      // A share (or any explicit play) may have claimed the player while the
+      // library and the artwork were loading: the entry guard above is stale
+      // by now. Re-check before the source goes in — the last setAudioSource
+      // wins, and it must be the explicit choice, not the restoration.
+      if (_currentSong != null) {
+        _queue = previousQueue;
+        DebugLog.instance.info(
+          'Player',
+          'restauration: annulée, lecture explicite entre-temps',
+        );
+        return false;
+      }
       await _player.setAudioSource(
         ConcatenatingAudioSource(
           useLazyPreparation: true,
