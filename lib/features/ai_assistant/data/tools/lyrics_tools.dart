@@ -354,6 +354,53 @@ Future<List<Song>> _lyricsScope(
 String _plural(int n, String one, String many) =>
     n > 1 ? '$n $many' : '$n $one';
 
+/// Lit les paroles d'un morceau, ou null si illisibles.
+Future<LyricsPair?> _readPair(AiToolContext ctx, Song song) async {
+  try {
+    return await ctx.ref.read(lyricsRepositoryProvider).readLyrics(
+          song.filePath,
+        );
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Nombre de lignes finales vides qu'on peut couper (0 = rien à faire).
+int _trailingEmptyCount(SyncedLyrics? synced) {
+  if (synced == null || synced.isEmpty) return 0;
+  var end = synced.lines.length;
+  while (end > 0 && synced.lines[end - 1].text.trim().isEmpty) {
+    end--;
+  }
+  // Rien à couper, ou il ne resterait rien : on ne touche pas.
+  if (end == synced.lines.length || end == 0) return 0;
+  return synced.lines.length - end;
+}
+
+/// Nombre de lignes que le nettoyage retirerait (0 = déjà propre).
+int _cleanableCount(SyncedLyrics? synced) {
+  if (synced == null || synced.isEmpty) return 0;
+  var removed = 0;
+  var kept = 0;
+  String? last;
+  for (final line in synced.lines) {
+    final text = line.text.trim();
+    if (text.isEmpty) {
+      removed++;
+      continue;
+    }
+    if (last != null && last == text) {
+      removed++;
+      continue;
+    }
+    last = text;
+    kept++;
+  }
+  // On ne vide jamais complètement des paroles existantes.
+  if (kept == 0) return 0;
+  return removed;
+}
+
 /// Vérifie le morceau en cours : identité, fichier, état des paroles.
 ///
 /// Lecture seule : ne touche à rien.
@@ -458,8 +505,18 @@ class TrimEmptyLastLyricLineTool extends AiTool {
       throw const AiToolArgError('Aucun morceau en cours.');
     }
     if (songs.length == 1) {
+      final song = songs.first;
+      // Pas de dialogue quand il n'y a rien à couper : on le dit, on ne
+      // fait pas confirmer du vide.
+      final pair = await _readPair(ctx, song);
+      if (_trailingEmptyCount(pair?.synced) == 0) {
+        throw AiToolArgError(
+          '${songLabel(song)} n’a pas de ligne vide à la fin de ses paroles '
+          'synchronisées — rien à faire.',
+        );
+      }
       return 'Supprimer la dernière ligne vide des paroles synchronisées '
-          'de ${songLabel(songs.first)}.';
+          'de ${songLabel(song)}.';
     }
     return 'Supprimer la dernière ligne vide des paroles synchronisées de '
         '${songs.length} morceaux.';
@@ -487,20 +544,15 @@ class TrimEmptyLastLyricLineTool extends AiTool {
         continue;
       }
       final synced = pair.synced;
-      if (synced == null || synced.isEmpty) {
-        clean++;
-        continue;
-      }
-      var end = synced.lines.length;
-      while (end > 0 && synced.lines[end - 1].text.trim().isEmpty) {
-        end--;
-      }
-      if (end == synced.lines.length || end == 0) {
+      final cuttable = _trailingEmptyCount(synced);
+      if (cuttable == 0) {
         // Rien à couper, ou il ne resterait rien : on ne touche pas.
         clean++;
         continue;
       }
-      final kept = SyncedLyrics(synced.lines.sublist(0, end));
+      final kept = SyncedLyrics(
+        synced!.lines.sublist(0, synced.lines.length - cuttable),
+      );
       final ok = await _writeLyricsUndoable(
         ctx.ref,
         song,
@@ -563,8 +615,15 @@ class CleanLyricsTool extends AiTool {
       throw const AiToolArgError('Aucun morceau en cours.');
     }
     if (songs.length == 1) {
+      final song = songs.first;
+      final pair = await _readPair(ctx, song);
+      if (_cleanableCount(pair?.synced) == 0) {
+        throw AiToolArgError(
+          '${songLabel(song)} : paroles déjà propres — rien à faire.',
+        );
+      }
       return 'Nettoyer les paroles synchronisées de '
-          '${songLabel(songs.first)} (lignes vides, doublons).';
+          '${songLabel(song)} (lignes vides, doublons).';
     }
     return 'Nettoyer les paroles synchronisées de ${songs.length} morceaux '
         '(lignes vides, doublons).';
@@ -687,8 +746,15 @@ class ShiftLyricsTimestampsTool extends AiTool {
     }
     final dir = ms >= 0 ? '+' : '−';
     if (songs.length == 1) {
+      final song = songs.first;
+      final pair = await _readPair(ctx, song);
+      if (pair?.synced == null || pair!.synced!.isEmpty) {
+        throw AiToolArgError(
+          '${songLabel(song)} n’a pas de paroles synchronisées — rien à décaler.',
+        );
+      }
       return 'Décaler les paroles synchronisées de '
-          '${songLabel(songs.first)} de $dir${ms.abs()} ms dans le fichier.';
+          '${songLabel(song)} de $dir${ms.abs()} ms dans le fichier.';
     }
     return 'Décaler les paroles synchronisées de ${songs.length} morceaux '
         'de $dir${ms.abs()} ms dans le fichier.';
@@ -905,7 +971,16 @@ class RemoveLyricsTool extends AiTool {
       throw const AiToolArgError('Aucun morceau en cours.');
     }
     if (songs.length == 1) {
-      return 'Supprimer les paroles de ${songLabel(songs.first)}.';
+      final song = songs.first;
+      final pair = await _readPair(ctx, song);
+      final hasAny = (pair?.synced?.isNotEmpty ?? false) ||
+          (pair?.unsynced?.isNotEmpty ?? false);
+      if (!hasAny) {
+        throw AiToolArgError(
+          '${songLabel(song)} n’a déjà pas de paroles — rien à faire.',
+        );
+      }
+      return 'Supprimer les paroles de ${songLabel(song)}.';
     }
     return 'Supprimer les paroles de ${songs.length} morceaux.';
   }
