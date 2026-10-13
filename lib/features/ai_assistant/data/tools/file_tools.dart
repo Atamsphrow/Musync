@@ -9,6 +9,7 @@
 library;
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
@@ -115,7 +116,7 @@ class EditTagsTool extends AiTool {
   @override
   String get description =>
       'Modifie les tags du morceau en cours (ou de "query") : titre, '
-      'artiste, album. Un seul champ suffit. Écriture sécurisée '
+      'artiste, album, genre, année. Un seul champ suffit. Écriture sécurisée '
       '(copie + remplacement atomique).';
 
   @override
@@ -125,6 +126,8 @@ class EditTagsTool extends AiTool {
           'title': 'string, optionnel — nouveau titre',
           'artist': 'string, optionnel — nouvel artiste',
           'album': 'string, optionnel — nouvel album',
+          'genre': 'string, optionnel — nouveau genre',
+          'year': 'string, optionnel — nouvelle année (ex. "2024")',
           'query':
               'string, optionnel — morceau visé ; sinon le morceau en cours',
         },
@@ -137,9 +140,15 @@ class EditTagsTool extends AiTool {
     final title = optString(args, 'title');
     final artist = optString(args, 'artist');
     final album = optString(args, 'album');
-    if (title == null && artist == null && album == null) {
+    final genre = optString(args, 'genre');
+    final year = optString(args, 'year');
+    if (title == null &&
+        artist == null &&
+        album == null &&
+        genre == null &&
+        year == null) {
       throw const AiToolArgError(
-        'Précisez au moins title, artist ou album.',
+        'Précisez au moins title, artist, album, genre ou year.',
       );
     }
     return (
@@ -147,8 +156,8 @@ class EditTagsTool extends AiTool {
       artist: artist,
       album: album,
       albumArtist: null,
-      genre: null,
-      year: null,
+      genre: genre,
+      year: year,
       trackNumber: null,
       trackTotal: null,
       discNumber: null,
@@ -177,11 +186,15 @@ class EditTagsTool extends AiTool {
     final title = optString(args, 'title');
     final artist = optString(args, 'artist');
     final album = optString(args, 'album');
+    final genre = optString(args, 'genre');
+    final year = optString(args, 'year');
     if (title != null) lines.add('  titre : « ${target.title} » → « $title »');
     if (artist != null) {
       lines.add('  artiste : « ${target.artist} » → « $artist »');
     }
     if (album != null) lines.add('  album : « ${target.album} » → « $album »');
+    if (genre != null) lines.add('  genre → « $genre »');
+    if (year != null) lines.add('  année → « $year »');
     return lines.join('\n');
   }
 
@@ -391,6 +404,346 @@ class FixTagsFromFilenameTool extends AiTool {
     final first = planned.first;
     return AiToolResult.ok(
       'Tags corrigés : ${first.guess.artist} — ${first.guess.title}.',
+    );
+  }
+}
+
+/// Nom de fichier sûr à partir d'un texte : les caractères interdits par les
+/// systèmes de fichiers deviennent des underscores, les espaces sont tassés.
+String _safeFileName(String raw) {
+  var out = raw.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+  out = out.replaceAll(RegExp(r'\s+'), ' ');
+  if (out.isEmpty) return '_';
+  // Windows refuse les noms qui finissent par un point ou un espace.
+  out = out.replaceAll(RegExp(r'[. ]+$'), '');
+  return out.isEmpty ? '_' : out;
+}
+
+/// Renomme les fichiers audio d'après leurs tags.
+///
+/// Motif « Artiste - Titre » par défaut, « Titre - Artiste » sur demande.
+/// Un fichier à la fois dans l'esprit, mais en lot borné à la bibliothèque
+/// filtrée : la confirmation montre l'aperçu avant. Non annulable depuis
+/// l'Historique (ce n'est pas une écriture de tags).
+class BatchRenameFilesTool extends AiTool {
+  const BatchRenameFilesTool();
+
+  @override
+  String get name => 'batch_rename_files';
+
+  @override
+  String get description =>
+      'Renomme les fichiers audio d’après leurs tags : '
+      '« Artiste - Titre.mp3 » (ou « Titre - Artiste.mp3 » avec '
+      'pattern="title-artist"). Les caractères interdits sont remplacés. '
+      'Non annulable depuis l’Historique.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+        'type': 'object',
+        'properties': {
+          'pattern':
+              'string, optionnel — "artist-title" (défaut) ou "title-artist"',
+          'query':
+              'string, optionnel — restreint aux morceaux correspondants ; sinon toute la bibliothèque',
+        },
+      };
+
+  @override
+  bool get requiresConfirmation => true;
+
+  Future<List<Song>> _targets(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final songs = await librarySongs(ctx.ref);
+    final query = optString(args, 'query');
+    return query == null ? songs : matchSongs(songs, query);
+  }
+
+  String _newName(Song song, String pattern) {
+    final title = song.title.trim();
+    if (title.isEmpty) return '';
+    final artist = song.artist.trim();
+    final base = pattern == 'title-artist'
+        ? (artist.isEmpty ? title : '$title - $artist')
+        : (artist.isEmpty ? title : '$artist - $title');
+    return '${_safeFileName(base)}${p.extension(song.filePath)}';
+  }
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final songs = await _targets(ctx, args);
+    if (songs.isEmpty) {
+      throw const AiToolArgError('Aucun morceau correspondant.');
+    }
+    final pattern = optString(args, 'pattern') ?? 'artist-title';
+    final preview = songs.take(3).map((s) {
+      final name = _newName(s, pattern);
+      return '  ${p.basename(s.filePath)} → ${name.isEmpty ? '(titre vide, ignoré)' : name}';
+    }).join('\n');
+    return 'Renommer ${songs.length} fichiers '
+        '(motif « ${pattern == 'title-artist' ? 'Titre - Artiste' : 'Artiste - Titre'} ») :\n'
+        '$preview${songs.length > 3 ? '\n  …' : ''}';
+  }
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final songs = await _targets(ctx, args);
+    if (songs.isEmpty) {
+      return AiToolResult.fail('Aucun morceau correspondant.');
+    }
+    final pattern = optString(args, 'pattern') ?? 'artist-title';
+    var renamed = 0;
+    var skipped = 0;
+    for (final song in songs) {
+      final name = _newName(song, pattern);
+      if (name.isEmpty || name == p.basename(song.filePath)) {
+        skipped++;
+        continue;
+      }
+      final target = p.join(p.dirname(song.filePath), name);
+      try {
+        if (await File(target).exists()) {
+          skipped++;
+          continue;
+        }
+        await File(song.filePath).rename(target);
+        await MediaStore.rescan(target);
+        renamed++;
+      } catch (_) {
+        skipped++;
+      }
+    }
+    ctx.ref.invalidate(songListProvider);
+    return AiToolResult.ok(
+      '$renamed fichier${renamed > 1 ? 's' : ''} renommé${renamed > 1 ? 's' : ''}'
+      '${skipped > 0 ? ' ($skipped ignoré${skipped > 1 ? 's' : ''})' : ''}.',
+    );
+  }
+}
+
+/// Change la pochette du morceau depuis un fichier image.
+///
+/// Même protocole sécurisé que l'éditeur : autorisation système, travail sur
+/// une copie, remplacement atomique. Confirmation exigée.
+class ChangeCoverTool extends AiTool {
+  const ChangeCoverTool();
+
+  @override
+  String get name => 'change_cover';
+
+  @override
+  String get description =>
+      'Change la pochette du morceau en cours (ou de "query") depuis un '
+      'fichier image (chemin complet). Écriture sécurisée comme l’éditeur '
+      'de tags.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+        'type': 'object',
+        'properties': {
+          'image': 'string, requis — chemin complet du fichier image',
+          'query':
+              'string, optionnel — morceau visé ; sinon le morceau en cours',
+        },
+      };
+
+  @override
+  bool get requiresConfirmation => true;
+
+  static bool _looksLikeImage(List<int> bytes) {
+    if (bytes.length < 4) return false;
+    // JPEG, PNG, GIF, WebP, BMP.
+    return (bytes[0] == 0xFF && bytes[1] == 0xD8) ||
+        (bytes[0] == 0x89 &&
+            bytes[1] == 0x50 &&
+            bytes[2] == 0x4E &&
+            bytes[3] == 0x47) ||
+        (bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46) ||
+        (bytes[0] == 0x52 &&
+            bytes[1] == 0x49 &&
+            bytes[2] == 0x46 &&
+            bytes[3] == 0x46) ||
+        (bytes[0] == 0x42 && bytes[1] == 0x4D);
+  }
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final query = optString(args, 'query');
+    final target = await _resolveSingleTarget(ctx, query);
+    if (target == null) {
+      throw AiToolArgError(
+        'Morceau introuvable${query == null ? '' : ' : « $query »'}.',
+      );
+    }
+    final image = reqString(args, 'image');
+    return 'Changer la pochette de ${songLabel(target)} '
+        'avec l’image :\n$image';
+  }
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final target = await _resolveSingleTarget(ctx, optString(args, 'query'));
+    if (target == null) {
+      return AiToolResult.fail('Morceau introuvable.');
+    }
+    final imagePath = reqString(args, 'image');
+    Uint8List bytes;
+    try {
+      bytes = await File(imagePath).readAsBytes();
+    } catch (_) {
+      return AiToolResult.fail('Image introuvable : $imagePath');
+    }
+    if (bytes.isEmpty || !_looksLikeImage(bytes)) {
+      return AiToolResult.fail('Ce fichier n’est pas une image reconnue.');
+    }
+    final result = await _writeTagsSecurely(
+      ctx.ref,
+      target,
+      (
+        title: null,
+        artist: null,
+        album: null,
+        albumArtist: null,
+        genre: null,
+        year: null,
+        trackNumber: null,
+        trackTotal: null,
+        discNumber: null,
+        discTotal: null,
+        composer: null,
+        comment: null,
+        artwork: bytes,
+      ),
+    );
+    if (!result.ok) return result;
+    await ctx.ref.read(audioPlayerServiceProvider).forgetArtwork(target);
+    return AiToolResult.ok(
+      'Pochette mise à jour pour ${songLabel(target)}.',
+    );
+  }
+}
+
+/// Déplace des fichiers audio vers un dossier.
+///
+/// Le morceau en cours par défaut (ou "query"), ou toute la bibliothèque
+/// avec all=true. Le dossier est créé s'il n'existe pas. Non annulable
+/// depuis l'Historique.
+class MoveSongsTool extends AiTool {
+  const MoveSongsTool();
+
+  @override
+  String get name => 'move_songs';
+
+  @override
+  String get description =>
+      'Déplace le fichier du morceau en cours (ou de "query", ou toute la '
+      'bibliothèque avec all=true) vers un dossier, créé s’il n’existe pas. '
+      'Non annulable depuis l’Historique.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+        'type': 'object',
+        'properties': {
+          'folder': 'string, requis — dossier de destination',
+          'query':
+              'string, optionnel — morceau visé ; sinon le morceau en cours',
+          'all': 'booléen, optionnel — toute la bibliothèque',
+        },
+      };
+
+  @override
+  bool get requiresConfirmation => true;
+
+  Future<List<Song>> _targets(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final query = optString(args, 'query');
+    if (query != null) {
+      final matches = matchSongs(await librarySongs(ctx.ref), query);
+      if (matches.isEmpty) return const [];
+      if (matches.length > 1) {
+        throw AiToolArgError(
+          '« $query » correspond à ${matches.length} morceaux — précisez.',
+        );
+      }
+      return matches;
+    }
+    if (optBool(args, 'all')) return librarySongs(ctx.ref);
+    final song = ctx.ref.read(audioPlayerServiceProvider).currentSong;
+    return song == null ? const [] : [song];
+  }
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final folder = reqString(args, 'folder');
+    final songs = await _targets(ctx, args);
+    if (songs.isEmpty) {
+      throw const AiToolArgError('Aucun morceau visé.');
+    }
+    if (songs.length == 1) {
+      return 'Déplacer ${songLabel(songs.first)} vers :\n$folder';
+    }
+    return 'Déplacer ${songs.length} morceaux vers :\n$folder';
+  }
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final folder = reqString(args, 'folder');
+    final dir = Directory(folder);
+    try {
+      if (!await dir.exists()) await dir.create(recursive: true);
+    } catch (_) {
+      return AiToolResult.fail('Dossier inaccessible : $folder');
+    }
+    final songs = await _targets(ctx, args);
+    if (songs.isEmpty) {
+      return AiToolResult.fail('Aucun morceau visé.');
+    }
+    var moved = 0;
+    var skipped = 0;
+    for (final song in songs) {
+      final target = p.join(dir.path, p.basename(song.filePath));
+      if (target == song.filePath) {
+        skipped++;
+        continue;
+      }
+      try {
+        if (await File(target).exists()) {
+          skipped++;
+          continue;
+        }
+        await File(song.filePath).rename(target);
+        await MediaStore.rescan(target);
+        moved++;
+      } catch (_) {
+        skipped++;
+      }
+    }
+    ctx.ref.invalidate(songListProvider);
+    return AiToolResult.ok(
+      '$moved fichier${moved > 1 ? 's' : ''} déplacé${moved > 1 ? 's' : ''} vers $folder'
+      '${skipped > 0 ? ' ($skipped ignoré${skipped > 1 ? 's' : ''})' : ''}.',
     );
   }
 }
