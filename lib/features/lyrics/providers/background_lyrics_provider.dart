@@ -164,23 +164,24 @@ class BackgroundLyricsService {
   /// Lyrics for explicitly shared tracks, fetched silently in the background.
   ///
   /// A multi-share used to open the batch screen; now the searches run without
-  /// showing anything: WiFi only, sequential, with a breather between them —
-  /// the same discipline as the library sweep. Each write lands in
-  /// Settings › Historique with its undo, like any other background write.
+  /// showing anything: sequential, with a breather between them — on any
+  /// connection, because the share is explicit user intent (unlike the
+  /// WiFi-only library sweep). Each write lands in Settings › Historique
+  /// with its undo, like any other background write.
   /// A share is explicit intent, so the per-session attempt guard does not
   /// apply — but the tracks are marked attempted, so the per-track fetch does
   /// not search them a second time (and does not show its snackbar either).
   Future<void> fetchForShared(List<Song> songs) async {
     if (songs.isEmpty) return;
-    if (!await MediaStore.isWifiConnected()) {
+    if (!await _hasInternet()) {
       DebugLog.instance.info(
         'Paroles auto',
-        'Partage : pas de WiFi, les recherches attendront le balayage.',
+        'Partage : hors ligne, les recherches attendront le balayage.',
       );
       return;
     }
     for (final song in songs) {
-      if (!await MediaStore.isWifiConnected()) break;
+      if (!await _hasInternet()) break;
       // Re-read the status: the file may have gained synced lyrics since the
       // share was routed (an edit, or the per-track fetch winning the race).
       final status = await _ref
