@@ -69,10 +69,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   /// Locates the playing track on long-press of the mini player.
   ///
-  /// The target row gets this key so it can be brought into view precisely
-  /// after the tab switch; [_locateIndex] marks which row carries it, -1
-  /// when no locate is in flight.
-  final GlobalKey _locateKey = GlobalKey();
+  /// [_locateIndex] marks the row flashing the temporary outline, -1 when no
+  /// locate is in flight. The jump itself needs no key: the list has a fixed
+  /// item extent, so the target offset is exact once the settled list content
+  /// is known (see [_jumpToVisibleSong]).
   int _locateIndex = -1;
 
   /// Conversation IA : l'historique vit ici tant que le mode chat est actif.
@@ -230,6 +230,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// extent, so the offset is exact, and a temporary outline marks the row —
   /// the Musicolet-style "show it" effect. The row already carries the
   /// playing indicator permanently; the outline is just the landing flash.
+  ///
+  /// The wait is deterministic, not a guessed delay: while the lyrics-status
+  /// scan loads, the tab filter is bypassed and the list shows every song,
+  /// so jumping against that list would land on the wrong row once the real
+  /// tab content arrives. We wait for settled statuses first (bounded), then
+  /// [jumpToVisibleSong] resolves the index against the list that's actually
+  /// on screen.
   Future<void> _locateCurrentSong() async {
     final song = ref.read(currentSongProvider);
     if (song == null || !mounted) return;
@@ -240,54 +247,74 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       ref.read(librarySearchProvider.notifier).state = '';
     }
 
+    // Authoritative status, straight from the scanner rather than the cache.
     final status =
         await ref.read(lyricsStatusScannerProvider).statusOf(song.filePath);
     if (!mounted) return;
     _tabController.animateTo(LyricsStatus.values.indexOf(status));
     ref.read(libraryTabProvider.notifier).state = status;
 
-    // Let the tab animation and the rebuilt list settle.
-    await Future.delayed(const Duration(milliseconds: 450));
+    // The tab filter is bypassed while the status scan loads (the list then
+    // shows every song): jumping against that list lands on the wrong row
+    // once the real tab content arrives. Wait for settled statuses, bounded.
+    final scanWatch = Stopwatch()..start();
+    while (scanWatch.elapsedMilliseconds < 3000) {
+      if (!mounted) return;
+      if (ref.read(songsByStatusProvider).valueOrNull != null) break;
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
     if (!mounted) return;
 
-    final songs = ref.read(filteredSongsProvider).valueOrNull;
-    final index =
-        songs?.indexWhere((s) => s.filePath == song.filePath) ?? -1;
-    if (index < 0) return;
+    await _jumpToVisibleSong(song.filePath);
+  }
+
+  /// Scrolls the visible list so the song at [filePath] lands at the top.
+  ///
+  /// The index is resolved against the list that's actually on screen, and
+  /// the jump only fires once the laid-out extent covers the target row: a
+  /// jumpTo clamped against a stale (shorter) extent is exactly how the old
+  /// code missed. Bounded: gives up quietly instead of hanging.
+  Future<void> _jumpToVisibleSong(String filePath) async {
+    const rowH = kSongTileHeight;
+    int? settledIndex;
+    // Settle loop: the tab switch rebuilds the list asynchronously; wait
+    // until the controller is attached and the extent covers the target row.
+    // ~2 s max, then we stop trying rather than jump blind.
+    for (var i = 0; i < 40; i++) {
+      if (!mounted) return;
+      final songs = ref.read(filteredSongsProvider).valueOrNull;
+      final index = songs?.indexWhere((s) => s.filePath == filePath) ?? -1;
+      if (index >= 0 &&
+          _scrollController.hasClients &&
+          _scrollController.position.maxScrollExtent >= index * rowH) {
+        settledIndex = index;
+        break;
+      }
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+    final index = settledIndex;
+    if (index == null || !mounted) return;
 
     setState(() => _locateIndex = index);
-    // The list has a fixed item extent (kSongTileHeight), so the target offset
-    // is exact: index × height, no estimation, no drift down a long list.
-    // Jump after the frame where the key was attached, then align precisely
-    // once the jumped-to row has built.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (_scrollController.hasClients) {
-        final position = _scrollController.position;
-        position.jumpTo(
-          (index * kSongTileHeight).clamp(0.0, position.maxScrollExtent),
-        );
+    // The content can swap under us while we waited (a scan landing, a
+    // filter clearing): re-resolve against what's on screen right now.
+    final fresh = ref.read(filteredSongsProvider).valueOrNull;
+    final freshIndex = fresh?.indexWhere((s) => s.filePath == filePath) ?? -1;
+    final useIndex = freshIndex >= 0 ? freshIndex : index;
+    if (useIndex != index && mounted) setState(() => _locateIndex = useIndex);
+
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(
+        (useIndex * rowH)
+            .clamp(0.0, _scrollController.position.maxScrollExtent),
+      );
+    }
+    // The outline has served its flash: drop it so later rebuilds don't
+    // carry a stale one.
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted && _locateIndex == useIndex) {
+        setState(() => _locateIndex = -1);
       }
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        final target = _locateKey.currentContext;
-        if (target != null) {
-          Scrollable.ensureVisible(
-            target,
-            duration: const Duration(milliseconds: 350),
-            curve: Curves.easeOutCubic,
-            // Leading edge: the track lands at the top of the list.
-            alignment: 0.0,
-          );
-        }
-        // The key and the outline have served: drop them so later rebuilds
-        // don't carry a stale one.
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted && _locateIndex == index) {
-            setState(() => _locateIndex = -1);
-          }
-        });
-      });
     });
   }
 
@@ -890,10 +917,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                             itemExtent: kSongTileHeight,
                             itemCount: value.length,
                             itemBuilder: (context, index) => SongTile(
-                              // The locate-target row carries the key, so it
-                              // can be brought into view precisely, and a
-                              // temporary outline so the eye finds it.
-                              key: index == _locateIndex ? _locateKey : null,
+                              // The locate-target row flashes a temporary
+                              // outline so the eye finds it.
                               highlighted: index == _locateIndex,
                               song: value[index],
                               // Every row in this list shares the tab's status by
