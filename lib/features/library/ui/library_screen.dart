@@ -276,7 +276,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
             target,
             duration: const Duration(milliseconds: 350),
             curve: Curves.easeOutCubic,
-            alignment: 0.35,
+            // Leading edge: the track lands at the top of the list.
+            alignment: 0.0,
           );
         }
         // The key and the outline have served: drop them so later rebuilds
