@@ -61,12 +61,19 @@ AiToolRegistry buildAiToolRegistry() => AiToolRegistry([
       const PlayArtistShuffledTool(),
       const LibraryStatsTool(),
       const FindDuplicatesTool(),
+      const DeleteDuplicatesTool(),
       const CreateNamedQueueTool(),
       // Paroles
       const FetchLyricsTool(),
       const PrepareLyricsForSyncTool(),
       const AdjustLyricsOffsetTool(),
       const BatchFetchLyricsTool(),
+      const CheckCurrentSongTool(),
+      const TrimEmptyLastLyricLineTool(),
+      const CleanLyricsTool(),
+      const ShiftLyricsTimestampsTool(),
+      const FixLyricLineTool(),
+      const RemoveLyricsTool(),
       // Minuteur et planification
       const SleepTimerTool(),
       ScheduleActionTool(),
@@ -79,6 +86,7 @@ AiToolRegistry buildAiToolRegistry() => AiToolRegistry([
       const ClearHeadphoneTriggerTool(),
       // Réglages et aide
       const SetAppearanceTool(),
+      const ToggleLyricsSourceTool(),
       const AppHelpTool(),
       const CloseAppTool(),
       const ToggleBubbleTool(),
@@ -86,6 +94,9 @@ AiToolRegistry buildAiToolRegistry() => AiToolRegistry([
       const EditTagsTool(),
       const DeleteFileTool(),
       const FixTagsFromFilenameTool(),
+      const BatchRenameFilesTool(),
+      const ChangeCoverTool(),
+      const MoveSongsTool(),
       // Dossiers exclus
       const ExcludeFolderTool(),
       const IncludeFolderTool(),
