@@ -1,0 +1,20 @@
+# Flutter/Dart artefacts — jamais committés.
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+android/local.properties
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+windows/flutter/ephemeral/
+macos/Flutter/ephemeral/
+linux/flutter/ephemeral/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
