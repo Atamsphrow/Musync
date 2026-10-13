@@ -5,10 +5,13 @@ import 'dart:io' show Platform;
 
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/features/ai_assistant/data/app_knowledge.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
+import 'package:musync/features/settings/data/lyrics_source_config.dart';
 import 'package:musync/features/bubble/providers/bubble_provider.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
+import 'package:musync/features/settings/providers/settings_provider.dart';
 
 /// Règle l'apparence des paroles (les mêmes réglages que l'onglet Apparences).
 class SetAppearanceTool extends AiTool {
@@ -258,5 +261,72 @@ class ToggleBubbleTool extends AiTool {
       case BubbleStart.failed:
         return AiToolResult.fail('La bulle n’a pas pu démarrer.');
     }
+  }
+}
+
+/// Active ou désactive une source de paroles, par son nom.
+///
+/// Réversible en un appel : pas de confirmation, comme les autres réglages.
+class ToggleLyricsSourceTool extends AiTool {
+  const ToggleLyricsSourceTool();
+
+  @override
+  String get name => 'toggle_lyrics_source';
+
+  @override
+  String get description =>
+      'Active ou désactive une source de paroles (ex. LRCLIB), désignée par '
+      'son nom. Réversible : pas de confirmation.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+        'type': 'object',
+        'properties': {
+          'source': 'string, requis — nom de la source (ex. "LRCLIB")',
+          'enabled': 'booléen, requis — true pour activer, false pour couper',
+        },
+      };
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async =>
+      '${optBool(args, 'enabled') ? 'Activer' : 'Désactiver'} '
+      'la source « ${optString(args, 'source') ?? '?'} ».';
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final query = reqString(args, 'source');
+    final enabled = args['enabled'] is bool
+        ? args['enabled'] as bool
+        : throw const AiToolArgError(
+            'Précisez enabled : true pour activer, false pour couper.',
+          );
+    final configs = ctx.ref.read(lyricsSourcesProvider).valueOrNull ??
+        builtInSources;
+    LyricsSourceConfig? match;
+    final folded = query.toLowerCase().trim();
+    for (final c in configs) {
+      if (c.name.toLowerCase() == folded || c.id.toLowerCase() == folded) {
+        match = c;
+        break;
+      }
+    }
+    if (match == null) {
+      final names = configs.map((c) => '« ${c.name} »').join(', ');
+      return AiToolResult.fail(
+        'Source introuvable : « $query ». Sources : $names.',
+      );
+    }
+    await ctx.ref
+        .read(lyricsSourcesProvider.notifier)
+        .setEnabled(match.id, enabled);
+    return AiToolResult.ok(
+      'Source « ${match.name} » ${enabled ? 'activée' : 'désactivée'}.',
+    );
   }
 }
