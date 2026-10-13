@@ -2,11 +2,16 @@
 /// statistiques, création de file nommée.
 library;
 
+import 'dart:io';
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:musync/core/services/media_store.dart';
 import 'package:musync/core/utils/text_search.dart';
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
 import 'package:musync/features/library/providers/catalogue_provider.dart';
+import 'package:musync/features/library/providers/library_provider.dart';
 import 'package:musync/features/player/providers/named_queue_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 
@@ -153,6 +158,21 @@ class LibraryStatsTool extends AiTool {
   }
 }
 
+/// Groupes de doublons : même titre + même artiste (insensible à la casse
+/// et aux accents), fichiers différents. Des tags vides ne forment pas
+/// de « doublon ».
+Future<List<List<Song>>> _duplicateGroups(Ref ref) async {
+  final groups = <String, List<Song>>{};
+  for (final s in await librarySongs(ref)) {
+    // Des tags vides ne forment pas un « doublon » : on les ignore.
+    if (s.title.trim().isEmpty && s.artist.trim().isEmpty) continue;
+    final key = '${foldForSearch(s.title)}|${foldForSearch(s.artist)}';
+    groups.putIfAbsent(key, () => []).add(s);
+  }
+  return groups.values.where((g) => g.length > 1).toList()
+    ..sort((a, b) => b.length.compareTo(a.length));
+}
+
 class FindDuplicatesTool extends AiTool {
   const FindDuplicatesTool();
 
@@ -165,7 +185,8 @@ class FindDuplicatesTool extends AiTool {
       'à la casse et aux accents), mais fichiers différents — les noms de '
       'fichiers peuvent différer. Rend chaque groupe avec les chemins et la '
       'durée, pour décider quoi garder. Ne supprime rien : la suppression se '
-      'fait ensuite morceau par morceau avec delete_file.';
+      'fait ensuite morceau par morceau avec delete_file, ou en lot avec '
+      'delete_duplicates.';
 
   @override
   Map<String, Object?> get parametersSchema => {
@@ -185,15 +206,7 @@ class FindDuplicatesTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
-    final groups = <String, List<Song>>{};
-    for (final s in await librarySongs(ctx.ref)) {
-      // Des tags vides ne forment pas un « doublon » : on les ignore.
-      if (s.title.trim().isEmpty && s.artist.trim().isEmpty) continue;
-      final key = '${foldForSearch(s.title)}|${foldForSearch(s.artist)}';
-      groups.putIfAbsent(key, () => []).add(s);
-    }
-    final dupes = groups.values.where((g) => g.length > 1).toList()
-      ..sort((a, b) => b.length.compareTo(a.length));
+    final dupes = await _duplicateGroups(ctx.ref);
     if (dupes.isEmpty) {
       return AiToolResult.ok(
         'Aucun doublon : chaque couple titre+artiste est unique.',
@@ -216,6 +229,109 @@ class FindDuplicatesTool extends AiTool {
     return AiToolResult.ok(
       '$total $fw en double, ${dupes.length} $gw :\n$shown$more',
     );
+  }
+}
+
+/// Supprime les doublons en gardant un fichier par groupe.
+///
+/// Le gardé est de préférence celui qui a des paroles synchronisées, sinon
+/// le premier du groupe. DÉFINITIF, sans corbeille : la confirmation annonce
+/// le nombre exact de fichiers supprimés.
+class DeleteDuplicatesTool extends AiTool {
+  const DeleteDuplicatesTool();
+
+  @override
+  String get name => 'delete_duplicates';
+
+  @override
+  String get description =>
+      'Supprime les doublons : même titre+artiste (insensible casse/accents). '
+      'Garde un fichier par groupe — de préférence celui qui a des paroles '
+      'synchronisées. DÉFINITIF, sans corbeille.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+        'type': 'object',
+        'properties': const {},
+      };
+
+  @override
+  bool get requiresConfirmation => true;
+
+  /// Le fichier à garder : celui qui a des paroles synchronisées si l'un
+  /// d'eux en a, sinon le premier.
+  Future<Song> _keepOf(AiToolContext ctx, List<Song> group) async {
+    final scanner = ctx.ref.read(lyricsStatusScannerProvider);
+    for (final song in group) {
+      try {
+        if (await scanner.statusOf(song.filePath) == LyricsStatus.synced) {
+          return song;
+        }
+      } catch (_) {
+        // Statut illisible : on ne choisit pas sur ce critère.
+      }
+    }
+    return group.first;
+  }
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final dupes = await _duplicateGroups(ctx.ref);
+    if (dupes.isEmpty) {
+      throw const AiToolArgError('Aucun doublon dans la bibliothèque.');
+    }
+    final total = dupes.fold<int>(0, (n, g) => n + g.length);
+    return 'Supprimer DÉFINITIVEMENT ${total - dupes.length} fichiers en '
+        'double (${dupes.length} groupes, 1 gardé par groupe — de préférence '
+        'celui avec des paroles synchronisées).';
+  }
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final dupes = await _duplicateGroups(ctx.ref);
+    if (dupes.isEmpty) {
+      return AiToolResult.ok('Aucun doublon : rien à supprimer.');
+    }
+    final service = ctx.ref.read(audioPlayerServiceProvider);
+    var deleted = 0;
+    var failed = 0;
+    for (final group in dupes) {
+      final keep = await _keepOf(ctx, group);
+      for (final song in group) {
+        if (song.id == keep.id) continue;
+        try {
+          // Ne jamais supprimer le fichier sous le lecteur.
+          if (service.currentSong?.id == song.id) {
+            if (service.queue.length > 1) {
+              await service.next();
+            } else {
+              await service.stop();
+            }
+          }
+          final index =
+              service.queue.indexWhere((s) => s.id == song.id);
+          if (index >= 0) await service.removeFromQueue(index);
+          final file = File(song.filePath);
+          if (await file.exists()) await file.delete();
+          await MediaStore.rescan(song.filePath);
+          deleted++;
+        } catch (_) {
+          failed++;
+        }
+      }
+    }
+    ctx.ref.invalidate(songListProvider);
+    final parts = <String>[
+      '$deleted fichier${deleted > 1 ? 's' : ''} en double supprimé${deleted > 1 ? 's' : ''}',
+    ];
+    if (failed > 0) parts.add('$failed échec(s)');
+    return AiToolResult.ok('${parts.join(', ')} (${dupes.length} groupes nettoyés).');
   }
 }
 
