@@ -6,16 +6,21 @@
 /// cale au tap dans l'éditeur de synchro existant.
 library;
 
+import 'package:musync/core/id3/id3_reader.dart';
+import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/router/app_router.dart';
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
+import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/catalogue_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
+import 'package:musync/features/lyrics/providers/tag_change_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/lyrics/providers/search_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/settings/data/playback_settings.dart';
+import 'package:musync/features/settings/providers/backup_provider.dart';
 import 'package:musync/features/settings/providers/playback_settings_provider.dart';
 
 /// Cherche les paroles du morceau en cours et intègre le meilleur résultat.
@@ -298,5 +303,653 @@ class BatchFetchLyricsTool extends AiTool {
       'Paroles intégrées pour $done morceau${done > 1 ? 'x' : ''} '
       '($tried essayé${tried > 1 ? 's' : ''}).',
     );
+  }
+}
+
+// ---- écritures paroles avec sauvegarde ------------------------------------
+
+/// Écrit des paroles avec le protocole backup + historique : chaque écriture
+/// est annulable depuis Paramètres › Historique, comme les écritures auto.
+///
+/// Rend vrai quand l'écriture a eu lieu.
+Future<bool> _writeLyricsUndoable(
+  Ref ref,
+  Song song, {
+  SyncedLyrics? synced,
+  UnsyncedLyrics? unsynced,
+}) async {
+  final backups = ref.read(tagBackupStoreProvider);
+  final changes = ref.read(tagChangeProvider);
+  final repository = ref.read(lyricsRepositoryProvider);
+  final canUndo = await backups.capture(song.filePath);
+  try {
+    await repository.embedLyrics(
+      song.filePath,
+      synced: synced,
+      unsynced: unsynced,
+    );
+  } catch (_) {
+    if (canUndo) await backups.discardLatest(song.filePath);
+    return false;
+  }
+  if (canUndo) await backups.markWritten(song.filePath);
+  changes.fileChanged(song.filePath);
+  return true;
+}
+
+/// Morceaux visés par les outils de paroles : le morceau en cours par défaut,
+/// ou tous les morceaux synchronisés quand scope vaut 'all'.
+Future<List<Song>> _lyricsScope(
+  AiToolContext ctx,
+  Map<String, Object?> args,
+) async {
+  if ((optString(args, 'scope') ?? 'current') == 'all') {
+    final byStatus = ctx.ref.read(songsByStatusProvider).valueOrNull;
+    return [...(byStatus?[LyricsStatus.synced] ?? const <Song>[])];
+  }
+  final song = ctx.ref.read(audioPlayerServiceProvider).currentSong;
+  return song == null ? const [] : [song];
+}
+
+String _plural(int n, String one, String many) =>
+    n > 1 ? '$n $many' : '$n $one';
+
+/// Vérifie le morceau en cours : identité, fichier, état des paroles.
+///
+/// Lecture seule : ne touche à rien.
+class CheckCurrentSongTool extends AiTool {
+  const CheckCurrentSongTool();
+
+  @override
+  String get name => 'check_current_song';
+
+  @override
+  String get description =>
+      'Vérifie le morceau en cours : titre, artiste, album, durée, chemin du '
+      'fichier et état de ses paroles (synchronisées avec le nombre de '
+      'lignes, simples, ou absentes). Lecture seule.';
+
+  @override
+  Map<String, Object?> get parametersSchema =>
+      {'type': 'object', 'properties': const {}};
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async =>
+      'Vérifier le morceau en cours.';
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final song = ctx.ref.read(audioPlayerServiceProvider).currentSong;
+    if (song == null) {
+      return AiToolResult.fail('Aucun morceau en cours.');
+    }
+    final d = song.durationValue;
+    final dur =
+        '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
+    LyricsStatus? status;
+    try {
+      status = await ctx.ref
+          .read(lyricsStatusScannerProvider)
+          .statusOf(song.filePath);
+    } catch (_) {
+      // Le statut reste inconnu : on le dit, on ne l'invente pas.
+    }
+    final lyrics = ctx.ref.read(currentLyricsProvider).valueOrNull;
+    final syncedLines = lyrics?.synced?.lines.length;
+    final plainChars = lyrics?.unsynced?.text.trim().length;
+    final lyricsState = switch (status) {
+      LyricsStatus.synced => 'synchronisées (${syncedLines ?? '?'} lignes)',
+      LyricsStatus.plain => 'simples (${plainChars ?? '?'} caractères)',
+      LyricsStatus.none => 'absentes',
+      null => 'état inconnu',
+    };
+    return AiToolResult.ok(
+      '${songLabel(song)} — album « ${song.album} », $dur\n'
+      'Fichier : ${song.filePath}\n'
+      'Paroles : $lyricsState.',
+    );
+  }
+}
+
+/// Supprime la ou les dernières lignes vides des paroles synchronisées.
+///
+/// Ce sont ces timestamps sans texte en fin de morceau que l'utilisateur
+/// n'aime pas voir. Morceau en cours par défaut, toute la bibliothèque
+/// avec scope='all'. Écriture avec sauvegarde : annulable dans
+/// Paramètres › Historique.
+class TrimEmptyLastLyricLineTool extends AiTool {
+  const TrimEmptyLastLyricLineTool();
+
+  @override
+  String get name => 'trim_empty_last_lyric_line';
+
+  @override
+  String get description =>
+      'Supprime la ou les dernières lignes vides des paroles synchronisées '
+      '(un timestamp sans texte en fin de morceau). Cible : le morceau en '
+      'cours par défaut, ou toute la bibliothèque avec scope="all". '
+      'Écriture avec sauvegarde, annulable dans Paramètres › Historique.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+        'type': 'object',
+        'properties': {
+          'scope':
+              'string, optionnel — "current" (défaut) ou "all" pour toute la bibliothèque',
+        },
+      };
+
+  @override
+  bool get requiresConfirmation => true;
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final songs = await _lyricsScope(ctx, args);
+    if (songs.isEmpty) {
+      throw const AiToolArgError('Aucun morceau en cours.');
+    }
+    if (songs.length == 1) {
+      return 'Supprimer la dernière ligne vide des paroles synchronisées '
+          'de ${songLabel(songs.first)}.';
+    }
+    return 'Supprimer la dernière ligne vide des paroles synchronisées de '
+        '${songs.length} morceaux.';
+  }
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final songs = await _lyricsScope(ctx, args);
+    if (songs.isEmpty) {
+      return AiToolResult.fail('Aucun morceau en cours.');
+    }
+    final repository = ctx.ref.read(lyricsRepositoryProvider);
+    var trimmed = 0;
+    var clean = 0;
+    var failed = 0;
+    for (final song in songs) {
+      LyricsPair pair;
+      try {
+        pair = await repository.readLyrics(song.filePath);
+      } catch (_) {
+        failed++;
+        continue;
+      }
+      final synced = pair.synced;
+      if (synced == null || synced.isEmpty) {
+        clean++;
+        continue;
+      }
+      var end = synced.lines.length;
+      while (end > 0 && synced.lines[end - 1].text.trim().isEmpty) {
+        end--;
+      }
+      if (end == synced.lines.length || end == 0) {
+        // Rien à couper, ou il ne resterait rien : on ne touche pas.
+        clean++;
+        continue;
+      }
+      final kept = SyncedLyrics(synced.lines.sublist(0, end));
+      final ok = await _writeLyricsUndoable(
+        ctx.ref,
+        song,
+        synced: kept,
+        unsynced: pair.unsynced,
+      );
+      if (ok) {
+        trimmed++;
+      } else {
+        failed++;
+      }
+    }
+    ctx.ref.invalidate(currentLyricsProvider);
+    final parts = <String>[
+      _plural(trimmed, 'morceau nettoyé', 'morceaux nettoyés'),
+    ];
+    if (clean > 0) parts.add('$clean sans ligne vide finale');
+    if (failed > 0) parts.add('$failed échec(s)');
+    return AiToolResult.ok('Dernière ligne vide supprimée : ${parts.join(', ')}.');
+  }
+}
+
+/// Nettoie les paroles synchronisées : lignes vides au milieu et lignes
+/// en double consécutives.
+///
+/// Morceau en cours par défaut, toute la bibliothèque avec scope='all'.
+/// Écriture avec sauvegarde : annulable dans Paramètres › Historique.
+class CleanLyricsTool extends AiTool {
+  const CleanLyricsTool();
+
+  @override
+  String get name => 'clean_lyrics';
+
+  @override
+  String get description =>
+      'Nettoie les paroles synchronisées : supprime les lignes vides et les '
+      'lignes en double qui se suivent. Cible : le morceau en cours par '
+      'défaut, ou toute la bibliothèque avec scope="all". Écriture avec '
+      'sauvegarde, annulable dans Paramètres › Historique.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+        'type': 'object',
+        'properties': {
+          'scope':
+              'string, optionnel — "current" (défaut) ou "all" pour toute la bibliothèque',
+        },
+      };
+
+  @override
+  bool get requiresConfirmation => true;
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final songs = await _lyricsScope(ctx, args);
+    if (songs.isEmpty) {
+      throw const AiToolArgError('Aucun morceau en cours.');
+    }
+    if (songs.length == 1) {
+      return 'Nettoyer les paroles synchronisées de '
+          '${songLabel(songs.first)} (lignes vides, doublons).';
+    }
+    return 'Nettoyer les paroles synchronisées de ${songs.length} morceaux '
+        '(lignes vides, doublons).';
+  }
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final songs = await _lyricsScope(ctx, args);
+    if (songs.isEmpty) {
+      return AiToolResult.fail('Aucun morceau en cours.');
+    }
+    final repository = ctx.ref.read(lyricsRepositoryProvider);
+    var cleaned = 0;
+    var clean = 0;
+    var failed = 0;
+    for (final song in songs) {
+      LyricsPair pair;
+      try {
+        pair = await repository.readLyrics(song.filePath);
+      } catch (_) {
+        failed++;
+        continue;
+      }
+      final synced = pair.synced;
+      if (synced == null || synced.isEmpty) {
+        clean++;
+        continue;
+      }
+      final kept = <LyricLine>[];
+      var removed = 0;
+      for (final line in synced.lines) {
+        if (line.text.trim().isEmpty) {
+          removed++;
+          continue;
+        }
+        if (kept.isNotEmpty &&
+            kept.last.text.trim() == line.text.trim()) {
+          removed++;
+          continue;
+        }
+        kept.add(line);
+      }
+      if (removed == 0 || kept.isEmpty) {
+        clean++;
+        continue;
+      }
+      final ok = await _writeLyricsUndoable(
+        ctx.ref,
+        song,
+        synced: SyncedLyrics(kept),
+        unsynced: pair.unsynced,
+      );
+      if (ok) {
+        cleaned++;
+      } else {
+        failed++;
+      }
+    }
+    ctx.ref.invalidate(currentLyricsProvider);
+    final parts = <String>[
+      _plural(cleaned, 'morceau nettoyé', 'morceaux nettoyés'),
+    ];
+    if (clean > 0) parts.add('$clean déjà propres');
+    if (failed > 0) parts.add('$failed échec(s)');
+    return AiToolResult.ok('Paroles nettoyées : ${parts.join(', ')}.');
+  }
+}
+
+/// Décale les timestamps des paroles synchronisées DANS le fichier.
+///
+/// Contrairement au réglage d'affichage (±1000 ms, temporaire), ceci réécrit
+/// réellement les temps. Borné à ±10000 ms. Morceau en cours par défaut,
+/// toute la bibliothèque avec scope='all'. Écriture avec sauvegarde :
+/// annulable dans Paramètres › Historique.
+class ShiftLyricsTimestampsTool extends AiTool {
+  const ShiftLyricsTimestampsTool();
+
+  static const int maxShiftMs = 10000;
+
+  @override
+  String get name => 'shift_lyrics_timestamps';
+
+  @override
+  String get description =>
+      'Décale les timestamps des paroles synchronisées dans le fichier '
+      '(positif = les lignes s’allument plus tard). Écriture réelle, '
+      'bornée à ±10000 ms. Cible : le morceau en cours par défaut, ou toute '
+      'la bibliothèque avec scope="all". Annulable dans '
+      'Paramètres › Historique.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+        'type': 'object',
+        'properties': {
+          'milliseconds':
+              'integer, requis — décalage en ms, entre -10000 et 10000',
+          'scope':
+              'string, optionnel — "current" (défaut) ou "all" pour toute la bibliothèque',
+        },
+      };
+
+  @override
+  bool get requiresConfirmation => true;
+
+  int _shift(Map<String, Object?> args) =>
+      reqInt(args, 'milliseconds').clamp(-maxShiftMs, maxShiftMs);
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final ms = _shift(args);
+    final songs = await _lyricsScope(ctx, args);
+    if (songs.isEmpty) {
+      throw const AiToolArgError('Aucun morceau en cours.');
+    }
+    final dir = ms >= 0 ? '+' : '−';
+    if (songs.length == 1) {
+      return 'Décaler les paroles synchronisées de '
+          '${songLabel(songs.first)} de $dir${ms.abs()} ms dans le fichier.';
+    }
+    return 'Décaler les paroles synchronisées de ${songs.length} morceaux '
+        'de $dir${ms.abs()} ms dans le fichier.';
+  }
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final ms = _shift(args);
+    if (ms == 0) {
+      return AiToolResult.fail('Décalage nul : rien à faire.');
+    }
+    final songs = await _lyricsScope(ctx, args);
+    if (songs.isEmpty) {
+      return AiToolResult.fail('Aucun morceau en cours.');
+    }
+    final repository = ctx.ref.read(lyricsRepositoryProvider);
+    final delta = Duration(milliseconds: ms);
+    var shifted = 0;
+    var clean = 0;
+    var failed = 0;
+    for (final song in songs) {
+      LyricsPair pair;
+      try {
+        pair = await repository.readLyrics(song.filePath);
+      } catch (_) {
+        failed++;
+        continue;
+      }
+      final synced = pair.synced;
+      if (synced == null || synced.isEmpty) {
+        clean++;
+        continue;
+      }
+      final moved = SyncedLyrics([
+        for (final line in synced.lines)
+          if (line.timestamp == null)
+            line
+          else
+            line.copyWith(
+              timestamp: (line.timestamp! + delta).isNegative
+                  ? Duration.zero
+                  : line.timestamp! + delta,
+            ),
+      ]);
+      final ok = await _writeLyricsUndoable(
+        ctx.ref,
+        song,
+        synced: moved,
+        unsynced: pair.unsynced,
+      );
+      if (ok) {
+        shifted++;
+      } else {
+        failed++;
+      }
+    }
+    ctx.ref.invalidate(currentLyricsProvider);
+    final dir = ms >= 0 ? '+' : '−';
+    final parts = <String>[
+      _plural(shifted, 'morceau décalé', 'morceaux décalés'),
+    ];
+    if (clean > 0) parts.add('$clean sans paroles synchronisées');
+    if (failed > 0) parts.add('$failed échec(s)');
+    return AiToolResult.ok(
+        'Timestamps décalés de $dir${ms.abs()} ms : ${parts.join(', ')}.');
+  }
+}
+
+/// Corrige le texte d'une ligne précise des paroles synchronisées.
+///
+/// La ligne est désignée par son numéro (1 = première ligne). Écriture avec
+/// sauvegarde : annulable dans Paramètres › Historique.
+class FixLyricLineTool extends AiTool {
+  const FixLyricLineTool();
+
+  @override
+  String get name => 'fix_lyric_line';
+
+  @override
+  String get description =>
+      'Corrige le texte d’une ligne précise des paroles synchronisées du '
+      'morceau en cours (line : numéro de ligne, 1 = première). Le timestamp '
+      'est conservé. Écriture avec sauvegarde, annulable dans '
+      'Paramètres › Historique.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+        'type': 'object',
+        'properties': {
+          'line': 'integer, requis — numéro de ligne (1 = première)',
+          'text': 'string, requis — nouveau texte de la ligne',
+        },
+      };
+
+  @override
+  bool get requiresConfirmation => true;
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final song = ctx.ref.read(audioPlayerServiceProvider).currentSong;
+    if (song == null) {
+      throw const AiToolArgError('Aucun morceau en cours.');
+    }
+    final index = reqInt(args, 'line') - 1;
+    final text = reqString(args, 'text');
+    final pair =
+        await ctx.ref.read(lyricsRepositoryProvider).readLyrics(song.filePath);
+    final synced = pair.synced;
+    if (synced == null || index < 0 || index >= synced.lines.length) {
+      throw AiToolArgError(
+        'Ligne ${index + 1} inexistante '
+        '(${synced?.lines.length ?? 0} lignes synchronisées).',
+      );
+    }
+    return 'Corriger la ligne ${index + 1} de ${songLabel(song)} :\n'
+        '« ${synced.lines[index].text} » → « $text »';
+  }
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final song = ctx.ref.read(audioPlayerServiceProvider).currentSong;
+    if (song == null) {
+      return AiToolResult.fail('Aucun morceau en cours.');
+    }
+    final index = reqInt(args, 'line') - 1;
+    final text = reqString(args, 'text');
+    final repository = ctx.ref.read(lyricsRepositoryProvider);
+    LyricsPair pair;
+    try {
+      pair = await repository.readLyrics(song.filePath);
+    } catch (_) {
+      return AiToolResult.fail(
+          'Lecture impossible pour ${songLabel(song)}.');
+    }
+    final synced = pair.synced;
+    if (synced == null || index < 0 || index >= synced.lines.length) {
+      return AiToolResult.fail(
+        'Ligne ${index + 1} inexistante '
+        '(${synced?.lines.length ?? 0} lignes synchronisées).',
+      );
+    }
+    final lines = [...synced.lines];
+    lines[index] = lines[index].copyWith(text: text);
+    final ok = await _writeLyricsUndoable(
+      ctx.ref,
+      song,
+      synced: SyncedLyrics(lines),
+      unsynced: pair.unsynced,
+    );
+    ctx.ref.invalidate(currentLyricsProvider);
+    return ok
+        ? AiToolResult.ok('Ligne ${index + 1} corrigée pour ${songLabel(song)}.')
+        : AiToolResult.fail('Écriture impossible pour ${songLabel(song)}.');
+  }
+}
+
+/// Supprime les paroles d'un morceau ou de tout un lot.
+///
+/// Morceau en cours par défaut ; scope='all' pour tous les morceaux qui ont
+/// des paroles. Écriture avec sauvegarde : annulable dans
+/// Paramètres › Historique.
+class RemoveLyricsTool extends AiTool {
+  const RemoveLyricsTool();
+
+  @override
+  String get name => 'remove_lyrics';
+
+  @override
+  String get description =>
+      'Supprime les paroles (synchronisées et simples) du morceau en cours, '
+      'ou de tous les morceaux qui en ont avec scope="all". Écriture avec '
+      'sauvegarde, annulable dans Paramètres › Historique.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+        'type': 'object',
+        'properties': {
+          'scope':
+              'string, optionnel — "current" (défaut) ou "all" pour tous les morceaux avec paroles',
+        },
+      };
+
+  @override
+  bool get requiresConfirmation => true;
+
+  Future<List<Song>> _targets(AiToolContext ctx, Map<String, Object?> args) async {
+    if ((optString(args, 'scope') ?? 'current') == 'all') {
+      final byStatus = ctx.ref.read(songsByStatusProvider).valueOrNull;
+      return [
+        ...(byStatus?[LyricsStatus.synced] ?? const <Song>[]),
+        ...(byStatus?[LyricsStatus.plain] ?? const <Song>[]),
+      ];
+    }
+    final song = ctx.ref.read(audioPlayerServiceProvider).currentSong;
+    return song == null ? const [] : [song];
+  }
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final songs = await _targets(ctx, args);
+    if (songs.isEmpty) {
+      throw const AiToolArgError('Aucun morceau en cours.');
+    }
+    if (songs.length == 1) {
+      return 'Supprimer les paroles de ${songLabel(songs.first)}.';
+    }
+    return 'Supprimer les paroles de ${songs.length} morceaux.';
+  }
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final songs = await _targets(ctx, args);
+    if (songs.isEmpty) {
+      return AiToolResult.fail('Aucun morceau en cours.');
+    }
+    final repository = ctx.ref.read(lyricsRepositoryProvider);
+    var removed = 0;
+    var clean = 0;
+    var failed = 0;
+    for (final song in songs) {
+      LyricsPair pair;
+      try {
+        pair = await repository.readLyrics(song.filePath);
+      } catch (_) {
+        failed++;
+        continue;
+      }
+      final hasAny = (pair.synced?.isNotEmpty ?? false) ||
+          (pair.unsynced?.isNotEmpty ?? false);
+      if (!hasAny) {
+        clean++;
+        continue;
+      }
+      final ok = await _writeLyricsUndoable(ctx.ref, song);
+      if (ok) {
+        removed++;
+      } else {
+        failed++;
+      }
+    }
+    ctx.ref.invalidate(currentLyricsProvider);
+    final parts = <String>[
+      _plural(removed, 'paroles supprimées', 'paroles supprimées'),
+    ];
+    if (clean > 0) parts.add('$clean déjà sans paroles');
+    if (failed > 0) parts.add('$failed échec(s)');
+    return AiToolResult.ok('Paroles supprimées : ${parts.join(', ')}.');
   }
 }
