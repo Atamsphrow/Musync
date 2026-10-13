@@ -23,18 +23,29 @@ const _expectedTools = [
   'play_artist_shuffled',
   'library_stats',
   'find_duplicates',
+  'delete_duplicates',
   'create_named_queue',
   'fetch_lyrics',
   'prepare_lyrics_for_sync',
   'adjust_lyrics_offset',
   'batch_fetch_lyrics',
+  'check_current_song',
+  'trim_empty_last_lyric_line',
+  'clean_lyrics',
+  'shift_lyrics_timestamps',
+  'fix_lyric_line',
+  'remove_lyrics',
   'sleep_timer',
   'schedule_action',
   'set_appearance',
+  'toggle_lyrics_source',
   'app_help',
   'edit_tags',
   'delete_file',
   'fix_tags_from_filename',
+  'batch_rename_files',
+  'change_cover',
+  'move_songs',
   'exclude_folder',
   'include_folder',
   'list_excluded_folders',
@@ -57,6 +68,15 @@ const _confirmingTools = {
   'delete_file',
   'fix_tags_from_filename',
   'batch_fetch_lyrics',
+  'trim_empty_last_lyric_line',
+  'clean_lyrics',
+  'shift_lyrics_timestamps',
+  'fix_lyric_line',
+  'remove_lyrics',
+  'batch_rename_files',
+  'change_cover',
+  'move_songs',
+  'delete_duplicates',
   'exclude_folder',
   'exclude_song',
 };
@@ -183,6 +203,42 @@ void main() {
         () => optMap({'a': 'x'}, 'a'),
         throwsA(isA<AiToolArgError>()),
       );
+    });
+  });
+
+  group('nouveaux outils de modification', () {
+    test('check_current_song : action décrite sans lecture', () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final ctx = _ctx(container.read(_refProbe));
+      final tool = buildAiToolRegistry()['check_current_song']!;
+      expect(await tool.describeAction(ctx, {}), contains('Vérifier'));
+      expect(tool.requiresConfirmation, isFalse);
+    });
+
+    test('toggle_lyrics_source : pas de confirmation, schéma complet', () {
+      final tool = buildAiToolRegistry()['toggle_lyrics_source']!;
+      expect(tool.requiresConfirmation, isFalse);
+      final props =
+          tool.parametersSchema['properties'] as Map<String, Object?>;
+      expect(props.keys, containsAll(['source', 'enabled']));
+    });
+
+    test('les outils d’écriture paroles exigent une confirmation', () {
+      final registry = buildAiToolRegistry();
+      for (final name in [
+        'trim_empty_last_lyric_line',
+        'clean_lyrics',
+        'shift_lyrics_timestamps',
+        'fix_lyric_line',
+        'remove_lyrics',
+        'batch_rename_files',
+        'change_cover',
+        'move_songs',
+        'delete_duplicates',
+      ]) {
+        expect(registry[name]!.requiresConfirmation, isTrue, reason: name);
+      }
     });
   });
 
