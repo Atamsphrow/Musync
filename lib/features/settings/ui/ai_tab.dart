@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:musync/features/lyrics/data/ai_filename_reader.dart';
 import 'package:musync/features/ai_assistant/data/automation.dart';
+import 'package:musync/features/ai_assistant/data/scheduler_bridge.dart';
 import 'package:musync/features/ai_assistant/providers/automation_provider.dart';
 import 'package:musync/features/settings/data/ai_provider_config.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
@@ -667,14 +668,52 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
 /// La création se fait en langage naturel depuis la recherche (« !tous les
 /// jours à 22h, minuteur 30 min ») — pas de formulaire ici, l'utilisateur
 /// déteste le fouillis.
-class _AutomationsSection extends ConsumerWidget {
+/// Automatisations planifiées + déclencheur écouteurs.
+///
+/// Affiche un bandeau quand les alarmes exactes sont refusées (Android 12+) :
+/// sans « Alarmes et rappels », les automatisations sont enregistrées mais ne
+/// se déclencheront jamais — c'est exactement ce qui est arrivé le 2026-10-14.
+/// Le bandeau se rafraîchit au retour des réglages système.
+class _AutomationsSection extends ConsumerStatefulWidget {
   const _AutomationsSection();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_AutomationsSection> createState() =>
+      _AutomationsSectionState();
+}
+
+class _AutomationsSectionState extends ConsumerState<_AutomationsSection>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Retour de l'écran système « Alarmes et rappels » : revérifier, puis
+    // réarmer (le notifier resynchronise le natif à chaque _commit, et le
+    // runner au démarrage ; ici on ne fait que mettre l'état à jour).
+    if (state == AppLifecycleState.resumed) {
+      SchedulerBridge.canScheduleExactAlarms().then((ok) {
+        if (mounted) ref.read(exactAlarmGrantedProvider.notifier).state = ok;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
     final automationsAsync = ref.watch(automationsProvider);
+    final exactAlarm = ref.watch(exactAlarmGrantedProvider);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -686,6 +725,11 @@ class _AutomationsSection extends ConsumerWidget {
             style: textTheme.titleSmall?.copyWith(color: scheme.primary),
           ),
         ),
+        if (exactAlarm == false)
+          _ExactAlarmBanner(
+            key: const ValueKey('exact-alarm-banner'),
+            hasAutomations: automationsAsync.valueOrNull?.hasAny ?? false,
+          ),
         automationsAsync.when(
           loading: () => const Padding(
             padding: EdgeInsets.all(16),
@@ -726,6 +770,52 @@ class _AutomationsSection extends ConsumerWidget {
           },
         ),
       ],
+    );
+  }
+}
+
+/// Bandeau « Alarmes et rappels » refusées : sans elle, les alarmes exactes
+/// ne s'arment pas et les automatisations ne se déclenchent jamais.
+class _ExactAlarmBanner extends StatelessWidget {
+  final bool hasAutomations;
+
+  const _ExactAlarmBanner({super.key, required this.hasAutomations});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      child: Card(
+        color: scheme.errorContainer,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+          child: Row(
+            children: [
+              Icon(Icons.alarm_off_outlined, color: scheme.onErrorContainer),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  hasAutomations
+                      ? '« Alarmes et rappels » est désactivé : tes '
+                        'automatisations sont enregistrées mais ne se '
+                        'déclencheront pas.'
+                      : '« Alarmes et rappels » est désactivé : les '
+                        'automatisations planifiées ne se déclencheront pas.',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: scheme.onErrorContainer,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: SchedulerBridge.openExactAlarmSettings,
+                child: const Text('Autoriser'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
