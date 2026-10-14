@@ -28,21 +28,6 @@ class AiTab extends ConsumerWidget {
         data: (settings) => ListView(
           padding: const EdgeInsets.only(bottom: 88),
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text(
-                'Sur l\'écran de recherche, « Deviner depuis le nom du '
-                'fichier » lit d\'abord le nom lui-même, sans réseau. Un modèle '
-                'configuré ici prend le relais sur les noms qu\'il n\'arrive '
-                'pas à trancher — un titre placé avant l\'artiste, par exemple.'
-                '\n\nSeul le nom du fichier est envoyé. Jamais l\'audio, jamais '
-                'les paroles.',
-                style: textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-
             // iOS : pas d'alarmes exactes ni de déclencheur écouteurs.
             if (!Platform.isIOS) const _AutomationsSection(),
 
@@ -60,9 +45,7 @@ class AiTab extends ConsumerWidget {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                 child: Text(
-                  'Aucun modèle. Sans modèle, le bouton se contente de '
-                  'l\'analyse du nom de fichier, qui suffit dans la plupart '
-                  'des cas.',
+                  'Aucun modèle.',
                   style: textTheme.bodySmall?.copyWith(
                     color: scheme.onSurfaceVariant,
                   ),
@@ -121,11 +104,9 @@ class _InstructionCardState extends ConsumerState<_InstructionCard> {
           ListTile(
             leading: const Icon(Icons.assignment_outlined),
             title: const Text('Instruction donnée au modèle'),
-            subtitle: Text(
-              _open
-                  ? 'Enregistrée en quittant le champ'
-                  : 'Ce qu\'on lui demande de faire, et comment répondre',
-            ),
+            subtitle: _open
+                ? const Text('Enregistrée en quittant le champ')
+                : null,
             trailing: Icon(_open ? Icons.expand_less : Icons.expand_more),
             onTap: () => setState(() => _open = !_open),
           ),
@@ -144,6 +125,9 @@ class _InstructionCardState extends ConsumerState<_InstructionCard> {
                 },
                 child: TextField(
                   controller: _controller,
+                  // Le curseur ne reste pas affiché une fois le clavier fermé.
+                  onTapOutside: (_) =>
+                      FocusManager.instance.primaryFocus?.unfocus(),
                   maxLines: null,
                   minLines: 6,
                   style: Theme.of(context).textTheme.bodySmall,
@@ -736,17 +720,6 @@ class _AutomationsSection extends ConsumerWidget {
                   _ScheduledActionTile(
                     action: action,
                     key: ValueKey(action.id),
-                  ),
-                if (actions.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                    child: Text(
-                      'L’icône de réveil reste visible en barre de statut '
-                      'tant qu’une action est planifiée.',
-                      style: textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
                   ),
               ],
             );
