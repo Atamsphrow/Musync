@@ -70,20 +70,7 @@ class BackupTab extends ConsumerWidget {
           Expanded(
             child: backups.isEmpty
                 ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(32),
-                      child: Text(
-                        'Avant chaque écriture, Musync met de côté le tag '
-                        'précédent du morceau — les paroles, mais aussi la '
-                        'pochette et tout le reste. Il apparaîtra ici, et '
-                        'pourra être rétabli.\n\n'
-                        'Seul le tag est conservé, jamais l\'audio.',
-                        textAlign: TextAlign.center,
-                        style: textTheme.bodyMedium?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
+                    child: const SizedBox.shrink(),
                   )
                 : ListView.separated(
                     itemCount: backups.length,
