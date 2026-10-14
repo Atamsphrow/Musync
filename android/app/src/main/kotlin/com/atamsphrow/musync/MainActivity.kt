@@ -15,6 +15,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -144,8 +145,11 @@ class MainActivity : AudioServiceActivity() {
                         schedulerPrefs().edit()
                             .putString("label_$id", call.argument<String>("label") ?: id)
                             .apply()
-                        armAlarm(id, trigger, daily)
-                        result.success(null)
+                        if (armAlarm(id, trigger, daily)) result.success(null)
+                        else result.error(
+                            "no-exact-alarm",
+                            "SCHEDULE_EXACT_ALARM non accordée", null,
+                        )
                     }
                 }
                 "cancelAlarm" -> {
@@ -170,6 +174,7 @@ class MainActivity : AudioServiceActivity() {
                         val id = key.removePrefix("trigger_")
                         if (id !in wanted) disarmAlarm(id)
                     }
+                    var allArmed = true
                     for (alarm in alarms) {
                         val id = alarm["id"] as? String ?: continue
                         val trigger =
@@ -179,8 +184,46 @@ class MainActivity : AudioServiceActivity() {
                         prefs.edit()
                             .putString("label_$id", alarm["label"] as? String ?: id)
                             .apply()
-                        armAlarm(id, trigger, daily)
+                        if (!armAlarm(id, trigger, daily)) allArmed = false
                     }
+                    if (allArmed) result.success(null)
+                    else result.error(
+                        "no-exact-alarm",
+                        "SCHEDULE_EXACT_ALARM non accordée", null,
+                    )
+                }
+                "canScheduleExactAlarms" -> {
+                    val alarmManager =
+                        getSystemService(ALARM_SERVICE) as AlarmManager
+                    result.success(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            alarmManager.canScheduleExactAlarms()
+                        } else {
+                            true
+                        },
+                    )
+                }
+                "openExactAlarmSettings" -> {
+                    // Écran système « Alarmes et rappels » pour Musync. Sur les
+                    // ROMs qui n'ont pas cet écran, repli sur la fiche app.
+                    val grantedAction = Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
+                    val intent = try {
+                        Intent(grantedAction).apply {
+                            data = Uri.parse("package:$packageName")
+                        }.takeIf {
+                            it.resolveActivity(packageManager) != null
+                        } ?: Intent(
+                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        ).apply {
+                            data = Uri.parse("package:$packageName")
+                        }
+                    } catch (_: Exception) {
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.parse("package:$packageName")
+                        }
+                    }
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
                     result.success(null)
                 }
                 "takeScheduledAction" -> {
@@ -624,8 +667,7 @@ class MainActivity : AudioServiceActivity() {
     /// Alarmes exactes des automatisations, via `AlarmManager.setAlarmClock`.
     ///
     /// Pourquoi setAlarmClock et pas setExactAndAllowWhileIdle (documenté aussi
-    /// côté Dart dans `scheduler_bridge.dart`) : exempté de SCHEDULE_EXACT_ALARM
-    /// (zéro permission à demander, zéro écran guide), ponctuel même en Doze,
+    /// côté Dart dans `scheduler_bridge.dart`) : ponctuel même en Doze,
     /// et le PendingIntent « activity » est le motif canonique des réveils —
     /// le système laisse ouvrir l'app depuis l'arrière-plan. Coût assumé :
     /// l'icône de réveil reste visible tant qu'une automatisation est armée.
@@ -654,7 +696,10 @@ class MainActivity : AudioServiceActivity() {
             putExtra(EXTRA_SCHEDULED_ACTION_ID, id)
         }
 
-    private fun armAlarm(id: String, triggerAtMillis: Long, daily: Boolean) {
+    /// Arme l'alarme [id]. Rend false (sans lever) quand
+    /// SCHEDULE_EXACT_ALARM manque : depuis Android 12, setAlarmClock la
+    /// refuse malgré le javadoc — constaté sur appareil le 2026-10-14.
+    private fun armAlarm(id: String, triggerAtMillis: Long, daily: Boolean): Boolean {
         val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
         schedulerPrefs().edit()
             .putLong("trigger_$id", triggerAtMillis)
@@ -669,9 +714,14 @@ class MainActivity : AudioServiceActivity() {
         val showPending = showIntent?.let {
             PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE)
         }
-        alarmManager.setAlarmClock(
-            AlarmManager.AlarmClockInfo(triggerAtMillis, showPending), pending,
-        )
+        return try {
+            alarmManager.setAlarmClock(
+                AlarmManager.AlarmClockInfo(triggerAtMillis, showPending), pending,
+            )
+            true
+        } catch (_: SecurityException) {
+            false
+        }
     }
 
     private fun disarmAlarm(id: String) {
