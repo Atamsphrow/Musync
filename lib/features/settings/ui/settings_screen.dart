@@ -34,7 +34,8 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   /// The debug Journal tab stays hidden until revealed with a long-press on
-  /// the title — it is a troubleshooting tool, not a daily setting.
+  /// the title — it is a troubleshooting tool, not a daily setting. The
+  /// long-press also jumps straight to it.
   bool _showJournal = false;
 
   @override
@@ -46,9 +47,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       length: _showJournal ? 6 : 5,
       child: Scaffold(
         appBar: AppBar(
-          title: GestureDetector(
-            onLongPress: () => setState(() => _showJournal = !_showJournal),
-            child: const Text('Paramètres'),
+          title: Builder(
+            builder: (context) => GestureDetector(
+              // Reveals the Journal tab and goes straight to it.
+              onLongPress: () {
+                setState(() => _showJournal = true);
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (context.mounted) {
+                    DefaultTabController.of(context).animateTo(5);
+                  }
+                });
+              },
+              child: const Text('Paramètres'),
+            ),
           ),
           actions: [
             Builder(
