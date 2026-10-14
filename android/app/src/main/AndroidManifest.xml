@@ -46,6 +46,18 @@
          pas au reboot, BootReceiver les réarme depuis son miroir. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!--
+      Automatisations : alarmes à l'heure exacte.
+
+      Depuis Android 12 (targetSdk 31+), AlarmManager.setAlarmClock exige
+      SCHEDULE_EXACT_ALARM — malgré ce que le javadoc laisse entendre, le
+      service système le traite comme setExact. Sans elle, l'armement lève
+      SecurityException et l'automatisation ne se déclenche jamais (constaté
+      sur appareil le 2026-10-14). Demandée via
+      Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM quand elle manque.
+    -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
     <!-- Floating lyrics bubble: drawn over other apps, started only by the
          user from the now-playing screen. The service is the plugin's; on
          Android 14 a foreground service needs a declared type, and
