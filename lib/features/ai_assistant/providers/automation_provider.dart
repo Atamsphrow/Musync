@@ -19,6 +19,12 @@ final automationsProvider =
   AutomationsNotifier.new,
 );
 
+/// L'app peut-elle armer des alarmes exactes ? (Android 12+ : réglage
+/// « Alarmes et rappels ».) null = pas encore vérifié. Mis à jour à chaque
+/// synchronisation et au démarrage — l'onglet IA affiche un bandeau quand
+/// c'est false et que des automatisations sont programmées.
+final exactAlarmGrantedProvider = StateProvider<bool?>((ref) => null);
+
 class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
   @override
   Future<AutomationsDoc> build() => ref.read(automationStoreProvider).load();
@@ -45,7 +51,15 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
         stackTrace: stack,
       );
     }
-    await SchedulerBridge.syncAlarms(next.actions);
+    final armed = await SchedulerBridge.syncAlarms(next.actions);
+    // L'état ne peut qu'être confirmé ou infirmé par un armement réel : un
+    // refus (permission manquante) n'est pas une supposition.
+    if (armed) {
+      ref.read(exactAlarmGrantedProvider.notifier).state = true;
+    } else {
+      ref.read(exactAlarmGrantedProvider.notifier).state =
+          await SchedulerBridge.canScheduleExactAlarms();
+    }
   }
 
   /// « demain à 7h, joue ma file Nuit ». [at] en heure locale, dans le futur.
