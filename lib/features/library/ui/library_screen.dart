@@ -239,7 +239,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// on screen.
   Future<void> _locateCurrentSong() async {
     final song = ref.read(currentSongProvider);
-    if (song == null || !mounted) return;
+    if (song == null || !mounted) {
+      DebugLog.instance.info('Appui long', 'abandon : pas de morceau en cours');
+      return;
+    }
+    DebugLog.instance.info('Appui long', 'départ : ${song.filePath}');
 
     if (_chatMode) _exitChatMode();
     if (ref.read(librarySearchProvider).isNotEmpty) {
@@ -251,19 +255,32 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     final status =
         await ref.read(lyricsStatusScannerProvider).statusOf(song.filePath);
     if (!mounted) return;
+    DebugLog.instance.info('Appui long', 'statut=$status');
     _tabController.animateTo(LyricsStatus.values.indexOf(status));
     ref.read(libraryTabProvider.notifier).state = status;
 
     // The tab filter is bypassed while the status scan loads (the list then
     // shows every song): jumping against that list lands on the wrong row
     // once the real tab content arrives. Wait for settled statuses, bounded.
+    // NOTE: `valueOrNull != null` is NOT enough — an AsyncLoading with a
+    // previous value also returns non-null while the filter is bypassed.
+    var settled = false;
     final scanWatch = Stopwatch()..start();
-    while (scanWatch.elapsedMilliseconds < 3000) {
+    while (scanWatch.elapsedMilliseconds < 5000) {
       if (!mounted) return;
-      if (ref.read(songsByStatusProvider).valueOrNull != null) break;
+      if (ref.read(songsByStatusProvider) is AsyncData) {
+        settled = true;
+        break;
+      }
       await Future.delayed(const Duration(milliseconds: 100));
     }
+    DebugLog.instance.info(
+      'Appui long',
+      'statuts ${settled ? 'établis' : 'NON établis après 5 s'} '
+      '(${scanWatch.elapsedMilliseconds} ms)',
+    );
     if (!mounted) return;
+    if (!settled) return; // Pas de saut aveugle contre la liste non filtrée.
 
     await _jumpToVisibleSong(song.filePath);
   }
@@ -280,10 +297,16 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // Settle loop: the tab switch rebuilds the list asynchronously; wait
     // until the controller is attached and the extent covers the target row.
     // ~2 s max, then we stop trying rather than jump blind.
+    var iterations = 0;
+    var lastIndex = -1;
+    var lastCount = -1;
     for (var i = 0; i < 40; i++) {
+      iterations = i + 1;
       if (!mounted) return;
       final songs = ref.read(filteredSongsProvider).valueOrNull;
+      lastCount = songs?.length ?? -1;
       final index = songs?.indexWhere((s) => s.filePath == filePath) ?? -1;
+      lastIndex = index;
       if (index >= 0 &&
           _scrollController.hasClients &&
           _scrollController.position.maxScrollExtent >= index * rowH) {
@@ -293,7 +316,17 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       await Future.delayed(const Duration(milliseconds: 50));
     }
     final index = settledIndex;
-    if (index == null || !mounted) return;
+    DebugLog.instance.info(
+      'Appui long',
+      'settle: index=$index (dernier vu=$lastIndex), '
+      'lignes=$lastCount, itérations=$iterations, '
+      'hasClients=${_scrollController.hasClients}, '
+      'extent=${_scrollController.hasClients ? _scrollController.position.maxScrollExtent.toStringAsFixed(0) : 'n/a'}',
+    );
+    if (index == null || !mounted) {
+      DebugLog.instance.info('Appui long', 'abandon : liste jamais stabilisée');
+      return;
+    }
 
     setState(() => _locateIndex = index);
     // The content can swap under us while we waited (a scan landing, a
@@ -304,10 +337,15 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     if (useIndex != index && mounted) setState(() => _locateIndex = useIndex);
 
     if (_scrollController.hasClients) {
-      _scrollController.jumpTo(
-        (useIndex * rowH)
-            .clamp(0.0, _scrollController.position.maxScrollExtent),
+      final target = (useIndex * rowH)
+          .clamp(0.0, _scrollController.position.maxScrollExtent);
+      DebugLog.instance.info(
+        'Appui long',
+        'saut : index=$useIndex, cible=${target.toStringAsFixed(0)}',
       );
+      _scrollController.jumpTo(target);
+    } else {
+      DebugLog.instance.info('Appui long', 'abandon : contrôleur détaché');
     }
     // The outline has served its flash: drop it so later rebuilds don't
     // carry a stale one.
