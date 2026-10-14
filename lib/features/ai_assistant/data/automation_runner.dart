@@ -33,7 +33,9 @@ class AutomationRunner {
     // Le natif est un miroir : Dart réarme tout depuis le store, y compris
     // après un redémarrage où le BootReceiver a déjà fait au mieux.
     final doc = await _ref.read(automationsProvider.future);
-    await SchedulerBridge.syncAlarms(doc.actions);
+    final armed = await SchedulerBridge.syncAlarms(doc.actions);
+    _ref.read(exactAlarmGrantedProvider.notifier).state =
+        armed ? true : await SchedulerBridge.canScheduleExactAlarms();
 
     SchedulerBridge.setHandler((call) async {
       switch (call.method) {
