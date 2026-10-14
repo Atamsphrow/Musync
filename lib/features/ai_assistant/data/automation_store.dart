@@ -22,6 +22,9 @@ class AutomationsDoc {
 
   const AutomationsDoc({this.actions = const [], this.headphoneTrigger});
 
+  /// Au moins une automatisation (planifiée ou déclencheur écouteurs).
+  bool get hasAny => actions.isNotEmpty || headphoneTrigger != null;
+
   Map<String, Object?> toJson() => {
         'actions': [for (final a in actions) a.toJson()],
         if (headphoneTrigger != null) 'headphoneTrigger': headphoneTrigger!.toJson(),
