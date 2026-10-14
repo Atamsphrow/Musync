@@ -335,8 +335,6 @@ class _SourcesTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final sourcesAsync = ref.watch(lyricsSourcesProvider);
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
 
     return Scaffold(
       body: sourcesAsync.when(
@@ -345,18 +343,6 @@ class _SourcesTab extends ConsumerWidget {
         data: (sources) => ListView(
           padding: const EdgeInsets.only(bottom: 88),
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text(
-                'Musync interroge toutes les sources actives en parallèle et '
-                'classe les résultats par pertinence. Une source ajoutée ici '
-                'doit exposer l\'API de LRCLIB — c\'est le cas des instances '
-                'auto-hébergées et des miroirs.',
-                style: textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-            ),
             for (final source in sources)
               _SourceTile(source: source, key: ValueKey(source.id)),
           ],
@@ -604,8 +590,7 @@ class _DebugTabState extends State<_DebugTab> {
                       all.isEmpty
                           ? 'Rien d\'enregistré.'
                           : '${entries.length} entrée(s)'
-                                '${hidden > 0 ? ', $hidden masquée(s)' : ''}'
-                                ', la plus récente en haut.',
+                                '${hidden > 0 ? ', $hidden masquée(s)' : ''}',
                       style: textTheme.bodySmall?.copyWith(
                         color: scheme.onSurfaceVariant,
                       ),
