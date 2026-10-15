@@ -31,50 +31,117 @@ class MiniPlayer extends ConsumerWidget {
 
     if (currentSong == null) return const SizedBox.shrink();
 
-    return Material(
-      color: scheme.surfaceContainerHigh,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () {
-          final service = ref.read(audioPlayerServiceProvider);
-          Navigator.pushNamed(
-            context,
-            AppRoutes.player,
-            // Passing the live queue means reopening the player never restarts
-            // playback — it recognises the song as the one already playing.
-            arguments: SongRouteArgs(
-              song: currentSong,
-              queue: service.queue,
-              index: service.currentIndex,
-            ),
-          );
-        },
-        // Long-press: jump the library to the playing track — switch to its
-        // tab and scroll to its row. The library screen consumes the request.
-        // The log line goes first: it tells whether the gesture fired at all,
-        // and the haptic goes last so it can never swallow the request.
-        onLongPress: () {
-          DebugLog.instance.info('Appui long', 'geste détecté sur le mini-lecteur');
-          ref.read(locateCurrentSongProvider.notifier).state++;
-          HapticFeedback.lightImpact();
-        },
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const _MiniProgressBar(),
-            // The current synced line, right under the progress bar — the
-            // inline replacement for the floating bubble inside the app.
-            // Collapses when there is no active line, so the player keeps its
-            // compact height on lyrics-less songs.
-            const _MiniLyricLine(),
-            const SizedBox(
-              height: 62,
-              child: _MiniContentRow(),
-            ),
-          ],
+    // The long-press is detected by _LongPressListener below, outside the
+    // gesture arena: InkWell's own onLongPress never fired on device (the tap
+    // wins the arena, the 500 ms press does not survive it). The Listener
+    // sees raw pointer events and cannot lose the arena, so the gesture
+    // works anywhere on the mini player.
+    return _LongPressListener(
+      onLongPress: () {
+        DebugLog.instance.info('Appui long', 'geste détecté sur le mini-lecteur');
+        ref.read(locateCurrentSongProvider.notifier).state++;
+        HapticFeedback.lightImpact();
+      },
+      child: Material(
+        color: scheme.surfaceContainerHigh,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () {
+            final service = ref.read(audioPlayerServiceProvider);
+            Navigator.pushNamed(
+              context,
+              AppRoutes.player,
+              // Passing the live queue means reopening the player never restarts
+              // playback — it recognises the song as the one already playing.
+              arguments: SongRouteArgs(
+                song: currentSong,
+                queue: service.queue,
+                index: service.currentIndex,
+              ),
+            );
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const _MiniProgressBar(),
+              // The current synced line, right under the progress bar — the
+              // inline replacement for the floating bubble inside the app.
+              // Collapses when there is no active line, so the player keeps its
+              // compact height on lyrics-less songs.
+              const _MiniLyricLine(),
+              const SizedBox(
+                height: 62,
+                child: _MiniContentRow(),
+              ),
+            ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+/// Detects a long-press anywhere in its subtree without entering Flutter's
+/// gesture arena.
+///
+/// A [Listener] receives raw pointer events and can neither win nor lose
+/// against another recognizer, so unlike InkWell's onLongPress it cannot be
+/// starved by a competing gesture. A 500 ms timer with an 18 px move
+/// tolerance (kTouchSlop) implements the press; release, cancel or a slide
+/// aborts it. The child's own gestures (InkWell.onTap, icon buttons) keep
+/// working untouched.
+class _LongPressListener extends StatefulWidget {
+  const _LongPressListener({
+    required this.onLongPress,
+    required this.child,
+  });
+
+  final VoidCallback onLongPress;
+  final Widget child;
+
+  @override
+  State<_LongPressListener> createState() => _LongPressListenerState();
+}
+
+class _LongPressListenerState extends State<_LongPressListener> {
+  static const _delay = Duration(milliseconds: 500);
+  static const _slop = 18.0;
+
+  Timer? _timer;
+  Offset? _start;
+
+  void _cancel() {
+    _timer?.cancel();
+    _timer = null;
+    _start = null;
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (e) {
+        _timer?.cancel();
+        _start = e.position;
+        _timer = Timer(_delay, () {
+          _timer = null;
+          if (mounted) widget.onLongPress();
+        });
+      },
+      onPointerMove: (e) {
+        final s = _start;
+        if (s != null && (e.position - s).distance > _slop) _cancel();
+      },
+      onPointerUp: (_) => _cancel(),
+      onPointerCancel: (_) => _cancel(),
+      child: widget.child,
     );
   }
 }
