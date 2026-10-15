@@ -43,7 +43,8 @@ class PlayerScreen extends ConsumerStatefulWidget {
   ConsumerState<PlayerScreen> createState() => _PlayerScreenState();
 }
 
-class _PlayerScreenState extends ConsumerState<PlayerScreen> with RouteAware {
+class _PlayerScreenState extends ConsumerState<PlayerScreen>
+    with RouteAware, SingleTickerProviderStateMixin {
   bool _showLyrics = false;
 
   /// Whether this route is registered with the app's route observer.
@@ -92,18 +93,63 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with RouteAware {
   /// belong to whoever else might want them.
   static const _queueSwipeVelocity = 500.0;
 
+  /// The queue panel slides in from the right and follows the finger, like
+  /// Musicolet: 0 = hidden off-screen, 1 = fully open. Driven directly by
+  /// the drag, snapped open/closed on release.
+  late final AnimationController _queueController;
+
+  /// Horizontal distance dragged during the current gesture (px, + = right).
+  /// Decides on release whether this was a queue pull (right) or a
+  /// queues-sheet fling (left).
+  double _queueDragDx = 0;
+
+  bool get _queueOpen => _queueController.value > 0.5;
+
+  void _openQueue() => _queueController.animateTo(
+        1,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
+      );
+
+  void _closeQueue() => _queueController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
+      );
+
+  void _onQueueDragStart(DragStartDetails details) {
+    _queueController.stop();
+    _queueDragDx = 0;
+  }
+
+  void _onQueueDragUpdate(DragUpdateDetails details) {
+    final width = MediaQuery.sizeOf(context).width;
+    if (width <= 0) return;
+    _queueDragDx += details.delta.dx;
+    // Only rightward pulls open the panel; leftward drags are left for the
+    // queues sheet (handled on release).
+    if (_queueDragDx > 0 || _queueController.value > 0) {
+      _queueController.value =
+          (_queueController.value + details.delta.dx / width).clamp(0.0, 1.0);
+    }
+  }
+
   /// Glissement horizontal sur la zone pochette/paroles :
-  /// vers la droite la file d'attente en cours, vers la gauche les files
-  /// d'attente. Mêmes destinations que le menu ⋮.
+  /// vers la droite la file d'attente en cours (suit le doigt), vers la
+  /// gauche les files d'attente. Mêmes destinations que le menu ⋮.
   void _onHorizontalSwipe(DragEndDetails details) {
     final velocity = details.primaryVelocity ?? 0;
-    if (velocity >= _queueSwipeVelocity) {
-      Navigator.of(
-        context,
-      ).push(MaterialPageRoute(builder: (_) => const QueueScreen()));
+    if (_queueDragDx > 0 || _queueController.value > 0) {
+      // A rightward pull (or a release mid-panel): snap the panel.
+      if (velocity >= _queueSwipeVelocity || _queueController.value > 0.4) {
+        _openQueue();
+      } else {
+        _closeQueue();
+      }
     } else if (velocity <= -_queueSwipeVelocity) {
       showQueuesSheet(context);
     }
+    _queueDragDx = 0;
   }
 
   /// Distance past which letting go dismisses, however slowly the finger moved.
@@ -135,7 +181,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with RouteAware {
   bool _started = false;
 
   @override
+  void initState() {
+    super.initState();
+    _queueController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+      value: 0,
+    );
+  }
+
+  @override
   void dispose() {
+    _queueController.dispose();
     if (_routeSubscribed) {
       _publishPlayerVisible(false);
       appRouteObserver.unsubscribe(this);
@@ -232,30 +289,42 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with RouteAware {
         ref.watch(currentLyricsProvider).valueOrNull?.synced != null;
     final tapOnLyrics = hasSyncedLyrics ? null : _toggleLyrics;
 
-    return Scaffold(
-      backgroundColor: scheme.surface,
-      body: Transform.translate(
-        offset: Offset(0, _dragOffset),
-        child: SafeArea(
-          child: Column(
-            children: [
-              GestureDetector(
-                onVerticalDragUpdate: _onDragUpdate,
-                onVerticalDragEnd: _onDragEnd,
-                child: _TopBar(
-                  song: song,
-                  showLyrics: _showLyrics,
-                  onToggleLyrics: _toggleLyrics,
-                ),
-              ),
-              Expanded(
-                child: GestureDetector(
-                  // Opaque: the whole pane answers, not only the pixels the
-                  // child fills. The inner panes keep their own gestures —
-                  // a vertical scroll still scrolls, a tap still taps; only
-                  // a horizontal fling reaches here.
-                  behavior: HitTestBehavior.opaque,
-                  onHorizontalDragEnd: _onHorizontalSwipe,
+    return PopScope(
+      // Back closes the queue panel instead of leaving the player.
+      canPop: !_queueOpen,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _queueOpen) _closeQueue();
+      },
+      child: Scaffold(
+        backgroundColor: scheme.surface,
+        body: Stack(
+          children: [
+            Transform.translate(
+              offset: Offset(0, _dragOffset),
+              child: SafeArea(
+                child: Column(
+                  children: [
+                    GestureDetector(
+                      onVerticalDragUpdate: _onDragUpdate,
+                      onVerticalDragEnd: _onDragEnd,
+                      child: _TopBar(
+                        song: song,
+                        showLyrics: _showLyrics,
+                        onToggleLyrics: _toggleLyrics,
+                      ),
+                    ),
+                    Expanded(
+                      child: GestureDetector(
+                        // Opaque: the whole pane answers, not only the pixels the
+                        // child fills. The inner panes keep their own gestures —
+                        // a vertical scroll still scrolls, a tap still taps; only
+                        // horizontal drags reach here: right pulls the queue
+                        // panel in (it follows the finger), left flings open
+                        // the queues sheet.
+                        behavior: HitTestBehavior.opaque,
+                        onHorizontalDragStart: _onQueueDragStart,
+                        onHorizontalDragUpdate: _onQueueDragUpdate,
+                        onHorizontalDragEnd: _onHorizontalSwipe,
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 300),
                     child: _showLyrics
@@ -294,6 +363,94 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with RouteAware {
               const SizedBox(height: 8),
               _LyricsActions(song: song),
               const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      ),
+            // The queue slides in from the right and follows the finger.
+            _QueueSlidePanel(
+              controller: _queueController,
+              onClose: _closeQueue,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The queue as a swipe-in panel: follows the finger while dragging, snaps
+/// open/closed on release. Same content as the [QueueScreen] route.
+class _QueueSlidePanel extends StatelessWidget {
+  final AnimationController controller;
+  final VoidCallback onClose;
+
+  const _QueueSlidePanel({
+    required this.controller,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, child) {
+        // Fully off-screen right when closed; translate only while needed.
+        final width = MediaQuery.sizeOf(context).width;
+        return Transform.translate(
+          offset: Offset(width * (1 - controller.value), 0),
+          child: child,
+        );
+      },
+      child: Material(
+        color: scheme.surface,
+        child: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              GestureDetector(
+                // Drag the header left to close, finger-following.
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragUpdate: (details) {
+                  final width = MediaQuery.sizeOf(context).width;
+                  if (width <= 0) return;
+                  controller.value =
+                      (controller.value + details.delta.dx / width)
+                          .clamp(0.0, 1.0);
+                },
+                onHorizontalDragEnd: (details) {
+                  final velocity = details.primaryVelocity ?? 0;
+                  if (velocity <= -500 || controller.value < 0.6) {
+                    onClose();
+                  } else {
+                    controller.animateTo(
+                      1,
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeOutCubic,
+                    );
+                  }
+                },
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 8, 16, 8),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back),
+                        tooltip: 'Fermer',
+                        onPressed: onClose,
+                      ),
+                      Text(
+                        'File d\u2019attente',
+                        style: textTheme.titleLarge,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const Divider(height: 1),
+              const Expanded(child: QueueListBody()),
             ],
           ),
         ),
