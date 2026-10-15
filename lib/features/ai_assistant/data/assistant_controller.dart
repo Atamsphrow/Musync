@@ -11,9 +11,11 @@ import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/shared_http_client.dart';
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:musync/features/ai_assistant/data/ai_tool_registry.dart';
 import 'package:musync/features/ai_assistant/data/assistant_bridge.dart';
+import 'package:musync/features/ai_assistant/data/schedule_router.dart';
 import 'package:musync/features/lyrics/data/ai_filename_reader.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
 
@@ -204,32 +206,43 @@ class AssistantController {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return const AssistantFailed('Commande vide.');
 
-    final settings = await _ref.read(aiSettingsStoreProvider).load();
-    final provider = settings.active;
-    if (provider == null) {
-      return const AssistantFailed(
-        'Aucune clé IA configurée. Ajoutez-en une dans Paramètres › IA.',
-      );
-    }
-
-    final bridge =
-        AssistantBridge(client: _ref.read(sharedHttpClientProvider));
-    final system =
-        AssistantBridge.systemPrompt(_registry.describeForLlm());
+    // Routeur déterministe pré-modèle : « verbe de lecture + heure future »
+    // (ex. « lance la musique à 4h43 ») va directement à schedule_once, sans
+    // passer par le modèle — dont les descriptions attiraient ce motif vers
+    // cancel_scheduled_action. Le JSON produit passe par parsePlan/executePlan
+    // comme d'habitude. Pas besoin de clé IA pour ce chemin.
     final String raw;
-    try {
-      raw = await bridge.complete(
-        provider: provider,
-        system: system,
-        history: _history.messages,
-        userText: trimmed,
-      );
-    } on AiReaderException catch (e) {
-      return AssistantFailed(e.message);
-    } catch (_) {
-      return const AssistantFailed(
-        'Le modèle ne répond pas. Réessayez.',
-      );
+    final routed = routeScheduledPlay(trimmed);
+    if (routed != null) {
+      DebugLog.instance.info('Routage', 'planification directe : $trimmed');
+      raw = routed;
+    } else {
+      final settings = await _ref.read(aiSettingsStoreProvider).load();
+      final provider = settings.active;
+      if (provider == null) {
+        return const AssistantFailed(
+          'Aucune clé IA configurée. Ajoutez-en une dans Paramètres › IA.',
+        );
+      }
+
+      final bridge =
+          AssistantBridge(client: _ref.read(sharedHttpClientProvider));
+      final system =
+          AssistantBridge.systemPrompt(_registry.describeForLlm());
+      try {
+        raw = await bridge.complete(
+          provider: provider,
+          system: system,
+          history: _history.messages,
+          userText: trimmed,
+        );
+      } on AiReaderException catch (e) {
+        return AssistantFailed(e.message);
+      } catch (_) {
+        return const AssistantFailed(
+          'Le modèle ne répond pas. Réessayez.',
+        );
+      }
     }
     if (raw.trim().isEmpty) {
       return const AssistantFailed('Le modèle n’a rien répondu.');
