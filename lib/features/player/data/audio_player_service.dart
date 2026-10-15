@@ -50,6 +50,16 @@ class AudioPlayerService {
         // Track change (tap, next/prev, auto-advance, notification): the
         // restored launch needs this index, not just the song.
         _persistPlaybackState();
+      } else if (index != null) {
+        // Never silent: a dropped index means _queue and just_audio disagree,
+        // and the now-playing screen freezes on the old track while the audio
+        // moves on. Loud here so the Journal shows it.
+        DebugLog.instance.error(
+          'Player',
+          'index $index ignoré: file=${_queue.length} — '
+          'désync file/audio, l\u2019écran va rester figé sur '
+          '${_currentSong?.title ?? 'rien'}',
+        );
       }
     });
     // Periodic checkpoint of the position. Track changes alone persist too
@@ -356,20 +366,27 @@ class AudioPlayerService {
 
   Future<void> play() => _player.play();
 
+  /// Persists the current track and position right now, outside the 15s
+  /// periodic checkpoint (which only runs while playing). Used on pause and
+  /// when the app goes to the background: a swipe-away kill loses everything
+  /// after the last checkpoint otherwise.
+  Future<void> checkpointPosition() async {
+    final song = _currentSong;
+    if (song == null) return;
+    try {
+      await LastSongStore().save(song.filePath, _player.position);
+    } catch (_) {
+      // The checkpoint is best-effort; callers must never fail because of it.
+    }
+  }
+
   Future<void> pause() async {
     // Checkpoint: the app can be killed while paused, and the periodic save
     // only runs while playing. Awaited before pausing, so a kill during the
     // pause transition cannot lose the position — but a failing save must
     // never block the actual pause (e.g. headphones unplugged with a full
     // disk: the music still has to stop).
-    final song = _currentSong;
-    if (song != null) {
-      try {
-        await LastSongStore().save(song.filePath, _player.position);
-      } catch (_) {
-        // The checkpoint is best-effort; the pause below is not.
-      }
-    }
+    await checkpointPosition();
     await _player.pause();
   }
 
@@ -422,15 +439,18 @@ class AudioPlayerService {
     final match = queue[index];
     try {
       AudioBackendCheck.ensureIntercepted();
-      final previousQueue = _queue;
       _queue = List.unmodifiable(queue);
       await _warmArtwork(index);
       // A share (or any explicit play) may have claimed the player while the
       // library and the artwork were loading: the entry guard above is stale
       // by now. Re-check before the source goes in — the last setAudioSource
       // wins, and it must be the explicit choice, not the restoration.
+      //
+      // The queue is left alone on purpose: the concurrent playSong() already
+      // installed its own queue (and announced its track), so rolling back to
+      // the pre-restore queue would desync _queue from just_audio — the
+      // now-playing screen would then freeze on the next track change.
       if (_currentSong != null) {
-        _queue = previousQueue;
         DebugLog.instance.info(
           'Player',
           'restauration: annulée, lecture explicite entre-temps',
@@ -452,7 +472,10 @@ class AudioPlayerService {
         _ => LoopMode.off,
       };
       await _player.setLoopMode(repeat);
-      var target = saved.position;
+      // The saved position belongs to the saved track: when the queue fell
+      // back to a different track (saved file gone), seeking the new track
+      // to the old one's position would start it mid-way for no reason.
+      var target = match.filePath == saved.path ? saved.position : Duration.zero;
       if (target.isNegative) target = Duration.zero;
       final duration = _player.duration;
       if (duration != null && target >= duration) target = Duration.zero;
