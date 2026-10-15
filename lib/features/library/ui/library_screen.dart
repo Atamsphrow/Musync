@@ -392,7 +392,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     unawaited(_restoreLastPlayed());
 
     // Long-press on the mini player: jump to the playing track.
-    ref.listen<int>(locateCurrentSongProvider, (_, _) {
+    ref.listen<int>(locateCurrentSongProvider, (prev, _) {
+      DebugLog.instance.info(
+        'Appui long',
+        'écouteur déclenché (compteur $prev → ${prev + 1})',
+      );
       unawaited(_locateCurrentSong());
     });
 
