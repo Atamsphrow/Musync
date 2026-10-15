@@ -7,14 +7,35 @@ import 'package:musync/features/player/providers/player_provider.dart';
 /// The player's live queue: reorder by drag-and-drop, swipe a track away to
 /// remove it, tap one to play it. Opened from the now-playing screen (wired by
 /// the coordinator); this widget only owns its own content.
-class QueueScreen extends ConsumerStatefulWidget {
+class QueueScreen extends StatelessWidget {
   const QueueScreen({super.key});
 
   @override
-  ConsumerState<QueueScreen> createState() => _QueueScreenState();
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('File d\u2019attente'),
+      ),
+      backgroundColor: scheme.surface,
+      body: const SafeArea(
+        top: false,
+        child: QueueListBody(),
+      ),
+    );
+  }
 }
 
-class _QueueScreenState extends ConsumerState<QueueScreen> {
+/// The queue content itself, without the Scaffold: shared by the [QueueScreen]
+/// route and the now-playing screen's swipe-in panel.
+class QueueListBody extends ConsumerStatefulWidget {
+  const QueueListBody({super.key});
+
+  @override
+  ConsumerState<QueueListBody> createState() => _QueueListBodyState();
+}
+
+class _QueueListBodyState extends ConsumerState<QueueListBody> {
   /// F6 hook: mirrors the player's queue into the active named queue, so the
   /// named queue stays an exact snapshot after a reorder/remove/play-next.
   Future<void> _syncActiveQueue() async {
@@ -73,12 +94,8 @@ class _QueueScreenState extends ConsumerState<QueueScreen> {
     final queue = service.queue;
     final currentIndex = service.currentIndex;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('File d\u2019attente'),
-      ),
-      body: queue.isEmpty
-          ? Center(
+    return queue.isEmpty
+        ? Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -192,7 +209,6 @@ class _QueueScreenState extends ConsumerState<QueueScreen> {
                   ),
                 );
               },
-            ),
-    );
+            );
   }
 }
