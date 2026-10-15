@@ -226,7 +226,7 @@ class ListScheduledActionsTool extends AiTool {
   }
 }
 
-/// « annule le minuteur de 22h ».
+/// « annule le minuteur », « supprime l'alarme du matin ».
 class CancelScheduledActionTool extends AiTool {
   const CancelScheduledActionTool();
 
@@ -235,8 +235,14 @@ class CancelScheduledActionTool extends AiTool {
 
   @override
   String get description =>
-      'Annule une action planifiée. « cible » : son nom (ou un morceau du '
-      'nom, ex. "22h"). Sans argument, échec : lister d’abord avec '
+      'Annule (supprime) une action DÉJÀ planifiée. À utiliser uniquement si '
+      'l’utilisateur demande explicitement d’annuler, supprimer ou désactiver '
+      'un minuteur, une alarme ou une planification. « cible » : le nom de '
+      'l’action (ou un morceau de son nom). Exemples : « annule le minuteur », '
+      '« supprime l’alarme du matin », « désactive la planification de '
+      'musique ». Ne JAMAIS l’utiliser pour créer ou programmer une lecture : '
+      'une heure seule (« à 4h43 ») n’est pas une annulation, utiliser '
+      'schedule_once. Sans argument, échec : lister d’abord avec '
       'list_scheduled_actions.';
 
   @override
