@@ -32,34 +32,60 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class _SettingsScreenState extends State<SettingsScreen>
+    with TickerProviderStateMixin {
   /// The debug Journal tab stays hidden until revealed with a long-press on
   /// the title — it is a troubleshooting tool, not a daily setting. The
   /// long-press also jumps straight to it.
   bool _showJournal = false;
 
+  /// Owned controller instead of DefaultTabController: revealing the Journal
+  /// changes the tab count, and swapping a DefaultTabController via ValueKey
+  /// replaces the whole subtree — the captured context then belongs to the
+  /// old tree and animateTo() silently goes nowhere.
+  late TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 5, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  /// Reveals the Journal tab (first time) and jumps straight to it.
+  void _openJournal() {
+    // Already revealed: just go there, no rebuild needed.
+    if (_showJournal) {
+      _tabController.animateTo(5);
+      return;
+    }
+    final old = _tabController;
+    setState(() {
+      _showJournal = true;
+      // TabController.length is final: recreate, keeping the current tab.
+      _tabController =
+          TabController(length: 6, vsync: this, initialIndex: old.index);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // After the rebuild: the TabBar has detached from the old controller.
+      old.dispose();
+      if (mounted) _tabController.animateTo(5);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      // The key forces a fresh controller when the tab count changes;
-      // otherwise the old length would stick and misalign the indicator.
-      key: ValueKey(_showJournal),
-      length: _showJournal ? 6 : 5,
-      child: Scaffold(
+    return Scaffold(
         appBar: AppBar(
-          title: Builder(
-            builder: (context) => GestureDetector(
-              // Reveals the Journal tab and goes straight to it.
-              onLongPress: () {
-                setState(() => _showJournal = true);
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (context.mounted) {
-                    DefaultTabController.of(context).animateTo(5);
-                  }
-                });
-              },
-              child: const Text('Paramètres'),
-            ),
+          title: GestureDetector(
+            // Reveals the Journal tab and goes straight to it.
+            onLongPress: _openJournal,
+            child: const Text('Paramètres'),
           ),
           actions: [
             Builder(
@@ -85,6 +111,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
           bottom: TabBar(
+            controller: _tabController,
             // Scrollable: five labels do not fit side by side on a phone, and
             // squeezing them in would cost the icons.
             isScrollable: true,
@@ -113,6 +140,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
         body: TabBarView(
+          controller: _tabController,
           children: [
             const _SourcesTab(),
             const AppearanceTab(),
@@ -122,8 +150,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (_showJournal) const _DebugTab(),
           ],
         ),
-      ),
-    );
+      );
   }
 }
 
