@@ -539,7 +539,12 @@ class _TagEditorScreenState extends ConsumerState<TagEditorScreen> {
     _refreshDisplays();
     _syncBaseline();
     setState(() => _saving = false);
-    Navigator.maybePop(context);
+    // The baseline is synced, but PopScope's canPop was computed on the last
+    // build (still "has changes"): popping synchronously would show the
+    // "abandon changes?" dialog. Wait for the rebuild first.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.maybePop(context);
+    });
     // The editor is gone: toast on the app's messenger, Musicolet-style.
     appMessengerKey.currentState?.showOnly(
       const SnackBar(content: Text('Tags de la chanson mise à jour')),
