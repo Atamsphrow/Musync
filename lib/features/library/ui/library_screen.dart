@@ -404,6 +404,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      // Swipe-away kill: the 15s periodic save only runs while playing and
+      // pause() may never have been called — checkpoint now or the next
+      // launch restores a stale position.
+      unawaited(
+        ref.read(audioPlayerServiceProvider).checkpointPosition().catchError((
+          Object _,
+        ) {}),
+      );
+      return;
+    }
     if (state != AppLifecycleState.resumed) return;
     // Cheap when there is nothing waiting: the platform hands back an empty
     // list, and this returns immediately.
@@ -803,7 +815,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         AppRoutes.player,
         arguments: SongRouteArgs(
           song: songs.first,
-          queue: songs.skip(1).toList(),
+          // The whole list, first track included: playSong() resolves the
+          // target inside this queue, and a queue that excludes the first
+          // track silently skipped it (it played the second one instead).
+          queue: songs,
+          index: 0,
         ),
       );
       if (mounted) {
