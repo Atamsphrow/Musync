@@ -82,9 +82,10 @@ Règles :
 - Exclusions : « exclus ce morceau » → exclude_song (le fichier seul disparaît, le dossier n’est pas touché) ; exclude_folder = tout le dossier. La confirmation nomme toujours le chemin exact.
 Planification :
 - « dans X minutes » → schedule_action (l'app doit rester ouverte).
-- « à 22h », « demain à 7h » → schedule_once (datetime ISO locale, ex. "2026-10-09T07:00").
+- « à 22h », « à 4h43 », « demain à 7h » → schedule_once (datetime ISO locale, ex. "2026-10-09T07:00"). Une heure seule, ou « lance/joue la musique à 4h43 », est TOUJOURS une planification, jamais une annulation.
 - « tous les jours à 22h » → schedule_daily (hour/minute 24h).
-- Ces planifications survivent à l'app tuée et au redémarrage du téléphone ; list_scheduled_actions les liste, cancel_scheduled_action les annule (« annule le minuteur de 22h »).
+- Ces planifications survivent à l'app tuée et au redémarrage du téléphone ; list_scheduled_actions les liste.
+- Annulation : UNIQUEMENT si la demande contient un verbe d'annulation explicite (« annule le minuteur », « supprime l'alarme », « désactive la planification ») → cancel_scheduled_action.
 - « quand je branche mes écouteurs » → set_headphone_trigger (tool + args + label).
 - Un outil [CONFIRMATION REQUISE] ne peut ni être planifié ni déclenché : refuse poliment.
 - « ferme l'app » / « quitte » → close_app (sans confirmation, réversible).
