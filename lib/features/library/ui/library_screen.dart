@@ -391,15 +391,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // at the saved position — never on a manual refresh.
     unawaited(_restoreLastPlayed());
 
-    // Long-press on the mini player: jump to the playing track.
-    ref.listen<int>(locateCurrentSongProvider, (prev, next) {
-      DebugLog.instance.info(
-        'Appui long',
-        'écouteur déclenché (compteur $prev → $next)',
-      );
-      unawaited(_locateCurrentSong());
-    });
-
     // The scan needs the audio permission, so ask before anything tries to
     // read MediaStore. Post-frame because a permission dialog cannot be raised
     // while the first frame is still being built.
@@ -1022,7 +1013,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                 ),
               ),
             ),
-        bottomNavigationBar: const _DockedMiniPlayer(),
+        bottomNavigationBar: _DockedMiniPlayer(onLongPress: _locateCurrentSong),
       ),
     );
   }
@@ -1031,7 +1022,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 /// Slides the mini player in and out instead of making the list jump by 66 px
 /// the moment playback starts.
 class _DockedMiniPlayer extends ConsumerWidget {
-  const _DockedMiniPlayer();
+  const _DockedMiniPlayer({required this.onLongPress});
+
+  /// The library screen's locate-the-playing-track routine, handed straight
+  /// to the mini player — a direct callback, no provider round-trip.
+  final Future<void> Function() onLongPress;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1043,7 +1038,7 @@ class _DockedMiniPlayer extends ConsumerWidget {
       curve: Curves.easeOutCubic,
       alignment: Alignment.topCenter,
       child: hasSong
-          ? const SafeArea(child: MiniPlayer())
+          ? SafeArea(child: MiniPlayer(onLongPress: onLongPress))
           : const SizedBox.shrink(),
     );
   }
