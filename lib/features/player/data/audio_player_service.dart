@@ -571,18 +571,51 @@ class AudioPlayerService {
   /// identity, so no track-change is announced and the lyrics/bubble keep
   /// their state. Invalid indexes are a silent no-op — this is called from a
   /// drag gesture, never with a reason to crash.
-  Future<void> reorderQueue(int oldIndex, int newIndex) async {
+  /// Synchronous half of a queue reorder: validates and applies the new order
+  /// to the in-memory queue immediately, returning the validated indexes
+  /// (null when the reorder is a no-op).
+  ///
+  /// `ReorderableListView` animates the displaced rows from the very next
+  /// frame after `onReorderItem` fires, so the new order must be visible
+  /// synchronously — awaiting the just_audio mirror first is what made the
+  /// rows jump instead of sliding. The async mirror follows via
+  /// [reorderQueueApply].
+  (int, int)? reorderQueueSync(int oldIndex, int newIndex) {
     final source = _player.audioSource;
-    if (source is! ConcatenatingAudioSource) return;
+    if (source is! ConcatenatingAudioSource) return null;
     final length = _queue.length;
-    if (oldIndex < 0 || oldIndex >= length) return;
-    if (newIndex < 0 || newIndex >= length) return;
-    if (oldIndex == newIndex) return;
+    if (oldIndex < 0 || oldIndex >= length) return null;
+    if (newIndex < 0 || newIndex >= length) return null;
+    if (oldIndex == newIndex) return null;
     final updated = List<Song>.of(_queue);
     updated.insert(newIndex, updated.removeAt(oldIndex));
     _queue = List.unmodifiable(updated);
+    return (oldIndex, newIndex);
+  }
+
+  /// Async half of a queue reorder: mirrors the move in just_audio and
+  /// re-aligns the playing index. Safe to run in the background — the UI
+  /// already shows the new order.
+  Future<void> reorderQueueApply(int oldIndex, int newIndex) async {
+    final source = _player.audioSource;
+    if (source is! ConcatenatingAudioSource) return;
     await source.move(oldIndex, newIndex);
     await _reconcileCurrentIndex();
+  }
+
+  /// Reorders the queue: synchronous state update, then the player mirror.
+  ///
+  /// The playing track keeps playing: only its slot changes, never its
+  /// identity, so no track-change is announced and the lyrics/bubble keep
+  /// their state. Invalid indexes are a silent no-op — this is called from a
+  /// drag gesture, never with a reason to crash.
+  ///
+  /// Prefer the split pair ([reorderQueueSync] + [reorderQueueApply]) from a
+  /// drag callback, where the UI must reflect the move synchronously.
+  Future<void> reorderQueue(int oldIndex, int newIndex) async {
+    final moved = reorderQueueSync(oldIndex, newIndex);
+    if (moved == null) return;
+    await reorderQueueApply(moved.$1, moved.$2);
   }
 
   /// Removes the track at [index] from the playback queue.
