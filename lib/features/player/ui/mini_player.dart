@@ -35,32 +35,37 @@ class MiniPlayer extends ConsumerWidget {
     // gesture arena: InkWell's own onLongPress never fired on device (the tap
     // wins the arena, the 500 ms press does not survive it). The Listener
     // sees raw pointer events and cannot lose the arena, so the gesture
-    // works anywhere on the mini player.
+    // works anywhere on the mini player. The listener also swallows the tap
+    // the arena still delivers on release after a long-press, so a long-press
+    // never opens the player on top of the locate.
     return _LongPressListener(
       onLongPress: () {
         DebugLog.instance.info('Appui long', 'geste détecté sur le mini-lecteur');
         ref.read(locateCurrentSongProvider.notifier).state++;
         HapticFeedback.lightImpact();
       },
+      onTap: () {
+        final service = ref.read(audioPlayerServiceProvider);
+        Navigator.pushNamed(
+          context,
+          AppRoutes.player,
+          // Passing the live queue means reopening the player never restarts
+          // playback — it recognises the song as the one already playing.
+          arguments: SongRouteArgs(
+            song: currentSong,
+            queue: service.queue,
+            index: service.currentIndex,
+          ),
+        );
+      },
       child: Material(
         color: scheme.surfaceContainerHigh,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
-          onTap: () {
-            final service = ref.read(audioPlayerServiceProvider);
-            Navigator.pushNamed(
-              context,
-              AppRoutes.player,
-              // Passing the live queue means reopening the player never restarts
-              // playback — it recognises the song as the one already playing.
-              arguments: SongRouteArgs(
-                song: currentSong,
-                queue: service.queue,
-                index: service.currentIndex,
-              ),
-            );
-          },
+          // Ripple only: the real tap is handled (and possibly swallowed
+          // after a long-press) by _LongPressListener above.
+          onTap: () {},
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -83,21 +88,27 @@ class MiniPlayer extends ConsumerWidget {
 }
 
 /// Detects a long-press anywhere in its subtree without entering Flutter's
-/// gesture arena.
+/// gesture arena, and swallows the tap that follows one.
 ///
 /// A [Listener] receives raw pointer events and can neither win nor lose
 /// against another recognizer, so unlike InkWell's onLongPress it cannot be
 /// starved by a competing gesture. A 500 ms timer with an 18 px move
 /// tolerance (kTouchSlop) implements the press; release, cancel or a slide
-/// aborts it. The child's own gestures (InkWell.onTap, icon buttons) keep
-/// working untouched.
+/// aborts it.
+///
+/// The raw listener cannot stop the tap the arena still delivers on release
+/// after the press, so the wrapper [GestureDetector] swallows that tap: a
+/// long-press never triggers [onTap] as well. The child's own gestures
+/// (icon buttons) keep working untouched.
 class _LongPressListener extends StatefulWidget {
   const _LongPressListener({
     required this.onLongPress,
+    required this.onTap,
     required this.child,
   });
 
   final VoidCallback onLongPress;
+  final VoidCallback onTap;
   final Widget child;
 
   @override
@@ -110,6 +121,7 @@ class _LongPressListenerState extends State<_LongPressListener> {
 
   Timer? _timer;
   Offset? _start;
+  bool _longPressFired = false;
 
   void _cancel() {
     _timer?.cancel();
@@ -129,19 +141,40 @@ class _LongPressListenerState extends State<_LongPressListener> {
       behavior: HitTestBehavior.translucent,
       onPointerDown: (e) {
         _timer?.cancel();
+        _longPressFired = false;
         _start = e.position;
         _timer = Timer(_delay, () {
           _timer = null;
+          _longPressFired = true;
           if (mounted) widget.onLongPress();
         });
       },
       onPointerMove: (e) {
         final s = _start;
-        if (s != null && (e.position - s).distance > _slop) _cancel();
+        if (s != null && (e.position - s).distance > _slop) {
+          _cancel();
+          // Slid away: no tap will be delivered for this press, so the flag
+          // must not linger and swallow the next tap.
+          _longPressFired = false;
+        }
       },
+      // Keep _longPressFired: the tap handler below consumes it.
       onPointerUp: (_) => _cancel(),
-      onPointerCancel: (_) => _cancel(),
-      child: widget.child,
+      onPointerCancel: (_) {
+        _cancel();
+        _longPressFired = false;
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () {
+          if (_longPressFired) {
+            _longPressFired = false;
+            return;
+          }
+          widget.onTap();
+        },
+        child: widget.child,
+      ),
     );
   }
 }
