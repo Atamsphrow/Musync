@@ -6,14 +6,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:on_audio_query/on_audio_query.dart';
 import 'package:musync/core/router/app_router.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
-import 'package:musync/features/library/providers/catalogue_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 
 class MiniPlayer extends ConsumerStatefulWidget {
-  const MiniPlayer({super.key});
+  const MiniPlayer({super.key, required this.onLongPress});
+
+  /// Fired when the long-press timer completes (the tap that follows is
+  /// swallowed by [_MiniPlayerState]). The library screen passes its
+  /// locate-the-playing-track routine here — a direct callback, no provider
+  /// round-trip.
+  final Future<void> Function() onLongPress;
 
   @override
   ConsumerState<MiniPlayer> createState() => _MiniPlayerState();
@@ -56,8 +61,8 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
       onLongPress: () {
         _suppressNextTap = true;
         DebugLog.instance.info('Appui long', 'geste détecté sur le mini-lecteur');
-        ref.read(locateCurrentSongProvider.notifier).state++;
         HapticFeedback.lightImpact();
+        unawaited(widget.onLongPress());
       },
       child: Material(
         color: scheme.surfaceContainerHigh,
