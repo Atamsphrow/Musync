@@ -397,10 +397,11 @@ class _QueueSlidePanel extends StatelessWidget {
     return AnimatedBuilder(
       animation: controller,
       builder: (context, child) {
-        // Fully off-screen right when closed; translate only while needed.
+        // Fully off-screen left when closed; slides in left-to-right,
+        // following the finger, as the value goes 0 → 1.
         final width = MediaQuery.sizeOf(context).width;
         return Transform.translate(
-          offset: Offset(width * (1 - controller.value), 0),
+          offset: Offset(-width * (1 - controller.value), 0),
           child: child,
         );
       },
