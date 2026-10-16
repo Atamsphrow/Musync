@@ -32,12 +32,6 @@ final libraryTabProvider = StateProvider<LyricsStatus>(
   (ref) => LyricsStatus.none,
 );
 
-/// One-shot requests to scroll the library to the playing track.
-///
-/// Incremented by the mini player's long-press; the library screen consumes
-/// each bump by switching to the track's tab and scrolling to its row.
-final locateCurrentSongProvider = StateProvider<int>((ref) => 0);
-
 /// The library split into the three tabs, once.
 ///
 /// Deliberately watches neither the tab nor the search box, so switching tabs
