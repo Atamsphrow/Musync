@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/features/library/data/models/song.dart';
@@ -46,12 +48,24 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
     }
   }
 
-  Future<void> _reorder(int oldIndex, int newIndex) async {
-    // `onReorderItem` reports the track's final slot directly (the framework
-    // already accounts for the removed item); the service expects exactly
-    // that. The deprecated `onReorder` would need the manual
-    // `if (oldIndex < newIndex) newIndex -= 1` adjustment instead.
-    await ref.read(audioPlayerServiceProvider).reorderQueue(oldIndex, newIndex);
+  void _reorder(int oldIndex, int newIndex) {
+    // Synchronous: ReorderableListView animates the displaced rows from the
+    // next frame, so the new order must be applied before returning —
+    // awaiting the player mirror first is what made the rows jump instead
+    // of sliding. The mirror and the named-queue sync follow in the
+    // background.
+    final moved = ref
+        .read(audioPlayerServiceProvider)
+        .reorderQueueSync(oldIndex, newIndex);
+    if (mounted) setState(() {});
+    if (moved == null) return;
+    unawaited(_applyReorder(moved.$1, moved.$2));
+  }
+
+  Future<void> _applyReorder(int oldIndex, int newIndex) async {
+    await ref
+        .read(audioPlayerServiceProvider)
+        .reorderQueueApply(oldIndex, newIndex);
     await _syncActiveQueue();
     if (mounted) setState(() {});
   }
