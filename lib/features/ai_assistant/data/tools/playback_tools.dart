@@ -6,6 +6,7 @@ library;
 
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
+import 'package:musync/features/settings/providers/playback_settings_provider.dart';
 
 class PlayTool extends AiTool {
   const PlayTool();
@@ -44,6 +45,13 @@ class PlayTool extends AiTool {
   ) async {
     final service = ctx.ref.read(audioPlayerServiceProvider);
     final q = optString(args, 'query');
+    // Posé par AutomationRunner.runFired : les alarmes démarrent en fondu
+    // (réveil en douceur) quand le réglage est actif.
+    Duration? fadeIn;
+    if (args['fadeIn'] == true) {
+      final settings = ctx.ref.read(playbackSettingsProvider);
+      if (settings.alarmFadeIn) fadeIn = settings.alarmFadeInDuration;
+    }
     if (q == null) {
       if (service.currentSong == null) {
         return AiToolResult.fail('Rien en cours de lecture.');
@@ -56,7 +64,7 @@ class PlayTool extends AiTool {
       return AiToolResult.fail('Aucun morceau trouvé pour « $q ».');
     }
     final first = matches.first;
-    await service.playSong(first, queue: matches, index: 0);
+    await service.playSong(first, queue: matches, index: 0, fadeIn: fadeIn);
     return AiToolResult.ok('Lecture de ${songLabel(first)}.');
   }
 }
