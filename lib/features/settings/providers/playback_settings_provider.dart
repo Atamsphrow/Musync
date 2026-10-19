@@ -55,6 +55,36 @@ class PlaybackSettingsNotifier extends Notifier<PlaybackSettings> {
       // prochain lancement. Même politique que les autres réglages.
     }
   }
+
+  /// Active ou coupe le fondu de volume au déclenchement d'une alarme.
+  Future<void> setAlarmFadeIn(bool enabled) async {
+    final next = state.copyWith(alarmFadeIn: enabled);
+    if (next == state) return;
+    state = next;
+    try {
+      await ref.read(playbackSettingsStoreProvider).save(next);
+    } catch (_) {}
+  }
+
+  /// Règle la durée du fondu de réveil, bornée côté modèle.
+  Future<void> setAlarmFadeInSeconds(int seconds) async {
+    final next = state.copyWith(alarmFadeInSeconds: seconds);
+    if (next == state) return;
+    state = next;
+    try {
+      await ref.read(playbackSettingsStoreProvider).save(next);
+    } catch (_) {}
+  }
+
+  /// Active ou coupe la reprise auto après un appel téléphonique.
+  Future<void> setAutoResumeAfterCall(bool enabled) async {
+    final next = state.copyWith(autoResumeAfterCall: enabled);
+    if (next == state) return;
+    state = next;
+    try {
+      await ref.read(playbackSettingsStoreProvider).save(next);
+    } catch (_) {}
+  }
 }
 
 /// Just the offset, so a widget watching it does not rebuild when an unrelated
