@@ -10,6 +10,8 @@ import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/data/artwork_cache.dart';
 import 'package:musync/features/player/data/last_song_store.dart';
 import 'package:musync/features/player/data/playback_state_store.dart';
+import 'package:musync/features/player/data/volume_fade.dart';
+import 'package:musync/features/settings/data/playback_settings.dart';
 
 /// Wraps [AudioPlayer] and owns the playback queue.
 ///
@@ -33,6 +35,17 @@ class AudioPlayerService {
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<void>? _noisySubscription;
   StreamSubscription<AudioInterruptionEvent>? _interruptionSubscription;
+
+  /// Minuteur du fondu de volume du réveil (voir [VolumeFade]). Annulé par
+  /// pause/stop/suivant/précédent et par tout nouveau playSong.
+  Timer? _fadeTimer;
+
+  /// Volume à restaurer quand le fondu est annulé avant la fin.
+  double _fadeTargetVolume = 1.0;
+
+  /// Vrai quand la lecture a été mise en pause par le début d'une
+  /// interruption audio (appel) : sert à décider de la reprise auto à la fin.
+  bool _wasPlayingBeforeInterruption = false;
 
   /// How often the current position is persisted while playing, so the
   /// next launch resumes where the track actually stopped — not where the
@@ -92,10 +105,22 @@ class AudioPlayerService {
       });
       // just_audio does not handle audio focus itself: without this listener
       // the music kept playing over phone calls. Pause when the interruption
-      // begins; no auto-resume when it ends — the user decides.
+      // begins; auto-resume when it ends if the user enabled it (réglage
+      // "reprise auto après un appel") and the track was playing before.
       _interruptionSubscription =
-          session.interruptionEventStream.listen((event) {
-        if (event.begin && _player.playing) unawaited(pause());
+          session.interruptionEventStream.listen((event) async {
+        if (event.begin && _player.playing) {
+          _wasPlayingBeforeInterruption = true;
+          unawaited(pause());
+        } else if (!event.begin && _wasPlayingBeforeInterruption) {
+          _wasPlayingBeforeInterruption = false;
+          if (_player.playing) return;
+          final settings = await PlaybackSettingsStore().load();
+          if (settings.autoResumeAfterCall) {
+            DebugLog.instance.info('Player', 'reprise auto après interruption');
+            unawaited(_player.play());
+          }
+        }
       });
     } catch (e) {
       // Best-effort: playback works without it, but say so — otherwise the
@@ -218,7 +243,13 @@ class AudioPlayerService {
   ///
   /// Rebuilding the audio source is expensive and restarts playback, so a call
   /// that only re-selects a song already in the current queue seeks instead.
-  Future<void> playSong(Song song, {List<Song>? queue, int? index}) {
+  ///
+  /// [fadeIn], when non-null, démarre un fondu de volume progressif
+  /// ([VolumeFade]) dès la lecture : utilisé par les alarmes (réveil en
+  /// douceur). Tout nouveau playSong annule le fondu précédent.
+  Future<void> playSong(Song song,
+      {List<Song>? queue, int? index, Duration? fadeIn}) {
+    _cancelVolumeFade();
     final previous = _playSongGate;
     // The gate serializes the expensive, stateful part: building the audio
     // source and seeking. Starting playback stays outside it on purpose:
@@ -230,7 +261,12 @@ class AudioPlayerService {
     final setup = (previous ?? Future.value())
         .then((_) => _playSong(song, queue: queue, index: index));
     _playSongGate = setup.then<void>((_) {}, onError: (_) {});
-    return setup.then((_) => _player.play());
+    return setup.then((_) {
+      // Volume baissé AVANT la première note : sinon le réveil hurle à plein
+      // volume pendant les premières millisecondes.
+      if (fadeIn != null) _startVolumeFade(fadeIn);
+      return _player.play();
+    });
   }
 
   Future<void> _playSong(Song song, {List<Song>? queue, int? index}) async {
@@ -364,6 +400,42 @@ class AudioPlayerService {
     return true;
   }
 
+  /// Démarre un fondu de volume progressif : le volume part de
+  /// [VolumeFade.startVolume] et monte jusqu'au volume courant en [duration].
+  ///
+  /// Le volume cible est capturé maintenant (le service ne gère pas le volume
+  /// par ailleurs, c'est donc 1.0 sauf réglage externe). Annulé par
+  /// [_cancelVolumeFade] : pause, stop, suivant/précédent, nouveau playSong.
+  void _startVolumeFade(Duration duration) {
+    _cancelVolumeFade();
+    _fadeTargetVolume = _player.volume <= 0 ? 1.0 : _player.volume;
+    final target = _fadeTargetVolume;
+    unawaited(_player.setVolume(VolumeFade.startVolume * target));
+    final start = DateTime.now();
+    _fadeTimer = Timer.periodic(const Duration(milliseconds: 250), (timer) {
+      final elapsed = DateTime.now().difference(start);
+      if (elapsed >= duration) {
+        unawaited(_player.setVolume(target));
+        timer.cancel();
+        _fadeTimer = null;
+        return;
+      }
+      unawaited(
+        _player.setVolume(VolumeFade.volumeAt(elapsed, duration) * target),
+      );
+    });
+  }
+
+  /// Annule le fondu en cours et restaure le volume cible : une pause en
+  /// plein fondu suivie d'une reprise ne doit pas laisser la lecture à
+  /// volume réduit.
+  void _cancelVolumeFade() {
+    if (_fadeTimer == null) return;
+    _fadeTimer?.cancel();
+    _fadeTimer = null;
+    unawaited(_player.setVolume(_fadeTargetVolume));
+  }
+
   Future<void> play() => _player.play();
 
   /// Persists the current track and position right now, outside the 15s
@@ -386,11 +458,16 @@ class AudioPlayerService {
     // pause transition cannot lose the position — but a failing save must
     // never block the actual pause (e.g. headphones unplugged with a full
     // disk: the music still has to stop).
+    _cancelVolumeFade();
     await checkpointPosition();
     await _player.pause();
   }
 
-  Future<void> stop() => _player.stop();
+  Future<void> stop() {
+    _cancelVolumeFade();
+    _wasPlayingBeforeInterruption = false;
+    return _player.stop();
+  }
 
   /// Re-opens the playback state from when the app was last closed: the whole
   /// queue (matched by path against the library, in the persisted order),
@@ -543,6 +620,7 @@ class AudioPlayerService {
   );
 
   Future<void> next() async {
+    _cancelVolumeFade();
     DebugLog.instance.info(
       'Player',
       'next: file=${_queue.length} idx=${_player.currentIndex} hasNext=${_player.hasNext}',
@@ -551,6 +629,7 @@ class AudioPlayerService {
   }
 
   Future<void> previous() async {
+    _cancelVolumeFade();
     DebugLog.instance.info(
       'Player',
       'prev: file=${_queue.length} idx=${_player.currentIndex} hasPrev=${_player.hasPrevious}',
@@ -742,6 +821,7 @@ class AudioPlayerService {
   /// on it and threw `Cannot add new events after calling close` from inside a
   /// stream callback, where nothing was waiting to catch it.
   Future<void> dispose() async {
+    _cancelVolumeFade();
     await _positionSubscription?.cancel();
     _positionSubscription = null;
     await _noisySubscription?.cancel();
