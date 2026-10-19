@@ -48,16 +48,15 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
     super.dispose();
   }
 
-  /// Rewrites the two fields from what the file is called.
+  /// Devine l'artiste et le titre depuis le nom du fichier.
   ///
-  /// For the common case where the tags are wrong — a library built from
-  /// downloads is full of tracks whose artist is "Unknown" and whose title is
-  /// the whole file name, decoration and all — while the name itself says
-  /// perfectly clearly who and what.
+  /// L'heuristique locale d'abord, toujours (gratuite, sans réseau), puis
+  /// l'IA si au moins un fournisseur est configuré et joignable. Retourne
+  /// null quand le nom du fichier ne dit rien d'exploitable.
   ///
-  /// Only the fields are touched. Nothing reaches the file until the user picks
-  /// a result, so a wrong guess costs one correction, not a bad tag.
-  Future<void> _fillFromFilename() async {
+  /// [silent] coupe les snackbars : utilisé par le 2e essai automatique,
+  /// qui ne doit pas bruiter l'écran quand il devine dans le vide.
+  Future<FilenameGuess?> _guessFromFilename({bool silent = false}) async {
     final messenger = ScaffoldMessenger.of(context);
 
     // The heuristic first, always. It costs nothing, needs no network, and is
@@ -82,7 +81,7 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
         settings: settings,
         fileName: widget.song.filePath.split(RegExp(r'[/\\]')).last,
       );
-      if (!mounted) return;
+      if (!mounted) return null;
       // Feeds the per-provider indicators in Paramètres › IA, so the answer to
       // "which of my keys works" lives next to the keys.
       statuses.recordAttempts(resolution.attempts);
@@ -90,7 +89,7 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
       if (resolution.answered) {
         guess = resolution.guess!;
         answeredBy = resolution.providerName;
-      } else if (resolution.allFailed) {
+      } else if (resolution.allFailed && !silent) {
         // The heuristic's answer still goes into the fields below; this only
         // says why the model did not get a say.
         messenger.showOnly(
@@ -107,45 +106,103 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
       if (mounted) setState(() => _guessing = false);
     }
 
-    if (!mounted) return;
+    if (!mounted) return null;
 
     if (guess.title.isEmpty && guess.artist.isEmpty) {
-      messenger.showOnly(
-        const SnackBar(
-          content: Text('Le nom du fichier ne dit rien d’exploitable.'),
-        ),
-      );
-      return;
+      if (!silent) {
+        messenger.showOnly(
+          const SnackBar(
+            content: Text('Le nom du fichier ne dit rien d’exploitable.'),
+          ),
+        );
+      }
+      return null;
     }
 
+    if (!silent) {
+      // Said out loud, because the fields may have been right already and the
+      // user needs to see that something happened — and where it came from.
+      final source = answeredBy == null ? '' : '$answeredBy : ';
+      messenger.showOnly(
+        SnackBar(
+          content: Text(
+            guess.artist.isEmpty
+                ? '${source}titre deviné, pas d’artiste dans le nom.'
+                : '$source${guess.artist} — ${guess.title}',
+          ),
+        ),
+      );
+    }
+    return guess;
+  }
+
+  /// Rewrites the two fields from what the file is called.
+  ///
+  /// For the common case where the tags are wrong — a library built from
+  /// downloads is full of tracks whose artist is "Unknown" and whose title is
+  /// the whole file name, decoration and all — while the name itself says
+  /// perfectly clearly who and what.
+  ///
+  /// Only the fields are touched. Nothing reaches the file until the user picks
+  /// a result, so a wrong guess costs one correction, not a bad tag.
+  Future<void> _fillFromFilename() async {
+    final guess = await _guessFromFilename();
+    if (guess == null || !mounted) return;
     setState(() {
       if (guess.title.isNotEmpty) _titleController.text = guess.title;
       if (guess.artist.isNotEmpty) _artistController.text = guess.artist;
     });
-
-    // Said out loud, because the fields may have been right already and the
-    // user needs to see that something happened — and where it came from.
-    final source = answeredBy == null ? '' : '$answeredBy : ';
-    messenger.showOnly(
-      SnackBar(
-        content: Text(
-          guess.artist.isEmpty
-              ? '${source}titre deviné, pas d’artiste dans le nom.'
-              : '$source${guess.artist} — ${guess.title}',
-        ),
-      ),
-    );
   }
 
-  void _search() {
+  void _search({bool autoRetry = true}) {
+    final title = _titleController.text;
+    final artist = _artistController.text;
     performLyricsSearch(
       ref,
-      title: _titleController.text,
-      artist: _artistController.text,
+      title: title,
+      artist: artist,
       album: widget.song.album,
       durationMs: widget.song.duration,
-    );
+    ).then((_) {
+      if (mounted && autoRetry) _autoRetryWithGuess(title, artist);
+    });
   }
+
+  /// 2e essai automatique : quand la recherche ne donne rien, Deviner
+  /// Artiste/Titre (heuristique puis IA) est appliqué tout seul, et la
+  /// recherche est relancée une fois si le deviné diffère de la requête
+  /// utilisée — jamais deux fois la même requête.
+  Future<void> _autoRetryWithGuess(String usedTitle, String usedArtist) async {
+    // L'utilisateur a relancé une recherche entre-temps : ne pas marcher
+    // sur ses plates-bandes.
+    if (ref.read(lyricsSearchLoadingProvider)) return;
+    if (ref.read(lyricsSearchErrorProvider) != null) return;
+    if (ref.read(lyricsSearchResultsProvider).isNotEmpty) return;
+    // Les champs ont changé depuis (correction manuelle) : le 2e essai
+    // n'a plus de sens sur l'ancienne requête.
+    if (_titleController.text != usedTitle ||
+        _artistController.text != usedArtist) {
+      return;
+    }
+    final guess = await _guessFromFilename(silent: true);
+    if (!mounted || guess == null) return;
+    if (_titleController.text != usedTitle ||
+        _artistController.text != usedArtist) {
+      return;
+    }
+    final newTitle = guess.title.isNotEmpty ? guess.title : usedTitle;
+    final newArtist = guess.artist.isNotEmpty ? guess.artist : usedArtist;
+    if (newTitle.toLowerCase() == usedTitle.toLowerCase() &&
+        newArtist.toLowerCase() == usedArtist.toLowerCase()) {
+      return;
+    }
+    setState(() {
+      _titleController.text = newTitle;
+      _artistController.text = newArtist;
+    });
+    _search(autoRetry: false);
+  }
+  
 
   @override
   Widget build(BuildContext context) {
