@@ -59,6 +59,60 @@ void main() {
     });
   });
 
+  group('alarm fade-in and auto-resume', () {
+    test('defaults: fade on at 90 s, auto-resume on', () {
+      const s = PlaybackSettings();
+      expect(s.alarmFadeIn, isTrue);
+      expect(s.alarmFadeInSeconds, 90);
+      expect(s.alarmFadeInDuration, const Duration(seconds: 90));
+      expect(s.autoResumeAfterCall, isTrue);
+    });
+
+    test('survives a round trip', () {
+      const original = PlaybackSettings(
+        alarmFadeIn: false,
+        alarmFadeInSeconds: 45,
+        autoResumeAfterCall: false,
+      );
+      final json = original.toJson();
+      expect(
+        PlaybackSettings.fromJson(jsonDecode(jsonEncode(json))),
+        original,
+      );
+    });
+
+    test('fade duration is clamped on the way in', () {
+      expect(
+        PlaybackSettings.fromJson({'lyricsOffsetMs': 0, 'alarmFadeInSeconds': 5})
+            .alarmFadeInSeconds,
+        PlaybackSettings.minFadeInSeconds,
+      );
+      expect(
+        PlaybackSettings.fromJson(
+            {'lyricsOffsetMs': 0, 'alarmFadeInSeconds': 9000})
+            .alarmFadeInSeconds,
+        PlaybackSettings.maxFadeInSeconds,
+      );
+    });
+
+    test('missing keys fall back to the defaults, not to false', () {
+      // Un fichier écrit par une ancienne version ne doit pas couper le
+      // fondu ni la reprise auto par surprise.
+      final s = PlaybackSettings.fromJson({'lyricsOffsetMs': 0});
+      expect(s.alarmFadeIn, isTrue);
+      expect(s.alarmFadeInSeconds, 90);
+      expect(s.autoResumeAfterCall, isTrue);
+    });
+
+    test('copyWith changes only what it is told to', () {
+      const base = PlaybackSettings();
+      final next = base.copyWith(alarmFadeInSeconds: 120);
+      expect(next.alarmFadeInSeconds, 120);
+      expect(next.alarmFadeIn, isTrue);
+      expect(next.autoResumeAfterCall, isTrue);
+      expect(next.lyricsOffsetMs, 0);
+    });
+  });
   group('the store', () {
     late Directory dir;
 
