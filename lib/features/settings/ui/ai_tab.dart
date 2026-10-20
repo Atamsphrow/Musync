@@ -11,9 +11,7 @@ import 'package:musync/features/ai_assistant/data/automation.dart';
 import 'package:musync/features/ai_assistant/data/scheduler_bridge.dart';
 import 'package:musync/features/ai_assistant/providers/automation_provider.dart';
 import 'package:musync/features/settings/data/ai_provider_config.dart';
-import 'package:musync/features/settings/data/playback_settings.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
-import 'package:musync/features/settings/providers/playback_settings_provider.dart';
 
 class AiTab extends ConsumerWidget {
   const AiTab({super.key});
@@ -771,74 +769,11 @@ class _AutomationsSectionState extends ConsumerState<_AutomationsSection>
             );
           },
         ),
-        const _PlaybackBehaviorTiles(),
       ],
     );
   }
 }
 
-/// Comportements de lecture liés aux automatisations : fondu au réveil et
-/// reprise auto après un appel. Réglages persistés via [PlaybackSettings].
-class _PlaybackBehaviorTiles extends ConsumerWidget {
-  const _PlaybackBehaviorTiles();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final settings = ref.watch(playbackSettingsProvider);
-    final notifier = ref.read(playbackSettingsProvider.notifier);
-    final textTheme = Theme.of(context).textTheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SwitchListTile(
-          title: const Text('Fondu au réveil'),
-          subtitle: const Text(
-            'Le volume monte progressivement au déclenchement d\u2019une alarme.',
-          ),
-          value: settings.alarmFadeIn,
-          onChanged: notifier.setAlarmFadeIn,
-        ),
-        if (settings.alarmFadeIn)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text('Durée du fondu', style: textTheme.bodyLarge),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.remove),
-                  onPressed: settings.alarmFadeInSeconds >
-                          PlaybackSettings.minFadeInSeconds
-                      ? () => notifier.setAlarmFadeInSeconds(
-                            settings.alarmFadeInSeconds - 15)
-                      : null,
-                ),
-                Text('${settings.alarmFadeInSeconds} s',
-                    style: textTheme.bodyLarge),
-                IconButton(
-                  icon: const Icon(Icons.add),
-                  onPressed: settings.alarmFadeInSeconds <
-                          PlaybackSettings.maxFadeInSeconds
-                      ? () => notifier.setAlarmFadeInSeconds(
-                            settings.alarmFadeInSeconds + 15)
-                      : null,
-                ),
-              ],
-            ),
-          ),
-        SwitchListTile(
-          title: const Text('Reprise auto après un appel'),
-          subtitle: const Text(
-            'Reprend la lecture quand l\u2019appel se termine.',
-          ),
-          value: settings.autoResumeAfterCall,
-          onChanged: notifier.setAutoResumeAfterCall,
-        ),
-      ],
-    );
-  }
-}
 /// Bandeau « Alarmes et rappels » refusées : sans elle, les alarmes exactes
 /// ne s'arment pas et les automatisations ne se déclenchent jamais.
 class _ExactAlarmBanner extends StatelessWidget {
