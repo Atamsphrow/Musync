@@ -1179,7 +1179,7 @@ class _LyricsActions extends ConsumerWidget {
               case 'queue':
                 Navigator.of(
                   context,
-                ).push(MaterialPageRoute(builder: (_) => const QueueScreen()));
+                ).push(queueScreenRoute());
               case 'queues':
                 showQueuesSheet(context);
               case 'timer':
