@@ -63,9 +63,16 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// and unfocusing there kills the keyboard before it appears.
   bool _keyboardWasVisible = false;
 
-  /// Drives the always-visible, draggable scrollbar: 868 tracks are a long
-  /// way to swipe. Owned here, created once, disposed once.
-  late final ScrollController _scrollController;
+  /// Drives the always-visible, draggable scrollbar of each tab page: 868
+  /// tracks are a long way to swipe. One controller per tab — the three
+  /// pages live side by side in the TabBarView, and a ScrollController can
+  /// only drive one scroll view at a time. Owned here, created once,
+  /// disposed once.
+  late final List<ScrollController> _scrollControllers;
+
+  /// The scroll controller of the page for [status].
+  ScrollController _controllerFor(LyricsStatus status) =>
+      _scrollControllers[LyricsStatus.values.indexOf(status)];
 
   /// Locates the playing track on long-press of the mini player.
   ///
@@ -293,6 +300,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// code missed. Bounded: gives up quietly instead of hanging.
   Future<void> _jumpToVisibleSong(String filePath) async {
     const rowH = kSongTileHeight;
+    // The caller has already selected the song's tab; jump on that page's
+    // own controller.
+    final controller = _controllerFor(ref.read(libraryTabProvider));
     int? settledIndex;
     // Settle loop: the tab switch rebuilds the list asynchronously; wait
     // until the controller is attached and the extent covers the target row.
@@ -308,8 +318,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       final index = songs?.indexWhere((s) => s.filePath == filePath) ?? -1;
       lastIndex = index;
       if (index >= 0 &&
-          _scrollController.hasClients &&
-          _scrollController.position.maxScrollExtent >= index * rowH) {
+          controller.hasClients &&
+          controller.position.maxScrollExtent >= index * rowH) {
         settledIndex = index;
         break;
       }
@@ -320,8 +330,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       'Appui long',
       'settle: index=$index (dernier vu=$lastIndex), '
       'lignes=$lastCount, itérations=$iterations, '
-      'hasClients=${_scrollController.hasClients}, '
-      'extent=${_scrollController.hasClients ? _scrollController.position.maxScrollExtent.toStringAsFixed(0) : 'n/a'}',
+      'hasClients=${controller.hasClients}, '
+      'extent=${controller.hasClients ? controller.position.maxScrollExtent.toStringAsFixed(0) : 'n/a'}',
     );
     if (index == null || !mounted) {
       DebugLog.instance.info('Appui long', 'abandon : liste jamais stabilisée');
@@ -336,14 +346,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     final useIndex = freshIndex >= 0 ? freshIndex : index;
     if (useIndex != index && mounted) setState(() => _locateIndex = useIndex);
 
-    if (_scrollController.hasClients) {
+    if (controller.hasClients) {
       final target = (useIndex * rowH)
-          .clamp(0.0, _scrollController.position.maxScrollExtent);
+          .clamp(0.0, controller.position.maxScrollExtent);
       DebugLog.instance.info(
         'Appui long',
         'saut : index=$useIndex, cible=${target.toStringAsFixed(0)}',
       );
-      _scrollController.jumpTo(target);
+      controller.jumpTo(target);
     } else {
       DebugLog.instance.info('Appui long', 'abandon : contrôleur détaché');
     }
@@ -361,7 +371,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     super.initState();
     _searchController = TextEditingController();
     _searchFocusNode = FocusNode();
-    _scrollController = ScrollController();
+    _scrollControllers = [
+      for (var i = 0; i < LyricsStatus.values.length; i++) ScrollController(),
+    ];
     _chatScrollController = ScrollController();
     // Bascule liste <-> conversation à la frappe, et vide l'historique quand
     // la croix × vide le champ.
@@ -462,7 +474,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     _tabController.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
-    _scrollController.dispose();
+    for (final controller in _scrollControllers) {
+      controller.dispose();
+    }
     _chatScrollController.dispose();
     super.dispose();
   }
@@ -522,22 +536,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // underneath this one, and popping the last route leaves a black window
     // instead of returning to the launcher.
     if (leave == true) await SystemNavigator.pop();
-  }
-
-  /// Left/right across the list moves between the three tabs.
-  ///
-  /// `animateTo` rather than setting the index: the underline slides, which is
-  /// what tells the user the swipe was understood — an instant jump reads as a
-  /// glitch.
-  void _onHorizontalDragEnd(DragEndDetails details) {
-    final velocity = details.primaryVelocity ?? 0;
-    if (velocity.abs() < 120) return;
-
-    // A swipe leftwards moves forward through the tabs, as the content appears
-    // to slide out of the way.
-    final next = _tabController.index + (velocity < 0 ? 1 : -1);
-    if (next < 0 || next >= LyricsStatus.values.length) return;
-    _tabController.animateTo(next);
   }
 
   /// Manual refresh: rescans the library quietly. No snackbar — ignored
@@ -873,13 +871,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   Widget build(BuildContext context) {
     final songsAsync = ref.watch(filteredSongsProvider);
     final permissionIssue = ref.watch(libraryPermissionDeniedProvider);
-    final hasCurrentSong =
-        ref.watch(currentSongProvider.select((s) => s != null));
     final tab = ref.watch(libraryTabProvider);
-    // Read from the provider, not from the controller: the provider is what
-    // actually drove this rebuild, so the controller could still be a frame
-    // behind.
-    final query = ref.watch(librarySearchProvider).trim();
 
     // Tells "this phone has no music" apart from "this tab is empty" — two very
     // different things to say to someone staring at a blank list.
@@ -917,103 +909,163 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                     thinking: _chatThinking,
                     scrollController: _chatScrollController,
                   )
-                : GestureDetector(
-                onHorizontalDragEnd: _onHorizontalDragEnd,
-                child: RefreshIndicator(
-                  onRefresh: _refreshLibrary,
-                  child: ScrollbarTheme(
-                    data: ScrollbarThemeData(
-                      // Musicolet style: grey at rest, coloured while
-                      // dragged, a touch thicker than the default.
-                      thickness: WidgetStateProperty.all(8),
-                      radius: const Radius.circular(4),
-                      thumbColor: WidgetStateProperty.resolveWith((states) {
-                        if (states.contains(WidgetState.dragged)) {
-                          return Theme.of(context).colorScheme.primary;
-                        }
-                        return Colors.grey.withValues(alpha: 0.55);
-                      }),
-                    ),
-                    child: Scrollbar(
-                      controller: _scrollController,
-                      // Always visible and draggable: the fast way through
-                      // a thousand-track library.
-                      thumbVisibility: true,
-                      interactive: true,
-                      child: CustomScrollView(
-                      controller: _scrollController,
-                      slivers: [
-                      ...switch (songsAsync) {
-                        AsyncData(:final value) when value.isEmpty => [
-                          SliverFillRemaining(
-                            hasScrollBody: false,
-                            child: libraryIsEmpty
-                                ? const _EmptyLibrary()
-                                : _EmptyTab(tab: tab, query: query),
-                          ),
-                        ],
-                        AsyncData(:final value) => [
-                          if (query.isNotEmpty && value.isNotEmpty)
-                            SliverToBoxAdapter(
-                              child: _SearchQueueHeader(
-                                songs: value,
-                                query: query,
-                              ),
-                            ),
-                          SliverFixedExtentList.builder(
-                            // Fixed extent: every row is exactly kSongTileHeight
-                            // tall, so the locate jump below is precise.
-                            itemExtent: kSongTileHeight,
-                            itemCount: value.length,
-                            itemBuilder: (context, index) => SongTile(
-                              // The locate-target row flashes a temporary
-                              // outline so the eye finds it.
-                              highlighted: index == _locateIndex,
-                              song: value[index],
-                              // Every row in this list shares the tab's status by
-                              // construction; showing it keeps a row readable
-                              // once it has been scrolled away from its header.
-                              status: tab,
-                              onTap: () => Navigator.pushNamed(
-                                context,
-                                AppRoutes.player,
-                                arguments: SongRouteArgs(
-                                  song: value[index],
-                                  queue: value,
-                                  index: index,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                        AsyncError(:final error) => [
-                          SliverFillRemaining(
-                            hasScrollBody: false,
-                            child: _ScanFailed(
-                              error: error,
-                              onRetry: () =>
-                                  ref.read(songListProvider.notifier).refresh(),
-                            ),
-                          ),
-                        ],
-                        _ => [
-                          const SliverFillRemaining(
-                            hasScrollBody: false,
-                            child: Center(child: CircularProgressIndicator()),
-                          ),
-                        ],
-                      },
-                      // Keeps the last song reachable above the mini player.
-                      SliverToBoxAdapter(
-                        child: SizedBox(height: hasCurrentSong ? 8 : 24),
-                      ),
+                : TabBarView(
+                    controller: _tabController,
+                    children: [
+                      for (final status in LyricsStatus.values)
+                        _TabSongList(
+                          status: status,
+                          scrollController: _controllerFor(status),
+                          // Only the located song's own tab may flash a
+                          // row; a neighbouring page would outline
+                          // whatever happens to sit at the same index.
+                          highlightIndex: status == tab ? _locateIndex : -1,
+                          libraryIsEmpty: libraryIsEmpty,
+                          onRefresh: _refreshLibrary,
+                          onRetry: () =>
+                              ref.read(songListProvider.notifier).refresh(),
+                        ),
                     ],
+                  ),
+        bottomNavigationBar: _DockedMiniPlayer(onLongPress: _locateCurrentSong),
+      ),
+    );
+  }
+}
+
+/// One tab page of the library: its own song list, scrollbar and scroll
+/// position.
+///
+/// The three pages sit side by side in the screen's `TabBarView`, so a
+/// horizontal swipe slides the content itself — the same feel as the
+/// Settings tabs. Kept alive while a neighbouring tab shows, so swiping
+/// back lands exactly where the user left this list.
+class _TabSongList extends ConsumerStatefulWidget {
+  const _TabSongList({
+    required this.status,
+    required this.scrollController,
+    required this.highlightIndex,
+    required this.libraryIsEmpty,
+    required this.onRefresh,
+    required this.onRetry,
+  });
+
+  final LyricsStatus status;
+  final ScrollController scrollController;
+
+  /// Row flashing the temporary locate outline, or -1. Only the located
+  /// song's own tab ever receives a value other than -1.
+  final int highlightIndex;
+
+  /// Tells "this phone has no music" apart from "this tab is empty" — two
+  /// very different things to say to someone staring at a blank list.
+  final bool libraryIsEmpty;
+
+  final Future<void> Function() onRefresh;
+  final VoidCallback onRetry;
+
+  @override
+  ConsumerState<_TabSongList> createState() => _TabSongListState();
+}
+
+class _TabSongListState extends ConsumerState<_TabSongList>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    final songsAsync = ref.watch(filteredSongsForTabProvider(widget.status));
+    final query = ref.watch(librarySearchProvider).trim();
+    final hasCurrentSong =
+        ref.watch(currentSongProvider.select((s) => s != null));
+    final status = widget.status;
+
+    return RefreshIndicator(
+      onRefresh: widget.onRefresh,
+      child: ScrollbarTheme(
+        data: ScrollbarThemeData(
+          // Musicolet style: grey at rest, coloured while dragged, a touch
+          // thicker than the default.
+          thickness: WidgetStateProperty.all(8),
+          radius: const Radius.circular(4),
+          thumbColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.dragged)) {
+              return Theme.of(context).colorScheme.primary;
+            }
+            return Colors.grey.withValues(alpha: 0.55);
+          }),
+        ),
+        child: Scrollbar(
+          controller: widget.scrollController,
+          // Always visible and draggable: the fast way through a
+          // thousand-track library.
+          thumbVisibility: true,
+          interactive: true,
+          child: CustomScrollView(
+            controller: widget.scrollController,
+            slivers: [
+              ...switch (songsAsync) {
+                AsyncData(:final value) when value.isEmpty => [
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: widget.libraryIsEmpty
+                        ? const _EmptyLibrary()
+                        : _EmptyTab(tab: status, query: query),
+                  ),
+                ],
+                AsyncData(:final value) => [
+                  if (query.isNotEmpty && value.isNotEmpty)
+                    SliverToBoxAdapter(
+                      child: _SearchQueueHeader(songs: value, query: query),
+                    ),
+                  SliverFixedExtentList.builder(
+                    // Fixed extent: every row is exactly kSongTileHeight
+                    // tall, so the locate jump is precise.
+                    itemExtent: kSongTileHeight,
+                    itemCount: value.length,
+                    itemBuilder: (context, index) => SongTile(
+                      // The locate-target row flashes a temporary outline
+                      // so the eye finds it.
+                      highlighted: index == widget.highlightIndex,
+                      song: value[index],
+                      // Every row in this list shares the tab's status by
+                      // construction; showing it keeps a row readable once
+                      // it has been scrolled away from its header.
+                      status: status,
+                      onTap: () => Navigator.pushNamed(
+                        context,
+                        AppRoutes.player,
+                        arguments: SongRouteArgs(
+                          song: value[index],
+                          queue: value,
+                          index: index,
+                        ),
+                      ),
                     ),
                   ),
-                ),
+                ],
+                AsyncError(:final error) => [
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: _ScanFailed(error: error, onRetry: widget.onRetry),
+                  ),
+                ],
+                _ => [
+                  const SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                ],
+              },
+              // Keeps the last song reachable above the mini player.
+              SliverToBoxAdapter(
+                child: SizedBox(height: hasCurrentSong ? 8 : 24),
               ),
-            ),
-        bottomNavigationBar: _DockedMiniPlayer(onLongPress: _locateCurrentSong),
+            ],
+          ),
+        ),
       ),
     );
   }
