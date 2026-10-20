@@ -24,24 +24,8 @@ class PlaybackSettings {
   /// non-zero default would be a guess applied to every file.
   final int lyricsOffsetMs;
 
-  /// Fondu de volume au déclenchement d'une alarme (réveil) : la lecture
-  /// démarre à 5 % du volume puis monte progressivement. Voir [VolumeFade].
-  final bool alarmFadeIn;
-
-  /// Durée du fondu de réveil, en secondes. Bornée : en dessous de 15 s ce
-  /// n'est plus un réveil en douceur, au-delà de 5 min l'utilisateur a
-  /// oublié que ça monte encore.
-  final int alarmFadeInSeconds;
-
-  /// Reprise automatique de la lecture à la fin d'une interruption audio
-  /// (appel téléphonique), quand la lecture était en cours avant.
-  final bool autoResumeAfterCall;
-
   const PlaybackSettings({
     this.lyricsOffsetMs = 0,
-    this.alarmFadeIn = true,
-    this.alarmFadeInSeconds = 90,
-    this.autoResumeAfterCall = true,
   });
 
   /// The bound is not arbitrary: beyond a second the lines have moved past the
@@ -49,32 +33,17 @@ class PlaybackSettings {
   /// slider that could produce one would hide the real problem.
   static const int maxOffsetMs = 1000;
 
-  static const int minFadeInSeconds = 15;
-  static const int maxFadeInSeconds = 300;
-
   Duration get lyricsOffset => Duration(milliseconds: lyricsOffsetMs);
-
-  Duration get alarmFadeInDuration =>
-      Duration(seconds: alarmFadeInSeconds);
 
   PlaybackSettings copyWith({
     int? lyricsOffsetMs,
-    bool? alarmFadeIn,
-    int? alarmFadeInSeconds,
-    bool? autoResumeAfterCall,
   }) =>
       PlaybackSettings(
         lyricsOffsetMs: lyricsOffsetMs ?? this.lyricsOffsetMs,
-        alarmFadeIn: alarmFadeIn ?? this.alarmFadeIn,
-        alarmFadeInSeconds: alarmFadeInSeconds ?? this.alarmFadeInSeconds,
-        autoResumeAfterCall: autoResumeAfterCall ?? this.autoResumeAfterCall,
       );
 
   Map<String, Object?> toJson() => {
         'lyricsOffsetMs': lyricsOffsetMs,
-        'alarmFadeIn': alarmFadeIn,
-        'alarmFadeInSeconds': alarmFadeInSeconds,
-        'autoResumeAfterCall': autoResumeAfterCall,
       };
 
   /// Clamped on the way in, not only in the UI: a hand-edited or truncated file
@@ -83,16 +52,11 @@ class PlaybackSettings {
     if (raw is! Map) return const PlaybackSettings();
     final offset = raw['lyricsOffsetMs'];
     if (offset is! int) return const PlaybackSettings();
-    final fadeIn = raw['alarmFadeIn'];
-    final fadeInSeconds = raw['alarmFadeInSeconds'];
-    final autoResume = raw['autoResumeAfterCall'];
+    // Les anciennes clés (alarmFadeIn, autoResumeAfterCall…) sont
+    // ignorées : le fondu de réveil et la reprise auto sont intégrés,
+    // sans réglage, depuis le 2026-10-21.
     return PlaybackSettings(
       lyricsOffsetMs: offset.clamp(-maxOffsetMs, maxOffsetMs),
-      alarmFadeIn: fadeIn is bool ? fadeIn : true,
-      alarmFadeInSeconds: fadeInSeconds is int
-          ? fadeInSeconds.clamp(minFadeInSeconds, maxFadeInSeconds)
-          : 90,
-      autoResumeAfterCall: autoResume is bool ? autoResume : true,
     );
   }
 
@@ -100,18 +64,10 @@ class PlaybackSettings {
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is PlaybackSettings &&
-          other.lyricsOffsetMs == lyricsOffsetMs &&
-          other.alarmFadeIn == alarmFadeIn &&
-          other.alarmFadeInSeconds == alarmFadeInSeconds &&
-          other.autoResumeAfterCall == autoResumeAfterCall;
+          other.lyricsOffsetMs == lyricsOffsetMs;
 
   @override
-  int get hashCode => Object.hash(
-        lyricsOffsetMs,
-        alarmFadeIn,
-        alarmFadeInSeconds,
-        autoResumeAfterCall,
-      );
+  int get hashCode => lyricsOffsetMs.hashCode;
 }
 
 class PlaybackSettingsStore {
