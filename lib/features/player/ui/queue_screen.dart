@@ -46,10 +46,32 @@ class QueueListBody extends ConsumerStatefulWidget {
 }
 
 class _QueueListBodyState extends ConsumerState<QueueListBody> {
-  /// Estimated row height (two-line ListTile). Only used to jump near the
-  /// current track before it is built; `ensureVisible` on the row itself
-  /// does the exact positioning afterwards.
-  static const double _rowExtent = 72;
+  /// Row height before the first row has been measured.
+  static const double _fallbackRowExtent = 72;
+
+  /// The rows' real height, measured on a built row (see [_RowExtentProbe]).
+  ///
+  /// A two-line ListTile is nominally 72 dp, but text scaling and theme
+  /// metrics move it — and every computation below multiplies the error by
+  /// the track's index: a 4 dp miss lands the « aller au morceau en cours »
+  /// jump four rows short at index 70, and wrongly shows or hides the
+  /// button. Measuring removes the guess entirely.
+  double _rowExtent = _fallbackRowExtent;
+  bool _extentMeasured = false;
+
+  void _reportRowExtent(double extent) {
+    if (extent <= 0 || (extent - _rowExtent).abs() < 0.5) return;
+    _rowExtent = extent;
+    if (!_extentMeasured) {
+      _extentMeasured = true;
+      // First real measurement: the open-on-current jump in initState ran
+      // on the fallback estimate — redo it with the true row height.
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _scrollToCurrent(animated: false),
+      );
+    }
+    _updateLocateButton();
+  }
 
   final ScrollController _scrollController = ScrollController();
 
@@ -194,9 +216,12 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
 
   /// Brings the current track into view, centred when possible.
   ///
-  /// Two steps: jump near the row first (an unbuilt row has no context to
-  /// aim at), then let the row itself settle exactly via `ensureVisible`.
-  void _scrollToCurrent({bool animated = true}) {
+  /// Two steps: scroll to the row's offset (exact, now that the row height
+  /// is measured rather than guessed), then let the row itself settle via
+  /// `ensureVisible`. The animated scroll is awaited first: firing the
+  /// correction on the next frame raced the animation — the row was not
+  /// built yet at the far end, so nothing corrected the landing.
+  Future<void> _scrollToCurrent({bool animated = true}) async {
     if (!mounted || !_scrollController.hasClients) return;
     final service = ref.read(audioPlayerServiceProvider);
     final index = service.currentIndex;
@@ -208,7 +233,7 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
         .clamp(0.0, position.maxScrollExtent);
     if ((position.pixels - target).abs() > _rowExtent) {
       if (animated) {
-        _scrollController.animateTo(
+        await _scrollController.animateTo(
           target,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOutCubic,
@@ -217,6 +242,7 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
         _scrollController.jumpTo(target);
       }
     }
+    if (!mounted || !_scrollController.hasClients) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final rowContext = _currentRowKey.currentContext;
       if (!mounted || rowContext == null) return;
@@ -355,7 +381,9 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
                     ValueKey('queue_${song.id}_${identityHashCode(song)}');
                 return KeyedSubtree(
                   key: key,
-                  child: Material(
+                  child: _RowExtentProbe(
+                    onExtent: _reportRowExtent,
+                    child: Material(
                     key: isCurrent ? _currentRowKey : null,
                     color: isCurrent
                         ? scheme.primaryContainer.withValues(alpha: 0.45)
@@ -421,6 +449,7 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
                       ),
                       onTap: () => _playAt(queue, index),
                     ),
+                    ),
                   ),
                 );
               },
@@ -438,5 +467,34 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
         ],
       ),
     );
+  }
+}
+
+/// Reports the real height of a queue row once it is laid out.
+///
+/// Every row is the same two-line ListTile, so any row's measurement
+/// serves all of them; the parent keeps the value and ignores repeats.
+/// Measuring beats guessing: the nominal 72 dp is wrong as soon as text
+/// scaling or theme metrics move, and a wrong guess misses the current
+/// track by `index × error`.
+class _RowExtentProbe extends StatefulWidget {
+  const _RowExtentProbe({required this.onExtent, required this.child});
+
+  final ValueChanged<double> onExtent;
+  final Widget child;
+
+  @override
+  State<_RowExtentProbe> createState() => _RowExtentProbeState();
+}
+
+class _RowExtentProbeState extends State<_RowExtentProbe> {
+  @override
+  Widget build(BuildContext context) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final box = context.findRenderObject() as RenderBox?;
+      if (box != null && box.hasSize) widget.onExtent(box.size.height);
+    });
+    return widget.child;
   }
 }
