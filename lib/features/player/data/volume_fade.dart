@@ -9,6 +9,11 @@ abstract final class VolumeFade {
   /// Volume de départ du fondu, en fraction du volume cible.
   static const double startVolume = 0.05;
 
+  /// Durée du fondu de réveil : 90 s. Intégrée, pas un réglage — le
+  /// réveil monte en douceur par défaut, sans paramètre (demande
+  /// d'Atamsphrow, 2026-10-21).
+  static const Duration alarmDuration = Duration(seconds: 90);
+
   /// Volume (0.0–1.0, fraction du volume cible) à [elapsed] dans un fondu de
   /// [duration].
   static double volumeAt(Duration elapsed, Duration duration) {
