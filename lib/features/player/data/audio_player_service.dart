@@ -7,6 +7,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 import 'package:musync/core/services/audio_backend_check.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/player/data/artwork_bytes_cache.dart';
 import 'package:musync/features/player/data/artwork_cache.dart';
 import 'package:musync/features/player/data/last_song_store.dart';
 import 'package:musync/features/player/data/playback_state_store.dart';
@@ -211,9 +212,18 @@ class AudioPlayerService {
     }
   }
 
-  /// Drops the cached notification artwork for [song], e.g. after its cover
-  /// was edited. The next extraction re-reads the tag.
-  Future<void> forgetArtwork(Song song) => _artwork.forget(song);
+  /// Drops the cached artworks for [song], e.g. after its cover was
+  /// edited: the notification extraction re-reads the tag and the player
+  /// pane re-queries MediaStore.
+  Future<void> forgetArtwork(Song song) async {
+    _artworkBytes.forget(song);
+    await _artwork.forget(song);
+  }
+
+  /// Full-size cover bytes for the player screen, warmed by [_warmArtwork]
+  /// so opening the player shows the cover on the first frame.
+  ArtworkBytesCache get artworkBytes => _artworkBytes;
+  final ArtworkBytesCache _artworkBytes = ArtworkBytesCache();
   bool get isShuffleEnabled => _player.shuffleModeEnabled;
   LoopMode get loopMode => _player.loopMode;
   bool get isPlaying => _player.playing;
@@ -362,9 +372,14 @@ class AudioPlayerService {
   static const int _artworkLookahead = 4;
 
   /// Reads the covers the queue is about to need, ignoring failures.
+  ///
+  /// Two caches, two consumers: the extracted files feed the notification,
+  /// the in-memory bytes feed the player pane — warming both here is what
+  /// lets the player open with its cover already drawn.
   Future<void> _warmArtwork(int from) async {
     final end = (from + _artworkLookahead).clamp(0, _queue.length);
     for (var i = from.clamp(0, _queue.length); i < end; i++) {
+      _artworkBytes.prefetch(_queue[i]);
       try {
         await _artwork.extract(_queue[i]);
       } catch (_) {
