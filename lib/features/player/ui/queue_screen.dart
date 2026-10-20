@@ -6,9 +6,10 @@ import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/providers/named_queue_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 
-/// The player's live queue: reorder by drag-and-drop, swipe a track away to
-/// remove it, tap one to play it. Opened from the now-playing screen (wired by
-/// the coordinator); this widget only owns its own content.
+/// The player's live queue: reorder by the ≡ handle, swipe a track right
+/// to remove it, swipe left to go back to the player, tap one to play it.
+/// Opened from the now-playing screen (wired by the coordinator); this
+/// widget only owns its own content.
 class QueueScreen extends StatelessWidget {
   const QueueScreen({super.key});
 
@@ -20,9 +21,11 @@ class QueueScreen extends StatelessWidget {
         title: const Text('File d\u2019attente'),
       ),
       backgroundColor: scheme.surface,
-      body: const SafeArea(
+      body: SafeArea(
         top: false,
-        child: QueueListBody(),
+        child: QueueListBody(
+          onSwipeLeft: () => Navigator.of(context).maybePop(),
+        ),
       ),
     );
   }
@@ -31,13 +34,146 @@ class QueueScreen extends StatelessWidget {
 /// The queue content itself, without the Scaffold: shared by the [QueueScreen]
 /// route and the now-playing screen's swipe-in panel.
 class QueueListBody extends ConsumerStatefulWidget {
-  const QueueListBody({super.key});
+  /// Balayage vers la gauche sur la liste : retour à la lecture en cours.
+  /// Fourni par l'hôte (le panneau ferme le panneau, l'écran dépile la
+  /// route) — la liste elle-même ne navigue pas.
+  final VoidCallback? onSwipeLeft;
+
+  const QueueListBody({super.key, this.onSwipeLeft});
 
   @override
   ConsumerState<QueueListBody> createState() => _QueueListBodyState();
 }
 
 class _QueueListBodyState extends ConsumerState<QueueListBody> {
+  /// Estimated row height (two-line ListTile). Only used to jump near the
+  /// current track before it is built; `ensureVisible` on the row itself
+  /// does the exact positioning afterwards.
+  static const double _rowExtent = 72;
+
+  final ScrollController _scrollController = ScrollController();
+
+  /// On the current track's row, so it can be scrolled into view exactly.
+  final GlobalKey _currentRowKey = GlobalKey();
+
+  /// Whether the « aller au morceau en cours » button shows: the current
+  /// track is estimated outside the visible window.
+  bool _showLocateButton = false;
+
+  // ── Balayage gauche = retour à la lecture en cours ──
+  //
+  // Observed through a Listener, outside the gesture arena: the rows own
+  // the horizontal arena (Dismissible vers la droite, poignée ≡), so a
+  // GestureDetector here would never win a leftward drag.
+  int? _trackedPointer;
+  double _swipeDx = 0;
+  double _swipeDy = 0;
+
+  void _onPointerDown(PointerDownEvent event) {
+    if (_trackedPointer != null) return;
+    _trackedPointer = event.pointer;
+    _swipeDx = 0;
+    _swipeDy = 0;
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    if (event.pointer != _trackedPointer) return;
+    _swipeDx += event.delta.dx;
+    _swipeDy += event.delta.dy;
+  }
+
+  void _onPointerUp(PointerUpEvent event) {
+    if (event.pointer != _trackedPointer) return;
+    _trackedPointer = null;
+    final callback = widget.onSwipeLeft;
+    if (callback != null &&
+        _swipeDx <= -60 &&
+        _swipeDx.abs() >= 1.5 * _swipeDy.abs()) {
+      callback();
+    }
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    if (event.pointer == _trackedPointer) _trackedPointer = null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_updateLocateButton);
+    // Open on the current track: with a queue of thousands of songs,
+    // landing at the top and hunting by hand is not a way in. A jump, not
+    // an animation — the distance can be enormous.
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _scrollToCurrent(animated: false),
+    );
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_updateLocateButton);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _updateLocateButton() {
+    if (!mounted || !_scrollController.hasClients) return;
+    final service = ref.read(audioPlayerServiceProvider);
+    final index = service.currentIndex;
+    final show = index >= 0 &&
+        index < service.queue.length &&
+        _currentOutsideView(index);
+    if (show != _showLocateButton) {
+      setState(() => _showLocateButton = show);
+    }
+  }
+
+  bool _currentOutsideView(int index) {
+    final position = _scrollController.position;
+    final top = index * _rowExtent;
+    final bottom = top + _rowExtent;
+    return bottom < position.pixels ||
+        top > position.pixels + position.viewportDimension;
+  }
+
+  /// Brings the current track into view, centred when possible.
+  ///
+  /// Two steps: jump near the row first (an unbuilt row has no context to
+  /// aim at), then let the row itself settle exactly via `ensureVisible`.
+  void _scrollToCurrent({bool animated = true}) {
+    if (!mounted || !_scrollController.hasClients) return;
+    final service = ref.read(audioPlayerServiceProvider);
+    final index = service.currentIndex;
+    if (index < 0 || index >= service.queue.length) return;
+    final position = _scrollController.position;
+    final target = (index * _rowExtent -
+            position.viewportDimension / 2 +
+            _rowExtent / 2)
+        .clamp(0.0, position.maxScrollExtent);
+    if ((position.pixels - target).abs() > _rowExtent) {
+      if (animated) {
+        _scrollController.animateTo(
+          target,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        _scrollController.jumpTo(target);
+      }
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final rowContext = _currentRowKey.currentContext;
+      if (!mounted || rowContext == null) return;
+      Scrollable.ensureVisible(
+        rowContext,
+        alignment: 0.5,
+        duration: animated ? const Duration(milliseconds: 200) : Duration.zero,
+        curve: Curves.easeOutCubic,
+      );
+      _updateLocateButton();
+    });
+  }
+
   /// F6 hook: mirrors the player's queue into the active named queue, so the
   /// named queue stays an exact snapshot after a reorder/remove/play-next.
   Future<void> _syncActiveQueue() async {
@@ -108,8 +244,17 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
     final queue = service.queue;
     final currentIndex = service.currentIndex;
 
-    return queue.isEmpty
-        ? Center(
+    // Listener, hors gesture arena : il observe le balayage gauche sans
+    // voler leurs gestes aux lignes (Dismissible à droite, poignée ≡).
+    return Listener(
+      onPointerDown: _onPointerDown,
+      onPointerMove: _onPointerMove,
+      onPointerUp: _onPointerUp,
+      onPointerCancel: _onPointerCancel,
+      child: Stack(
+        children: [
+          queue.isEmpty
+              ? Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -140,6 +285,7 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
               // The rows carry their own drag handles; the default ones
               // would double them.
               buildDefaultDragHandles: false,
+              scrollController: _scrollController,
               itemCount: queue.length,
               onReorderItem: _reorder,
               itemBuilder: (context, index) {
@@ -153,11 +299,14 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
                     ValueKey('queue_${song.id}_${identityHashCode(song)}');
                 return Dismissible(
                   key: key,
-                  direction: DismissDirection.endToStart,
+                  // Glisser vers la DROITE pour retirer ; vers la gauche
+                  // est réservé au retour à la lecture en cours (le
+                  // Listener qui enveloppe la liste).
+                  direction: DismissDirection.startToEnd,
                   background: Container(
                     color: scheme.errorContainer,
-                    alignment: Alignment.centerRight,
-                    padding: const EdgeInsets.only(right: 20),
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.only(left: 20),
                     child: Icon(
                       Icons.delete_outline,
                       color: scheme.onErrorContainer,
@@ -165,6 +314,7 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
                   ),
                   onDismissed: (_) => _remove(index, song),
                   child: Material(
+                    key: isCurrent ? _currentRowKey : null,
                     color: isCurrent
                         ? scheme.primaryContainer.withValues(alpha: 0.45)
                         : Colors.transparent,
@@ -223,6 +373,19 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
                   ),
                 );
               },
-            );
+            ),
+          if (_showLocateButton && queue.isNotEmpty)
+            Positioned(
+              right: 16,
+              bottom: 16,
+              child: FloatingActionButton.small(
+                onPressed: () => _scrollToCurrent(),
+                tooltip: 'Aller au morceau en cours',
+                child: const Icon(Icons.my_location),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
