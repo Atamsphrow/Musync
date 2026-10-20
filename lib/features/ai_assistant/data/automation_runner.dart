@@ -65,8 +65,8 @@ class AutomationRunner {
       await SchedulerBridge.cancelAlarm(id);
       return;
     }
-    // Les alarmes jouent en fondu (réveil en douceur) quand le réglage est
-    // actif : l'outil play lit ce flag. Le déclencheur écouteurs passe par
+    // Les alarmes jouent toujours en fondu (réveil en douceur) : l'outil
+    // play lit ce flag. Le déclencheur écouteurs passe par
     // onHeadphonesConnected, pas par ici — pas de fondu pour lui.
     final args = Map<String, Object?>.of(action.args);
     args['fadeIn'] = true;
