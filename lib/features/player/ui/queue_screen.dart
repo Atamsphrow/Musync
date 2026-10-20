@@ -78,6 +78,7 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
   bool _extentMeasured = false;
 
   void _reportRowExtent(double extent) {
+    if (_reorderActive) return;
     if (extent <= 0 || (extent - _rowExtent).abs() < 0.5) return;
     _rowExtent = extent;
     if (!_extentMeasured) {
@@ -93,8 +94,11 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
 
   final ScrollController _scrollController = ScrollController();
 
-  /// On the current track's row, so it can be scrolled into view exactly.
-  final GlobalKey _currentRowKey = GlobalKey();
+  /// True while a reorder drag is in flight. Extent reports are ignored
+  /// then: the drag proxy is a second build of a row, and letting its
+  /// (possibly distorted) measure feed back into [_rowExtent] mid-drag
+  /// would rebuild the list under the user's finger.
+  bool _reorderActive = false;
 
   /// Whether the « aller au morceau en cours » button shows: the current
   /// track is estimated outside the visible window.
@@ -268,11 +272,13 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
 
   /// Brings the current track into view, centred when possible.
   ///
-  /// Two steps: scroll to the row's offset (exact, now that the row height
-  /// is measured rather than guessed), then let the row itself settle via
-  /// `ensureVisible`. The animated scroll is awaited first: firing the
-  /// correction on the next frame raced the animation — the row was not
-  /// built yet at the far end, so nothing corrected the landing.
+  /// Pure offset math, exact because the row height is measured rather
+  /// than guessed. There is deliberately no `ensureVisible` step: it
+  /// needed a GlobalKey on the current row, and a GlobalKey inside a
+  /// reorderable row corrupts the drag — the proxy builds a second copy
+  /// of the subtree, the key's element is stolen by the proxy, and the
+  /// dragged copy of the playing track renders at a wrong height,
+  /// overlapping its neighbours.
   Future<void> _scrollToCurrent({bool animated = true}) async {
     if (!mounted || !_scrollController.hasClients) return;
     final service = ref.read(audioPlayerServiceProvider);
@@ -294,18 +300,7 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
         _scrollController.jumpTo(target);
       }
     }
-    if (!mounted || !_scrollController.hasClients) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final rowContext = _currentRowKey.currentContext;
-      if (!mounted || rowContext == null) return;
-      Scrollable.ensureVisible(
-        rowContext,
-        alignment: 0.5,
-        duration: animated ? const Duration(milliseconds: 200) : Duration.zero,
-        curve: Curves.easeOutCubic,
-      );
-      _updateLocateButton();
-    });
+    _updateLocateButton();
   }
 
   /// F6 hook: mirrors the player's queue into the active named queue, so the
@@ -421,6 +416,8 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
               buildDefaultDragHandles: false,
               scrollController: _scrollController,
               itemCount: queue.length,
+              onReorderStart: (_) => _reorderActive = true,
+              onReorderEnd: (_) => _reorderActive = false,
               onReorderItem: _reorder,
               itemBuilder: (context, index) {
                 final song = queue[index];
@@ -436,7 +433,6 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
                   child: _RowExtentProbe(
                     onExtent: _reportRowExtent,
                     child: Material(
-                    key: isCurrent ? _currentRowKey : null,
                     color: isCurrent
                         ? scheme.primaryContainer.withValues(alpha: 0.45)
                         : Colors.transparent,
