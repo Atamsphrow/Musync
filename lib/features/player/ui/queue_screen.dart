@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/features/library/data/models/song.dart';
@@ -24,7 +25,11 @@ class QueueScreen extends StatelessWidget {
       body: SafeArea(
         top: false,
         child: QueueListBody(
-          onSwipeLeft: () => Navigator.of(context).maybePop(),
+          // Swipe left back to the player, as before — a route cannot
+          // follow the finger, so the pop fires on release.
+          onDragSwipeEnd: (dx, velocityX) {
+            if (dx <= -60) Navigator.of(context).maybePop();
+          },
         ),
       ),
     );
@@ -34,12 +39,25 @@ class QueueScreen extends StatelessWidget {
 /// The queue content itself, without the Scaffold: shared by the [QueueScreen]
 /// route and the now-playing screen's swipe-in panel.
 class QueueListBody extends ConsumerStatefulWidget {
-  /// Balayage vers la gauche sur la liste : retour à la lecture en cours.
-  /// Fourni par l'hôte (le panneau ferme le panneau, l'écran dépile la
-  /// route) — la liste elle-même ne navigue pas.
-  final VoidCallback? onSwipeLeft;
+  /// Balayage horizontal sur la liste, rapporté à l'hôte : la liste
+  /// elle-même ne navigue pas et ne déplace rien.
+  ///
+  /// Le geste n'est rapporté qu'une fois franchement horizontal (voir le
+  /// suivi dans le State) : [onDragSwipeStart] au début, [onDragSwipeUpdate]
+  /// avec le déplacement cumulé pendant le geste, [onDragSwipeEnd] avec le
+  /// déplacement total et la vélocité horizontale au relâcher. Le panneau
+  /// coulissant suit le doigt avec (comme le balayage aller), l'écran de
+  /// file se contente de dépiler sa route à la fin.
+  final VoidCallback? onDragSwipeStart;
+  final void Function(double dx, double dy)? onDragSwipeUpdate;
+  final void Function(double dx, double velocityX)? onDragSwipeEnd;
 
-  const QueueListBody({super.key, this.onSwipeLeft});
+  const QueueListBody({
+    super.key,
+    this.onDragSwipeStart,
+    this.onDragSwipeUpdate,
+    this.onDragSwipeEnd,
+  });
 
   @override
   ConsumerState<QueueListBody> createState() => _QueueListBodyState();
@@ -82,41 +100,75 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
   /// track is estimated outside the visible window.
   bool _showLocateButton = false;
 
-  // ── Balayage gauche = retour à la lecture en cours ──
+  // ── Balayage horizontal sur la liste, rapporté à l'hôte ──
   //
   // Observed through a Listener, outside the gesture arena: the ≡
   // handle's drag listener owns the gestures that start on a row, so a
-  // GestureDetector here would never win a leftward drag.
+  // GestureDetector here would never win a leftward drag. The host is
+  // only called once the drag is unmistakably horizontal — engaging
+  // earlier would make the slide panel wobble along with every vertical
+  // scroll of the list.
   int? _trackedPointer;
   double _swipeDx = 0;
   double _swipeDy = 0;
+  bool _swipeEngaged = false;
+
+  /// Displacement at engagement: updates are reported relative to it, so
+  /// the host's follow starts at zero instead of jumping by the ~24 px
+  /// the drag needed to prove itself horizontal. The end callback still
+  /// gets the total displacement.
+  double _engagedDx = 0;
+  double _engagedDy = 0;
+  VelocityTracker? _velocityTracker;
 
   void _onPointerDown(PointerDownEvent event) {
     if (_trackedPointer != null) return;
     _trackedPointer = event.pointer;
     _swipeDx = 0;
     _swipeDy = 0;
+    _swipeEngaged = false;
+    _velocityTracker = VelocityTracker.withKind(event.kind)
+      ..addPosition(event.timeStamp, event.position);
   }
 
   void _onPointerMove(PointerMoveEvent event) {
     if (event.pointer != _trackedPointer) return;
     _swipeDx += event.delta.dx;
     _swipeDy += event.delta.dy;
+    _velocityTracker?.addPosition(event.timeStamp, event.position);
+    if (!_swipeEngaged) {
+      if (_swipeDx.abs() < 24 ||
+          _swipeDx.abs() < 1.5 * _swipeDy.abs()) {
+        return;
+      }
+      _swipeEngaged = true;
+      _engagedDx = _swipeDx;
+      _engagedDy = _swipeDy;
+      widget.onDragSwipeStart?.call();
+    }
+    widget.onDragSwipeUpdate?.call(
+      _swipeDx - _engagedDx,
+      _swipeDy - _engagedDy,
+    );
   }
 
   void _onPointerUp(PointerUpEvent event) {
     if (event.pointer != _trackedPointer) return;
     _trackedPointer = null;
-    final callback = widget.onSwipeLeft;
-    if (callback != null &&
-        _swipeDx <= -60 &&
-        _swipeDx.abs() >= 1.5 * _swipeDy.abs()) {
-      callback();
-    }
+    if (!_swipeEngaged) return;
+    _swipeEngaged = false;
+    final velocity =
+        _velocityTracker?.getVelocity().pixelsPerSecond.dx ?? 0;
+    widget.onDragSwipeEnd?.call(_swipeDx, velocity);
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
-    if (event.pointer == _trackedPointer) _trackedPointer = null;
+    if (event.pointer != _trackedPointer) return;
+    _trackedPointer = null;
+    if (!_swipeEngaged) return;
+    _swipeEngaged = false;
+    // Settle whatever the drag was driving, as if released still.
+    widget.onDragSwipeEnd?.call(_swipeDx, 0);
   }
 
   // ── Poignée ≡ : glisser à droite = retirer (comme Musicolet) ──
