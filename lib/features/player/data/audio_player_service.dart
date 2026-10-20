@@ -11,7 +11,6 @@ import 'package:musync/features/player/data/artwork_cache.dart';
 import 'package:musync/features/player/data/last_song_store.dart';
 import 'package:musync/features/player/data/playback_state_store.dart';
 import 'package:musync/features/player/data/volume_fade.dart';
-import 'package:musync/features/settings/data/playback_settings.dart';
 
 /// Wraps [AudioPlayer] and owns the playback queue.
 ///
@@ -105,21 +104,18 @@ class AudioPlayerService {
       });
       // just_audio does not handle audio focus itself: without this listener
       // the music kept playing over phone calls. Pause when the interruption
-      // begins; auto-resume when it ends if the user enabled it (réglage
-      // "reprise auto après un appel") and the track was playing before.
+      // begins; resume when it ends if the track was playing before —
+      // comportement intégré, sans réglage.
       _interruptionSubscription =
-          session.interruptionEventStream.listen((event) async {
+          session.interruptionEventStream.listen((event) {
         if (event.begin && _player.playing) {
           _wasPlayingBeforeInterruption = true;
           unawaited(pause());
         } else if (!event.begin && _wasPlayingBeforeInterruption) {
           _wasPlayingBeforeInterruption = false;
           if (_player.playing) return;
-          final settings = await PlaybackSettingsStore().load();
-          if (settings.autoResumeAfterCall) {
-            DebugLog.instance.info('Player', 'reprise auto après interruption');
-            unawaited(_player.play());
-          }
+          DebugLog.instance.info('Player', 'reprise auto après interruption');
+          unawaited(_player.play());
         }
       });
     } catch (e) {
