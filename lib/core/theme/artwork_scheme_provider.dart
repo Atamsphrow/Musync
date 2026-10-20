@@ -36,12 +36,19 @@ class ArtworkSchemeRequest {
 /// Returns null when the track has no embedded artwork, or when the image
 /// can't be decoded — callers fall back to the app-wide scheme in that case.
 ///
-/// Kept `autoDispose` on purpose: quantization is expensive, so the result is
-/// cached for as long as the player keeps watching this song, and released as
-/// soon as the track changes. That bounds memory to the tracks on screen
-/// rather than growing with the size of the library.
-final artworkSchemeProvider = FutureProvider.autoDispose
-    .family<ColorScheme?, ArtworkSchemeRequest>((ref, request) async {
+/// NOT autoDispose, deliberately: a [ColorScheme] is a few dozen colour
+/// values — nothing — while computing one costs a MediaStore round-trip
+/// plus a decode and a quantization. When this was autoDispose, every
+/// opening of the player recomputed it from scratch, and the result landed
+/// mid-transition: the whole screen re-themed itself while it was still
+/// sliding up, which read as the expansion freezing halfway. Cached for
+/// the session instead, and prewarmed on every track change (see
+/// `main.dart`), so the player opens with its tint already known.
+final artworkSchemeProvider =
+    FutureProvider.family<ColorScheme?, ArtworkSchemeRequest>((
+      ref,
+      request,
+    ) async {
       final scanner = ref.watch(musicScannerProvider);
 
       final Uint8List? bytes = await scanner.getArtwork(request.songId);
