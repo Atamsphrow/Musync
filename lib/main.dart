@@ -15,6 +15,7 @@ import 'core/services/debug_log.dart';
 import 'core/utils/snackbar.dart';
 import 'core/services/error_capture.dart';
 import 'core/theme/app_theme.dart';
+import 'core/theme/artwork_scheme_provider.dart';
 import 'features/bubble/providers/bubble_provider.dart';
 import 'features/bubble/ui/lyrics_bubble.dart';
 import 'features/player/data/audio_player_service.dart';
@@ -203,6 +204,17 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
     // écouté assez longtemps se voit proposer une version synchronisée,
     // écrite sans confirmation si la correspondance est sûre.
     ref.read(backgroundLyricsServiceProvider).start();
+    // Ouverture du lecteur sans à-coup : le schéma de couleurs dérivé de
+    // la pochette est calculé dès que le morceau change, pas au moment où
+    // l'écran monte. Quand il arrivait en pleine transition, tout l'écran
+    // se re-thémait d'un coup et l'agrandissement semblait se figer à
+    // mi-course. L'app est sombre uniquement : la luminosité de la requête
+    // est toujours Brightness.dark, comme dans l'écran de lecture.
+    // `fireImmediately` couvre le morceau déjà en cours au démarrage.
+    ref.listenManual(currentSongProvider, (previous, next) {
+      if (next == null) return;
+      unawaited(warmArtworkScheme(ref, next.id));
+    }, fireImmediately: true);
   }
 
   @override
@@ -270,6 +282,23 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
         );
       },
     );
+  }
+}
+
+/// Computes (and thereby caches) the artwork colour scheme for [songId]
+/// ahead of the player opening. Errors are the provider's own business —
+/// it returns null on undecodable art — so anything still escaping is
+/// swallowed here: a failed prewarm must never surface, the player will
+/// simply compute the scheme itself, as before.
+Future<void> warmArtworkScheme(WidgetRef ref, int songId) async {
+  try {
+    await ref.read(
+      artworkSchemeProvider(
+        ArtworkSchemeRequest(songId: songId, brightness: Brightness.dark),
+      ).future,
+    );
+  } catch (_) {
+    // Deliberately silent: see above.
   }
 }
 
