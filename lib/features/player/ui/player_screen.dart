@@ -93,9 +93,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   /// belong to whoever else might want them.
   static const _queueSwipeVelocity = 500.0;
 
-  /// The queue panel slides in from the right and follows the finger, like
-  /// Musicolet: 0 = hidden off-screen, 1 = fully open. Driven directly by
-  /// the drag, snapped open/closed on release.
+  /// The queue panel and this page slide together, like Musicolet: the
+  /// panel enters from the left and pushes the page right, in lockstep.
+  /// 0 = panel hidden off-screen left, page in place; 1 = panel fully
+  /// open, page fully pushed off-screen right. Driven directly by the
+  /// drag, snapped open/closed on release.
   late final AnimationController _queueController;
 
   /// Horizontal distance dragged during the current gesture (px, + = right).
@@ -299,8 +301,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         backgroundColor: scheme.surface,
         body: Stack(
           children: [
-            Transform.translate(
-              offset: Offset(0, _dragOffset),
+            // Musicolet-style push: the page itself slides right, in
+            // lockstep with the queue panel entering from the left — the
+            // two tile the screen instead of one covering the other.
+            // AnimatedBuilder with the page as `child`, so a drag tick
+            // rebuilds only this Transform, not the page under it.
+            AnimatedBuilder(
+              animation: _queueController,
+              builder: (context, child) {
+                final width = MediaQuery.sizeOf(context).width;
+                return Transform.translate(
+                  offset: Offset(
+                    width * _queueController.value,
+                    _dragOffset,
+                  ),
+                  child: child,
+                );
+              },
               child: SafeArea(
                 child: Column(
                   children: [
@@ -367,7 +384,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           ),
         ),
       ),
-            // The queue slides in from the right and follows the finger.
+            // The queue panel: enters from the left, pushing the page.
             _QueueSlidePanel(
               controller: _queueController,
               onClose: _closeQueue,
