@@ -110,38 +110,52 @@ final lyricsStatusCountsProvider = Provider<Map<LyricsStatus, int?>>((ref) {
   return {for (final entry in grouped.entries) entry.key: entry.value.length};
 });
 
-/// The library after both filters.
+/// One tab of the library after the search filter.
+///
+/// Parameterised by tab rather than reading [libraryTabProvider]: the three
+/// tabs now live side by side in a `TabBarView`, so each page watches its own
+/// slice while the user swipes between them.
 ///
 /// Shows the song list immediately while the lyrics statuses load in the
 /// background: blocking the whole catalogue on a 1500-file scan made the
 /// app feel slow to open. While statuses are pending, the tab filter is
 /// bypassed (all songs shown) and the tab counts show "…"; once the scan
-/// lands, the selected tab's filter applies as before.
+/// lands, each tab's filter applies as before.
+final filteredSongsForTabProvider =
+    Provider.family<AsyncValue<List<Song>>, LyricsStatus>((ref, tab) {
+      final grouped = ref.watch(songsByStatusProvider);
+      // Folded once here, not once per song.
+      final query = foldForSearch(ref.watch(librarySearchProvider).trim());
+      // Watched here rather than inside the branch below, so the dependency
+      // does not appear and disappear as the box is typed into and cleared.
+      final keys = ref.watch(_searchKeysProvider);
+      // Fallback while statuses load: the raw song list, unfiltered by tab.
+      final songsAsync = ref.watch(songListProvider);
+
+      List<Song> applyQuery(List<Song> songs) {
+        if (query.isEmpty) return songs;
+        return [
+          for (final song in songs)
+            if ((keys[song.filePath] ?? '').contains(query)) song,
+        ];
+      }
+
+      return grouped.when(
+        data: (byStatus) => AsyncValue.data(
+          applyQuery(byStatus[tab] ?? const <Song>[]),
+        ),
+        // Statuses still scanning: show everything now, filter when ready.
+        loading: () => songsAsync.whenData(applyQuery),
+        error: (e, st) => AsyncValue.error(e, st),
+      );
+    });
+
+/// The library after both filters, for whichever tab is selected.
+///
+/// Kept for the readers that only care about the visible tab (the app bar's
+/// batch action, the locate routine); the tab pages themselves watch
+/// [filteredSongsForTabProvider] directly.
 final filteredSongsProvider = Provider<AsyncValue<List<Song>>>((ref) {
-  final grouped = ref.watch(songsByStatusProvider);
-  // Folded once here, not once per song.
-  final query = foldForSearch(ref.watch(librarySearchProvider).trim());
   final tab = ref.watch(libraryTabProvider);
-  // Watched here rather than inside the branch below, so the dependency does
-  // not appear and disappear as the box is typed into and cleared.
-  final keys = ref.watch(_searchKeysProvider);
-  // Fallback while statuses load: the raw song list, unfiltered by tab.
-  final songsAsync = ref.watch(songListProvider);
-
-  List<Song> applyQuery(List<Song> songs) {
-    if (query.isEmpty) return songs;
-    return [
-      for (final song in songs)
-        if ((keys[song.filePath] ?? '').contains(query)) song,
-    ];
-  }
-
-  return grouped.when(
-    data: (byStatus) => AsyncValue.data(
-      applyQuery(byStatus[tab] ?? const <Song>[]),
-    ),
-    // Statuses still scanning: show everything now, filter when ready.
-    loading: () => songsAsync.whenData(applyQuery),
-    error: (e, st) => AsyncValue.error(e, st),
-  );
+  return ref.watch(filteredSongsForTabProvider(tab));
 });
