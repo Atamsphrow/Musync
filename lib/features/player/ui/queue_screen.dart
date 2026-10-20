@@ -6,10 +6,10 @@ import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/providers/named_queue_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 
-/// The player's live queue: reorder by the ≡ handle, swipe a track right
-/// to remove it, swipe left to go back to the player, tap one to play it.
-/// Opened from the now-playing screen (wired by the coordinator); this
-/// widget only owns its own content.
+/// The player's live queue: the ≡ handle moves a track (drag up/down) or
+/// removes it (drag right), swipe left to go back to the player, tap one
+/// to play it. Opened from the now-playing screen (wired by the
+/// coordinator); this widget only owns its own content.
 class QueueScreen extends StatelessWidget {
   const QueueScreen({super.key});
 
@@ -62,8 +62,8 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
 
   // ── Balayage gauche = retour à la lecture en cours ──
   //
-  // Observed through a Listener, outside the gesture arena: the rows own
-  // the horizontal arena (Dismissible vers la droite, poignée ≡), so a
+  // Observed through a Listener, outside the gesture arena: the ≡
+  // handle's drag listener owns the gestures that start on a row, so a
   // GestureDetector here would never win a leftward drag.
   int? _trackedPointer;
   double _swipeDx = 0;
@@ -95,6 +95,62 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
 
   void _onPointerCancel(PointerCancelEvent event) {
     if (event.pointer == _trackedPointer) _trackedPointer = null;
+  }
+
+  // ── Poignée ≡ : glisser à droite = retirer (comme Musicolet) ──
+  //
+  // La poignée pilote le déplacement vertical via
+  // ReorderableDragStartListener ; ce suivi observe le même geste et
+  // détecte le glissement horizontal franc vers la droite. Le retrait
+  // est différé jusqu'à la fin de l'animation de dépôt du drag —
+  // retirer la ligne pendant cette animation casse le drag en cours.
+  int? _handlePointer;
+  Song? _handleSong;
+  double _handleDx = 0;
+  double _handleDy = 0;
+
+  void _handleDragStart(PointerDownEvent event, Song song) {
+    _handlePointer = event.pointer;
+    _handleSong = song;
+    _handleDx = 0;
+    _handleDy = 0;
+  }
+
+  void _handleDragMove(PointerMoveEvent event) {
+    if (event.pointer != _handlePointer) return;
+    _handleDx += event.delta.dx;
+    _handleDy += event.delta.dy;
+  }
+
+  void _handleDragEnd(PointerUpEvent event) {
+    if (event.pointer != _handlePointer) return;
+    _handlePointer = null;
+    final song = _handleSong;
+    _handleSong = null;
+    if (song == null) return;
+    if (_handleDx >= 120 && _handleDx.abs() > _handleDy.abs()) {
+      Future.delayed(const Duration(milliseconds: 320), () {
+        if (mounted) _removeSong(song);
+      });
+    }
+  }
+
+  void _handleDragCancel(PointerCancelEvent event) {
+    if (event.pointer == _handlePointer) {
+      _handlePointer = null;
+      _handleSong = null;
+    }
+  }
+
+  /// Retire [song] où qu'il soit rendu dans la file — le drag qui a
+  /// déclenché le retrait peut aussi l'avoir réordonné entre-temps,
+  /// donc jamais d'index capturé à l'avance. `identical` distingue deux
+  /// occurrences du même morceau.
+  Future<void> _removeSong(Song song) async {
+    final queue = ref.read(audioPlayerServiceProvider).queue;
+    final index = queue.indexWhere((s) => identical(s, song));
+    if (index < 0) return;
+    await _remove(index, song);
   }
 
   @override
@@ -245,7 +301,7 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
     final currentIndex = service.currentIndex;
 
     // Listener, hors gesture arena : il observe le balayage gauche sans
-    // voler leurs gestes aux lignes (Dismissible à droite, poignée ≡).
+    // voler leurs gestes aux lignes (la poignée ≡ garde les siens).
     return Listener(
       onPointerDown: _onPointerDown,
       onPointerMove: _onPointerMove,
@@ -297,33 +353,28 @@ class _QueueListBodyState extends ConsumerState<QueueListBody> {
                 // (Song equality is by id alone).
                 final key =
                     ValueKey('queue_${song.id}_${identityHashCode(song)}');
-                return Dismissible(
+                return KeyedSubtree(
                   key: key,
-                  // Glisser vers la DROITE pour retirer ; vers la gauche
-                  // est réservé au retour à la lecture en cours (le
-                  // Listener qui enveloppe la liste).
-                  direction: DismissDirection.startToEnd,
-                  background: Container(
-                    color: scheme.errorContainer,
-                    alignment: Alignment.centerLeft,
-                    padding: const EdgeInsets.only(left: 20),
-                    child: Icon(
-                      Icons.delete_outline,
-                      color: scheme.onErrorContainer,
-                    ),
-                  ),
-                  onDismissed: (_) => _remove(index, song),
                   child: Material(
                     key: isCurrent ? _currentRowKey : null,
                     color: isCurrent
                         ? scheme.primaryContainer.withValues(alpha: 0.45)
                         : Colors.transparent,
                     child: ListTile(
-                      leading: ReorderableDragStartListener(
-                        index: index,
-                        child: Icon(
-                          Icons.drag_handle,
-                          color: scheme.onSurfaceVariant,
+                      // La poignée fait tout : glisser en vertical pour
+                      // déplacer, glisser à droite pour retirer (suivi
+                      // par le Listener, hors arena, comme Musicolet).
+                      leading: Listener(
+                        onPointerDown: (e) => _handleDragStart(e, song),
+                        onPointerMove: _handleDragMove,
+                        onPointerUp: _handleDragEnd,
+                        onPointerCancel: _handleDragCancel,
+                        child: ReorderableDragStartListener(
+                          index: index,
+                          child: Icon(
+                            Icons.drag_handle,
+                            color: scheme.onSurfaceVariant,
+                          ),
                         ),
                       ),
                       title: Text(
