@@ -7,7 +7,6 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:musync/core/utils/snackbar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:on_audio_query/on_audio_query.dart';
 
 import 'package:musync/core/id3/id3_writer.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
@@ -20,6 +19,7 @@ import 'package:musync/core/services/media_store.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
+import 'package:musync/features/player/data/artwork_bytes_cache.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/player/ui/widgets/player_controls.dart';
 import 'package:musync/features/player/ui/widgets/marquee_text.dart';
@@ -677,25 +677,17 @@ class _ArtworkPane extends ConsumerWidget {
                 borderRadius: BorderRadius.circular(24),
                 child: song == null
                     ? ColoredBox(color: scheme.surfaceContainerHighest)
-                    : QueryArtworkWidget(
-                        id: song!.id,
-                        type: ArtworkType.AUDIO,
-                        // `on_audio_query` defaults to a 200 px JPEG at
-                        // quality 50. This pane is a full-width square: on a
-                        // 3x screen that is around 900 real pixels, so the
-                        // default was a thumbnail stretched to four times its
-                        // size — which is exactly why the cover looked soft
-                        // here and sharp in players that read the embedded
-                        // image at its own resolution. 1024 covers 3x on the
-                        // widest phone; asking for more would only cost
-                        // memory.
-                        size: 1024,
-                        quality: 100,
-                        artworkQuality: FilterQuality.high,
-                        artworkFit: BoxFit.cover,
-                        artworkBorder: BorderRadius.zero,
-                        keepOldArtwork: true,
-                        nullArtworkWidget: ColoredBox(
+                    // From the in-memory bytes cache, not a fresh
+                    // MediaStore query per build: the query this replaces
+                    // took ~300 ms, so opening the player showed the
+                    // placeholder, then a blank, then the cover popping
+                    // in. Playback warms the cache ahead of time.
+                    : _CachedArtwork(
+                        cache:
+                            ref.read(audioPlayerServiceProvider).artworkBytes,
+                        song: song!,
+                        fit: BoxFit.cover,
+                        placeholder: ColoredBox(
                           color: scheme.surfaceContainerHighest,
                           child: Icon(
                             Icons.music_note,
@@ -729,7 +721,11 @@ class _ArtworkPane extends ConsumerWidget {
               title: const Text('Voir en grand'),
               onTap: () {
                 Navigator.pop(sheetContext);
-                _viewFullscreen(context, target);
+                _viewFullscreen(
+                  context,
+                  ref.read(audioPlayerServiceProvider).artworkBytes,
+                  target,
+                );
               },
             ),
             ListTile(
@@ -828,25 +824,93 @@ class _ArtworkPane extends ConsumerWidget {
     }
   }
 
-  void _viewFullscreen(BuildContext context, Song target) {
+  void _viewFullscreen(
+    BuildContext context,
+    ArtworkBytesCache cache,
+    Song target,
+  ) {
     showDialog<void>(
       context: context,
       builder: (context) => Dialog(
         insetPadding: const EdgeInsets.all(16),
         child: AspectRatio(
           aspectRatio: 1,
-          child: QueryArtworkWidget(
-            id: target.id,
-            type: ArtworkType.AUDIO,
-            size: 1024,
-            quality: 100,
-            artworkQuality: FilterQuality.high,
-            artworkFit: BoxFit.contain,
-            nullArtworkWidget: const Center(
+          child: _CachedArtwork(
+            cache: cache,
+            song: target,
+            fit: BoxFit.contain,
+            placeholder: const Center(
               child: Icon(Icons.music_note, size: 96),
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// A song's full-size cover, drawn from the in-memory [ArtworkBytesCache].
+///
+/// Settled bytes render on the first frame — no placeholder flash when
+/// the player opens. While a not-yet-cached cover loads, the previous
+/// track's cover stays up (the old `keepOldArtwork` behaviour), or the
+/// placeholder when there is nothing to keep.
+class _CachedArtwork extends StatefulWidget {
+  const _CachedArtwork({
+    required this.cache,
+    required this.song,
+    required this.fit,
+    required this.placeholder,
+  });
+
+  final ArtworkBytesCache cache;
+  final Song song;
+  final BoxFit fit;
+  final Widget placeholder;
+
+  @override
+  State<_CachedArtwork> createState() => _CachedArtworkState();
+}
+
+class _CachedArtworkState extends State<_CachedArtwork> {
+  /// What is on screen now: kept while the next track's cover loads, so
+  /// the pane never blanks between tracks.
+  Uint8List? _displayed;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncWithCache();
+  }
+
+  @override
+  void didUpdateWidget(_CachedArtwork oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.song.id != widget.song.id) _syncWithCache();
+  }
+
+  void _syncWithCache() {
+    final cache = widget.cache;
+    if (cache.isResolved(widget.song)) {
+      final bytes = cache.peek(widget.song);
+      _displayed = (bytes != null && bytes.isNotEmpty) ? bytes : null;
+      return;
+    }
+    cache.load(widget.song).then((_) {
+      if (mounted) setState(_syncWithCache);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _displayed;
+    if (bytes == null) return widget.placeholder;
+    return SizedBox.expand(
+      child: Image.memory(
+        bytes,
+        fit: widget.fit,
+        filterQuality: FilterQuality.high,
+        gaplessPlayback: true,
       ),
     );
   }
