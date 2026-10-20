@@ -119,6 +119,33 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         curve: Curves.easeOutCubic,
       );
 
+  /// Panel value when the return swipe (on the queue list) started: the
+  /// drag moves the panel relative to it, exactly like the opening pull
+  /// moves it from wherever it was.
+  double _panelDragStartValue = 1;
+
+  void _onPanelDragStart() {
+    _queueController.stop();
+    _panelDragStartValue = _queueController.value;
+  }
+
+  void _onPanelDragUpdate(double dx, double dy) {
+    final width = MediaQuery.sizeOf(context).width;
+    if (width <= 0) return;
+    _queueController.value =
+        (_panelDragStartValue + dx / width).clamp(0.0, 1.0);
+  }
+
+  void _onPanelDragEnd(double dx, double velocityX) {
+    // Same snap rule as the panel header's drag: a leftward flick closes
+    // however far it got; a slow drag closes past the same point.
+    if (velocityX <= -_queueSwipeVelocity || _queueController.value < 0.6) {
+      _closeQueue();
+    } else {
+      _openQueue();
+    }
+  }
+
   void _onQueueDragStart(DragStartDetails details) {
     _queueController.stop();
     _queueDragDx = 0;
@@ -388,6 +415,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
             _QueueSlidePanel(
               controller: _queueController,
               onClose: _closeQueue,
+              onDragSwipeStart: _onPanelDragStart,
+              onDragSwipeUpdate: _onPanelDragUpdate,
+              onDragSwipeEnd: _onPanelDragEnd,
             ),
           ],
         ),
@@ -402,9 +432,19 @@ class _QueueSlidePanel extends StatelessWidget {
   final AnimationController controller;
   final VoidCallback onClose;
 
+  /// The return swipe on the list, forwarded to the screen state, which
+  /// drives [controller] with it — the panel (and the page behind it)
+  /// follow the finger back, mirroring the opening pull.
+  final VoidCallback onDragSwipeStart;
+  final void Function(double dx, double dy) onDragSwipeUpdate;
+  final void Function(double dx, double velocityX) onDragSwipeEnd;
+
   const _QueueSlidePanel({
     required this.controller,
     required this.onClose,
+    required this.onDragSwipeStart,
+    required this.onDragSwipeUpdate,
+    required this.onDragSwipeEnd,
   });
 
   @override
@@ -468,7 +508,13 @@ class _QueueSlidePanel extends StatelessWidget {
                 ),
               ),
               const Divider(height: 1),
-              Expanded(child: QueueListBody(onSwipeLeft: onClose)),
+              Expanded(
+                child: QueueListBody(
+                  onDragSwipeStart: onDragSwipeStart,
+                  onDragSwipeUpdate: onDragSwipeUpdate,
+                  onDragSwipeEnd: onDragSwipeEnd,
+                ),
+              ),
             ],
           ),
         ),
