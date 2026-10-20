@@ -468,7 +468,7 @@ class _QueueSlidePanel extends StatelessWidget {
                 ),
               ),
               const Divider(height: 1),
-              const Expanded(child: QueueListBody()),
+              Expanded(child: QueueListBody(onSwipeLeft: onClose)),
             ],
           ),
         ),
