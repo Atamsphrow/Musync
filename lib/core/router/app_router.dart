@@ -181,7 +181,13 @@ class AppRouter {
             end: Offset.zero,
           ).chain(CurveTween(curve: Curves.easeOutCubic)),
         );
-        return SlideTransition(position: offset, child: child);
+        // RepaintBoundary: the page's own repaints (marquee, seek bar,
+        // theme) stay on their layer instead of re-rasterising with
+        // every frame the transition composites.
+        return SlideTransition(
+          position: offset,
+          child: RepaintBoundary(child: child),
+        );
       },
       transitionDuration: const Duration(milliseconds: 350),
       reverseTransitionDuration: const Duration(milliseconds: 300),
