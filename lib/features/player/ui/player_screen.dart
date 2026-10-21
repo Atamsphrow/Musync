@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -209,6 +210,29 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
   bool _started = false;
 
+  /// Whether the queue panel's list has been built yet. It is NOT built
+  /// on the first frame: the panel sits fully off-screen, and its rows
+  /// were pure cost on the opening frame — with the theme lerp below,
+  /// one of the two suspects for the entrance slide freezing midway.
+  /// The list mounts on the first opening pull, or quietly just after
+  /// the entrance transition ends, whichever comes first.
+  bool _panelContentBuilt = false;
+  Timer? _panelMountTimer;
+
+  /// False for the very first frame: the artwork theme applies
+  /// instantly there. Arming the 500 ms animation only afterwards means
+  /// a scheme that resolves a beat after the push swaps the tint in one
+  /// step instead of lerping the whole tree through the entrance slide;
+  /// the animation still serves its purpose — a smooth retint when the
+  /// track changes under an already-open player.
+  bool _themeAnimArmed = false;
+
+  void _mountPanelWhenOpening() {
+    if (!_panelContentBuilt && _queueController.value > 0) {
+      setState(() => _panelContentBuilt = true);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -217,10 +241,21 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       duration: const Duration(milliseconds: 250),
       value: 0,
     );
+    _queueController.addListener(_mountPanelWhenOpening);
+    _panelMountTimer = Timer(const Duration(milliseconds: 450), () {
+      if (mounted && !_panelContentBuilt) {
+        setState(() => _panelContentBuilt = true);
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _themeAnimArmed = true);
+    });
   }
 
   @override
   void dispose() {
+    _panelMountTimer?.cancel();
+    _queueController.removeListener(_mountPanelWhenOpening);
     _queueController.dispose();
     if (_routeSubscribed) {
       _publishPlayerVisible(false);
@@ -296,7 +331,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
     return AnimatedTheme(
       data: AppTheme.fromScheme(artworkScheme ?? baseScheme),
-      duration: const Duration(milliseconds: 500),
+      duration: _themeAnimArmed
+          ? const Duration(milliseconds: 500)
+          : Duration.zero,
       child: Builder(builder: (context) => _buildContent(context, song)),
     );
   }
@@ -414,6 +451,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
             // The queue panel: enters from the left, pushing the page.
             _QueueSlidePanel(
               controller: _queueController,
+              contentBuilt: _panelContentBuilt,
               onClose: _closeQueue,
               onDragSwipeStart: _onPanelDragStart,
               onDragSwipeUpdate: _onPanelDragUpdate,
@@ -430,6 +468,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 /// open/closed on release. Same content as the [QueueScreen] route.
 class _QueueSlidePanel extends StatelessWidget {
   final AnimationController controller;
+
+  /// Whether the queue list may be built. False on the player's first
+  /// frames (see `_panelContentBuilt` in the screen state): the list is
+  /// the panel's only heavy part, and it used to be built — laid out,
+  /// scrolled to the current track — on the very frame the screen was
+  /// still sliding in, while fully off-screen.
+  final bool contentBuilt;
   final VoidCallback onClose;
 
   /// The return swipe on the list, forwarded to the screen state, which
@@ -441,6 +486,7 @@ class _QueueSlidePanel extends StatelessWidget {
 
   const _QueueSlidePanel({
     required this.controller,
+    required this.contentBuilt,
     required this.onClose,
     required this.onDragSwipeStart,
     required this.onDragSwipeUpdate,
@@ -509,11 +555,13 @@ class _QueueSlidePanel extends StatelessWidget {
               ),
               const Divider(height: 1),
               Expanded(
-                child: QueueListBody(
-                  onDragSwipeStart: onDragSwipeStart,
-                  onDragSwipeUpdate: onDragSwipeUpdate,
-                  onDragSwipeEnd: onDragSwipeEnd,
-                ),
+                child: contentBuilt
+                    ? QueueListBody(
+                        onDragSwipeStart: onDragSwipeStart,
+                        onDragSwipeUpdate: onDragSwipeUpdate,
+                        onDragSwipeEnd: onDragSwipeEnd,
+                      )
+                    : const SizedBox.expand(),
               ),
             ],
           ),
