@@ -61,9 +61,23 @@ class AudioPlayerService {
     _indexSubscription = _player.currentIndexStream.listen((index) {
       if (index != null && index >= 0 && index < _queue.length) {
         _setCurrentSong(_queue[index]);
+        // Warm the cover bytes too: _warmArtwork only runs on an
+        // explicit playSong/restore, so an automatic advance used to
+        // leave the new track's pane to fetch its cover at open time
+        // (a visible beat of placeholder). Prefetch is a no-op when
+        // the bytes are already settled.
+        _artworkBytes.prefetch(_queue[index]);
         // Track change (tap, next/prev, auto-advance, notification): the
         // restored launch needs this index, not just the song.
+        // TEMPORARY timing (the lag hunt): this persist encodes the
+        // whole queue on EVERY track change — the journal says its cost.
+        final persistSw = Stopwatch()..start();
         _persistPlaybackState();
+        DebugLog.instance.info(
+          'Perf',
+          'persist (changement de morceau) : '
+          '${persistSw.elapsedMilliseconds}ms',
+        );
       } else if (index != null) {
         // Never silent: a dropped index means _queue and just_audio disagree,
         // and the now-playing screen freezes on the old track while the audio
