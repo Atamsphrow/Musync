@@ -486,8 +486,11 @@ class BatchNotifier extends Notifier<BatchState> {
     required String artist,
     bool viaFilename = false,
   }) {
-    // Already ranked best-first by the repository.
-    final best = results.first;
+    // Ranked best-first by the repository, then picked the shared
+    // way: a synced hit before any plain one (see bestLyricsMatch) —
+    // plain is the fallback when no synced hit exists, not a rival
+    // that confidence alone may crown.
+    final best = bestLyricsMatch(results) ?? results.first;
     return BatchCandidate(
       song: song,
       match: best,
