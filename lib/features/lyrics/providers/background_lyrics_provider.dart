@@ -403,8 +403,7 @@ class BackgroundLyricsService {
   /// Best-first: the first synced hit wins, otherwise the first hit with
   /// plain text, when that is all there is.
   LyricsSearchResult? _bestMatch(List<LyricsSearchResult> results) =>
-      results.where((r) => r.hasSyncedLyrics).firstOrNull ??
-      results.where((r) => r.hasUnsyncedLyrics).firstOrNull;
+      bestLyricsMatch(results);
 
   /// The artist/title the search runs on.
   ///
