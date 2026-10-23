@@ -65,3 +65,20 @@ class LyricsSearchResult {
   /// Nothing worth embedding — filtered out before the list is shown.
   bool get isEmpty => !hasSyncedLyrics && !hasUnsyncedLyrics;
 }
+
+/// The one pick every « apply the best hit » path shares — the sweep,
+/// the batch, the AI assistant: a synced hit first, in the order the
+/// repository ranked them, since synced lyrics are the point of the
+/// app; and only when NO hit carries synced lyrics, the best
+/// plain-text one. Plain is the fallback, never a dead end — a track
+/// LRCLIB only knows in plain form still gets its words.
+///
+/// Confidence alone does not make this pick: an exact plain-only hit
+/// (LRCLIB `/get`, confidence 1.0) would otherwise outrank a synced
+/// hit that exists further down the list.
+///
+/// [results] must already be ranked best-first (the repository's
+/// `searchAll` does that). Null when the list is empty.
+LyricsSearchResult? bestLyricsMatch(List<LyricsSearchResult> results) =>
+    results.where((r) => r.hasSyncedLyrics).firstOrNull ??
+    results.where((r) => r.hasUnsyncedLyrics).firstOrNull;
