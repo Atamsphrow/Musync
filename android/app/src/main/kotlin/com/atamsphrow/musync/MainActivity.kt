@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -62,6 +63,7 @@ class MainActivity : AudioServiceActivity() {
 
     /// Held so a later intent can reach Dart without waiting to be asked.
     private var channel: MethodChannel? = null
+    private var screenChannel: MethodChannel? = null
 
     /// Id de l'action planifiée dont l'alarme vient de sonner, en attente que
     /// Dart le draine (`takeScheduledAction`). L'intent d'alarme arrive bien
@@ -126,6 +128,35 @@ class MainActivity : AudioServiceActivity() {
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 channel?.invokeMethod("openBatchReview", null)
             }, 1200)
+        }
+
+        // Keep-screen-on for the lyrics displays (player lyrics pane;
+        // the floating bubble sets the same flag on its own overlay
+        // window in the vendored overlay plugin). A window flag, not a
+        // wakelock: no permission, and Android drops it with the window.
+        screenChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            SCREEN_CHANNEL,
+        )
+        screenChannel!!.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "setKeepScreenOn" -> {
+                    val on = call.argument<Boolean>("on") ?: false
+                    runOnUiThread {
+                        if (on) {
+                            window.addFlags(
+                                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                            )
+                        } else {
+                            window.clearFlags(
+                                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                            )
+                        }
+                    }
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
         }
 
         schedulerChannel = MethodChannel(
@@ -760,6 +791,8 @@ class MainActivity : AudioServiceActivity() {
         const val MEDIA_STORE_CHANNEL = "com.atamsphrow.musync/media_store"
 
         const val SCHEDULER_CHANNEL = "com.atamsphrow.musync/scheduler"
+
+        const val SCREEN_CHANNEL = "com.atamsphrow.musync/screen"
 
         /// Miroir natif des automatisations, relu par [BootReceiver] au boot.
         /// Clés par action : `rc_<id>`, `trigger_<id>`, `label_<id>`,
