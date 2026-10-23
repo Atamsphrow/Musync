@@ -14,6 +14,7 @@ import 'package:musync/features/library/providers/catalogue_provider.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
+import 'package:musync/features/lyrics/data/sweep_memory.dart';
 import 'package:musync/features/lyrics/providers/search_provider.dart';
 import 'package:musync/features/lyrics/providers/tag_change_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
@@ -53,6 +54,11 @@ class BackgroundLyricsService {
   /// Tracks already checked this session, so a replay — or the sweep meeting
   /// the playing track — doesn't search twice.
   final Set<String> _attempted = {};
+
+  /// Confirmed « nothing exists for this track » answers, remembered
+  /// across launches (see [SweepMemory]) so a launch's sweep does not
+  /// re-ask the network — and the AI — about them every single time.
+  final SweepMemory _sweepMemory = SweepMemory();
 
   bool _started = false;
 
@@ -224,14 +230,26 @@ class BackgroundLyricsService {
     for (final song in songs) {
       if (statuses[song.filePath] == LyricsStatus.synced) continue;
       if (_attempted.contains(song.filePath)) continue;
+      // Searched at a previous launch and confirmed absent: believed
+      // for a fortnight (see SweepMemory) instead of re-queried.
+      if (await _sweepMemory.recentlyMissed(song.filePath)) continue;
       _attempted.add(song.filePath);
       // WiFi dropped mid-sweep: stop here, next launch resumes.
       if (!await MediaStore.isWifiConnected()) break;
-      if (await _searchAndWrite(song, aiFallback: aiFallback) != null) {
+      var confirmedMiss = false;
+      final outcome = await _searchAndWrite(
+        song,
+        aiFallback: aiFallback,
+        onConfirmedMiss: () => confirmedMiss = true,
+      );
+      if (outcome != null) {
         written++;
+      } else if (confirmedMiss) {
+        await _sweepMemory.markMissed(song.filePath);
       }
       await Future.delayed(_searchGap);
     }
+    await _sweepMemory.save();
 
     DebugLog.instance.info(
       'Paroles auto',
@@ -257,6 +275,7 @@ class BackgroundLyricsService {
   Future<({bool canUndo, bool synced})?> _searchAndWrite(
     Song song, {
     bool aiFallback = true,
+    void Function()? onConfirmedMiss,
   }) async {
     // A search is only as good as its query: tags first, then the filename
     // heuristic, then the AI reader as a last resort.
@@ -305,7 +324,15 @@ class BackgroundLyricsService {
         match = _bestMatch(results);
       }
     }
-    if (match == null) return null;
+    if (match == null) {
+      // The searches RAN and came back empty (tag query, plus the AI
+      // second chance when enabled): a confirmed absence, as opposed
+      // to the nulls above and below — network failure, no resolvable
+      // query, no write permission — which prove nothing. Only this
+      // point may tell the sweep memory.
+      onConfirmedMiss?.call();
+      return null;
+    }
     // Idempotent: a repeated sweep must not rewrite identical lyrics and
     // spam the Historique with no-op writes.
     try {
