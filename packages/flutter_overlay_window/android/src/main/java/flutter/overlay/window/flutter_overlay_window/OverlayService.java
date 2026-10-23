@@ -201,7 +201,11 @@ public class OverlayService extends Service implements View.OnTouchListener {
                 WindowSetup.flag | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                         | WindowManager.LayoutParams.FLAG_LAYOUT_INSET_DECOR
-                        | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                        | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
+                        // Musync: this overlay exists to be READ (the lyrics
+                        // bubble) — keep the display awake while it is shown.
+                        // The flag dies with the window when the overlay closes.
+                        | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
                 PixelFormat.TRANSLUCENT
         );
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && WindowSetup.flag == clickableFlag) {
