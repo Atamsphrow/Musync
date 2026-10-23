@@ -88,7 +88,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   /// The screen follows the finger. The first version only watched the release
   /// velocity, so nothing moved while dragging and a slow, deliberate pull did
   /// nothing at all — the gesture read as broken rather than as unavailable.
-  double _dragOffset = 0;
+  ///
+  /// A notifier (see [_onDragUpdate]): only the page's translation
+  /// listens to it, never the whole build.
+  final ValueNotifier<double> _dragOffset = ValueNotifier<double>(0);
 
   /// Minimum fling speed (logical pixels per second) for a horizontal swipe
   /// on the cover/lyrics pane. Below it, the gesture is ignored: slow drags
@@ -194,19 +197,24 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   void _onDragUpdate(DragUpdateDetails details) {
     // Downward only. Dragging up on a screen that cannot go up should do
     // nothing rather than rubber-band.
-    setState(
-      () => _dragOffset = (_dragOffset + details.delta.dy).clamp(0, 400),
-    );
+    //
+    // No setState: this fires per pointer event, and a setState rebuilt
+    // the whole screen (theme, panes, controls) for what is only the
+    // page following the finger down. The notifier feeds the same
+    // AnimatedBuilder that drives the queue panel's push.
+    _dragOffset.value =
+        (_dragOffset.value + details.delta.dy).clamp(0.0, 400.0).toDouble();
   }
 
   void _onDragEnd(DragEndDetails details) {
     final velocity = details.primaryVelocity ?? 0;
-    if (_dragOffset >= _dismissDistance || velocity >= _dismissVelocity) {
+    if (_dragOffset.value >= _dismissDistance ||
+        velocity >= _dismissVelocity) {
       Navigator.maybePop(context);
       return;
     }
     // Not far enough: snap back, so an abandoned gesture leaves no trace.
-    setState(() => _dragOffset = 0);
+    _dragOffset.value = 0;
   }
 
   bool _started = false;
@@ -287,6 +295,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   void dispose() {
     _panelMountTimer?.cancel();
     _panelContentBuilt.dispose();
+    _dragOffset.dispose();
     _queueController.removeListener(_mountPanelWhenOpening);
     _queueController.dispose();
     _openProbe?.stop();
@@ -404,13 +413,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
             // AnimatedBuilder with the page as `child`, so a drag tick
             // rebuilds only this Transform, not the page under it.
             AnimatedBuilder(
-              animation: _queueController,
+              animation: Listenable.merge([_queueController, _dragOffset]),
               builder: (context, child) {
                 final width = MediaQuery.sizeOf(context).width;
                 return Transform.translate(
                   offset: Offset(
                     width * _queueController.value,
-                    _dragOffset,
+                    _dragOffset.value,
                   ),
                   child: child,
                 );
