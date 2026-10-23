@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:musync/core/id3/id3_writer.dart';
 import 'package:musync/core/services/frame_probe.dart';
+import 'package:musync/core/services/screen_awake.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/router/app_router.dart';
 import 'package:musync/core/theme/app_theme.dart';
@@ -75,7 +76,28 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   @override
   void didPopNext() => _publishPlayerVisible(true);
 
-  void _toggleLyrics() => setState(() => _showLyrics = !_showLyrics);
+  void _toggleLyrics() {
+    setState(() => _showLyrics = !_showLyrics);
+    _syncScreenAwake();
+  }
+
+  /// Whether this screen currently holds the display awake (lyrics
+  /// pane up). Mirrors [_showLyrics]; kept as a field so dispose can
+  /// release exactly what was acquired.
+  bool _screenAwakeHeld = false;
+
+  /// Lyrics are read, not glanced at: while the lyrics pane (plain or
+  /// synced) is showing, the display stays on; the cover pane and
+  /// leaving the screen hand it back. See [ScreenAwake].
+  void _syncScreenAwake() {
+    if (_showLyrics == _screenAwakeHeld) return;
+    _screenAwakeHeld = _showLyrics;
+    if (_screenAwakeHeld) {
+      unawaited(ScreenAwake.acquire());
+    } else {
+      unawaited(ScreenAwake.release());
+    }
+  }
 
   // ── Swipe down to minimise (T8) ──
   //
@@ -296,6 +318,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _panelMountTimer?.cancel();
     _panelContentBuilt.dispose();
     _dragOffset.dispose();
+    if (_screenAwakeHeld) {
+      _screenAwakeHeld = false;
+      unawaited(ScreenAwake.release());
+    }
     _queueController.removeListener(_mountPanelWhenOpening);
     _queueController.dispose();
     _openProbe?.stop();
