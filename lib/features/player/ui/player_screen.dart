@@ -4,14 +4,13 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:musync/core/utils/snackbar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:musync/core/id3/id3_writer.dart';
-import 'package:musync/core/services/debug_log.dart';
+import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/router/app_router.dart';
 import 'package:musync/core/theme/app_theme.dart';
@@ -250,35 +249,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     return _themeData = AppTheme.fromScheme(scheme);
   }
 
-  /// TEMPORARY diagnostic (the freeze hunt): logs the build/raster cost
-  /// of this screen's first frames to the in-app journal, so the next
-  /// device verdict says WHICH side is slow instead of feeding another
-  /// round of guessing. Remove once the freeze is settled.
-  TimingsCallback? _timingsCallback;
-
-  void _logOpeningFrames() {
-    var n = 0;
-    late final TimingsCallback cb;
-    cb = (List<FrameTiming> timings) {
-      for (final t in timings) {
-        n++;
-        final b = t.buildDuration.inMilliseconds;
-        final r = t.rasterDuration.inMilliseconds;
-        DebugLog.instance.info(
-          'Perf',
-          'ouverture lecteur frame $n : build=${b}ms raster=${r}ms'
-          '${(b > 16 || r > 16) ? '  <-- LENTE' : ''}',
-        );
-        if (n >= 40) {
-          SchedulerBinding.instance.removeTimingsCallback(cb);
-          if (identical(_timingsCallback, cb)) _timingsCallback = null;
-          return;
-        }
-      }
-    };
-    _timingsCallback = cb;
-    SchedulerBinding.instance.addTimingsCallback(cb);
-  }
+  /// TEMPORARY diagnostic (the freeze hunt): the slow frames of this
+  /// screen's entrance, in the in-app journal (tag « Perf »).
+  FrameProbe? _openProbe;
 
   void _mountPanelWhenOpening() {
     if (!_panelContentBuilt.value && _queueController.value > 0) {
@@ -307,7 +280,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       // changes, and that change triggers a build that reads it.
       _themeAnimArmed = true;
     });
-    _logOpeningFrames();
+    _openProbe = FrameProbe.start('ouverture lecteur', frames: 40);
   }
 
   @override
@@ -316,11 +289,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _panelContentBuilt.dispose();
     _queueController.removeListener(_mountPanelWhenOpening);
     _queueController.dispose();
-    final timings = _timingsCallback;
-    if (timings != null) {
-      SchedulerBinding.instance.removeTimingsCallback(timings);
-      _timingsCallback = null;
-    }
+    _openProbe?.stop();
     if (_routeSubscribed) {
       _publishPlayerVisible(false);
       appRouteObserver.unsubscribe(this);
