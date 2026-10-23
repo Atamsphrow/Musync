@@ -2,6 +2,7 @@
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/utils/text_search.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
 import 'package:musync/features/library/data/models/song.dart';
@@ -19,9 +20,19 @@ final lyricsStatusProvider = FutureProvider<Map<String, LyricsStatus>>((
   ref,
 ) async {
   final songs = await ref.watch(songListProvider.future);
-  return ref
+  // TEMPORARY timing (the lag hunt): on a cold start the scanner's
+  // in-memory cache is empty, so this walks every file; the journal
+  // entry says how long the library's first pass really takes.
+  final sw = Stopwatch()..start();
+  final result = await ref
       .read(lyricsStatusScannerProvider)
       .statusOfAll(songs.map((song) => song.filePath));
+  DebugLog.instance.info(
+    'Perf',
+    'statuts paroles : ${songs.length} fichiers en '
+    '${sw.elapsedMilliseconds}ms',
+  );
+  return result;
 });
 
 /// The live filter. Matched against title and artist, case-insensitively.
