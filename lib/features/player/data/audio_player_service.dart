@@ -6,6 +6,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:musync/core/services/audio_backend_check.dart';
 import 'package:musync/core/services/debug_log.dart';
+import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/data/artwork_bytes_cache.dart';
 import 'package:musync/features/player/data/artwork_cache.dart';
@@ -328,6 +329,15 @@ class AudioPlayerService {
     // time the source is built.
     unawaited(_warmArtwork(resolvedIndex));
 
+    // TEMPORARY timing (the lag hunt): building one AudioSource per
+    // queued track is synchronous main-isolate work, and the persist
+    // below encodes the whole queue — the journal entries split the
+    // three costs so they are numbers, not suspicions.
+    final buildSw = Stopwatch()..start();
+    final children = [for (final s in _queue) _toSource(s)];
+    final tBuild = buildSw.elapsedMilliseconds;
+    final sourceSw = Stopwatch()..start();
+    final probe = FrameProbe.start('playSong', frames: 30);
     try {
       await _player.setAudioSource(
         ConcatenatingAudioSource(
@@ -336,11 +346,12 @@ class AudioPlayerService {
           // reloading at each boundary — and the stale-position window the
           // lyrics bubble guards against gets shorter.
           useLazyPreparation: true,
-          children: [for (final s in _queue) _toSource(s)],
+          children: children,
         ),
         initialIndex: resolvedIndex,
       );
     } catch (_) {
+      probe.stop();
       // The new queue was announced but never loaded (corrupt/missing file):
       // put the old state back so the UI, the index subscription and the real
       // source agree again, then let the caller report the failure.
@@ -348,8 +359,18 @@ class AudioPlayerService {
       _setCurrentSong(previousSong);
       rethrow;
     }
+    DebugLog.instance.info(
+      'Perf',
+      'playSong : ${_queue.length} sources — construction ${tBuild}ms, '
+      'setAudioSource ${sourceSw.elapsedMilliseconds}ms',
+    );
     // The queue actually changed: the next launch restores all of it.
+    final persistSw = Stopwatch()..start();
     _persistPlaybackState();
+    DebugLog.instance.info(
+      'Perf',
+      'persist file : ${persistSw.elapsedMilliseconds}ms',
+    );
   }
 
   /// Prefers the caller's index, since a library list can legitimately hold the
