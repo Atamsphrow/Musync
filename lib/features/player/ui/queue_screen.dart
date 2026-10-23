@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/providers/named_queue_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
@@ -29,7 +30,12 @@ Route<void> queueScreenRoute() {
           end: Offset.zero,
         ).chain(CurveTween(curve: Curves.easeOutCubic)),
       );
-      return SlideTransition(position: offset, child: child);
+      // RepaintBoundary, like the player route: the page glides as an
+      // already-rasterised texture instead of repainting with the slide.
+      return SlideTransition(
+        position: offset,
+        child: RepaintBoundary(child: child),
+      );
     },
     transitionDuration: const Duration(milliseconds: 300),
     reverseTransitionDuration: const Duration(milliseconds: 250),
@@ -46,7 +52,16 @@ class QueueScreen extends StatefulWidget {
 class _QueueScreenState extends State<QueueScreen>
     with SingleTickerProviderStateMixin {
   /// How far the page is dragged right by the return swipe.
-  double _dragOffset = 0;
+  ///
+  /// A notifier, NOT a double + setState: the drag reports an event per
+  /// pointer move and the settle an update per frame, and a setState
+  /// here rebuilt the whole screen — Scaffold, list, every visible
+  /// row — for what is only a horizontal translation. The
+  /// ValueListenableBuilder in [build] now moves just the Transform.
+  final ValueNotifier<double> _dragOffset = ValueNotifier<double>(0);
+
+  /// TEMPORARY diagnostic (the lag hunt): this screen's slow frames.
+  FrameProbe? _openProbe;
 
   /// Drives the page out (on a committed return swipe) or back to rest.
   late final AnimationController _settleAnim;
@@ -62,22 +77,23 @@ class _QueueScreenState extends State<QueueScreen>
       duration: const Duration(milliseconds: 180),
     );
     _settleAnim.addListener(() {
-      setState(() {
-        _dragOffset = _settleFrom +
-            (_settleTarget - _settleFrom) *
-                Curves.easeOutCubic.transform(_settleAnim.value);
-      });
+      _dragOffset.value = _settleFrom +
+          (_settleTarget - _settleFrom) *
+              Curves.easeOutCubic.transform(_settleAnim.value);
     });
     _settleAnim.addStatusListener((status) {
       if (status != AnimationStatus.completed || !_settlePops) return;
       _settlePops = false;
       Navigator.of(context).pop();
     });
+    _openProbe = FrameProbe.start('ouverture file', frames: 40);
   }
 
   @override
   void dispose() {
+    _openProbe?.stop();
     _settleAnim.dispose();
+    _dragOffset.dispose();
     super.dispose();
   }
 
@@ -87,13 +103,13 @@ class _QueueScreenState extends State<QueueScreen>
     // Rightward only: the page follows the finger out; a leftward drag
     // on the list does nothing here.
     if (dx <= 0) return;
-    setState(() => _dragOffset = dx);
+    _dragOffset.value = dx;
   }
 
   void _onReturnDragEnd(double dx, double velocityX) {
     final width = MediaQuery.sizeOf(context).width;
     final commit = dx >= 90 || velocityX >= 500;
-    _settleFrom = _dragOffset;
+    _settleFrom = _dragOffset.value;
     _settleTarget = commit ? width : 0;
     _settlePops = commit;
     _settleAnim.forward(from: 0);
@@ -102,15 +118,17 @@ class _QueueScreenState extends State<QueueScreen>
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Transform.translate(
-      offset: Offset(_dragOffset, 0),
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('File d\u2019attente'),
-        ),
-        backgroundColor: scheme.surface,
-        body: SafeArea(
-          top: false,
+    // Built once per build and handed to the ValueListenableBuilder as
+    // its child: a drag tick rebuilds only the Transform, never this
+    // Scaffold or the list inside it.
+    final page = Scaffold(
+      appBar: AppBar(
+        title: const Text('File d\u2019attente'),
+      ),
+      backgroundColor: scheme.surface,
+      body: SafeArea(
+        top: false,
+        child: _AfterTransition(
           child: QueueListBody(
             onDragSwipeStart: _onReturnDragStart,
             onDragSwipeUpdate: _onReturnDragUpdate,
@@ -119,7 +137,61 @@ class _QueueScreenState extends State<QueueScreen>
         ),
       ),
     );
+    return ValueListenableBuilder<double>(
+      valueListenable: _dragOffset,
+      child: page,
+      builder: (context, dx, child) =>
+          Transform.translate(offset: Offset(dx, 0), child: child),
+    );
   }
+}
+
+/// Shows [child] only once the route's entrance transition completes:
+/// the queue list is this screen's heavy part, and building it during
+/// the slide-in paid its layout on the very frames that should only
+/// have been moving the page — the same disease the player screen's
+/// lazy panel cured. The page enters with its title bar and an empty
+/// body for ~300 ms, then the list appears.
+class _AfterTransition extends StatefulWidget {
+  const _AfterTransition({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_AfterTransition> createState() => _AfterTransitionState();
+}
+
+class _AfterTransitionState extends State<_AfterTransition> {
+  bool _ready = false;
+  Animation<double>? _animation;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_ready || _animation != null) return;
+    final animation = ModalRoute.of(context)?.animation;
+    if (animation == null || animation.status == AnimationStatus.completed) {
+      _ready = true;
+      return;
+    }
+    _animation = animation..addStatusListener(_onStatus);
+  }
+
+  void _onStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed && mounted) {
+      setState(() => _ready = true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _animation?.removeStatusListener(_onStatus);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      _ready ? widget.child : const SizedBox.expand();
 }
 
 /// The queue content itself, without the Scaffold: shared by the [QueueScreen]
