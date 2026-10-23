@@ -69,10 +69,16 @@ class BackgroundLyricsService {
       _onSongChanged(previous, next);
     });
     _onSongChanged(null, _ref.read(currentSongProvider));
-    // The whole-library sweep, once per launch, WiFi only. No startup delay:
-    // the sweep awaits the song list and the status scan first, so it
-    // naturally starts the moment the library is ready.
-    unawaited(_sweepLibrary());
+    // The whole-library sweep, once per launch, WiFi only. It used to
+    // start the moment the library was ready — which is also the moment
+    // the status scan walks every file and the first screens build, so
+    // its network calls and tag writes competed with the user's first
+    // navigation. It now waits out the launch: 45 s changes nothing for
+    // a once-per-launch sweep and leaves the opening seconds alone.
+    unawaited(() async {
+      await Future<void>.delayed(const Duration(seconds: 45));
+      await _sweepLibrary();
+    }());
     // ... and once a day with the app closed: WiFi, battery not low.
     unawaited(_registerBackgroundSweep());
   }
