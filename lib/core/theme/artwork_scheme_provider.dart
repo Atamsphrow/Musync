@@ -55,10 +55,21 @@ final artworkSchemeProvider =
       if (bytes == null || bytes.isEmpty) return null;
 
       try {
-        return await ColorScheme.fromImageProvider(
+        // TEMPORARY timing (the lag hunt): the decode + quantization
+        // cost of a track change. Wall time overstates UI blocking —
+        // the FrameProbe gap figures say whether the main isolate
+        // actually stalled — but a big number here is the first hint.
+        final schemeSw = Stopwatch()..start();
+        final scheme = await ColorScheme.fromImageProvider(
           provider: MemoryImage(bytes),
           brightness: request.brightness,
         );
+        DebugLog.instance.info(
+          'Perf',
+          'schéma pochette (morceau ${request.songId}) : '
+          '${schemeSw.elapsedMilliseconds}ms',
+        );
+        return scheme;
       } catch (error) {
         // Corrupt or unsupported artwork — fall back to the app-wide scheme.
         //
