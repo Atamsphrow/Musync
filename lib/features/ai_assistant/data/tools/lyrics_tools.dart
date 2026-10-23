@@ -72,7 +72,9 @@ class FetchLyricsTool extends AiTool {
         'Aucune parole trouvée pour ${songLabel(song)}.',
       );
     }
-    final best = results.first;
+    // The shared pick: synced first, plain when no synced hit exists
+    // (see bestLyricsMatch).
+    final best = bestLyricsMatch(results) ?? results.first;
     try {
       await repository.embedLyrics(
         song.filePath,
