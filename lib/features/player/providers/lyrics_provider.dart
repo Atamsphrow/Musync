@@ -83,6 +83,10 @@ final _currentSongMtimeProvider = StreamProvider<int>((ref) async* {
   var lastHash = await lyricsHash();
   var lastSidecar = await sidecarMtime();
   await for (final _ in Stream.periodic(const Duration(seconds: 2))) {
+    // Foreground only: in the background this poll (a file stat, a
+    // lyrics-frame read, two sidecar checks every 2 s) buys nothing —
+    // refreshLyricsOnForeground re-reads everything on resume anyway.
+    if (!ref.read(appForegroundProvider)) continue;
     final currentMtime = await mtime();
     final currentHash = await lyricsHash();
     final currentSidecar = await sidecarMtime();
