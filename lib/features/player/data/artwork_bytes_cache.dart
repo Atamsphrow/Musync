@@ -39,6 +39,13 @@ class ArtworkBytesCache {
   static const int requestSize = 1024;
   static const int requestQuality = 100;
 
+  /// Session cap on settled answers. Each entry is a 1024 px JPEG —
+  /// a few hundred KB — and a long shuffled session touches hundreds
+  /// of tracks; uncapped, the cache grew with all of them. Forty is
+  /// far beyond any back-and-forth a listener actually does; the
+  /// oldest answer is dropped (a re-open simply re-queries).
+  static const int _maxResolved = 40;
+
   /// Whether [song]'s cover question has a settled answer.
   bool isResolved(Song song) => _resolved.containsKey(song.id);
 
@@ -62,13 +69,23 @@ class ArtworkBytesCache {
         )
         .then((bytes) {
           _resolved[song.id] = bytes;
+          _trimResolved();
           return bytes;
         })
         .onError((_, _) {
           _resolved[song.id] = null;
+          _trimResolved();
           return null;
         });
     return _pending[song.id] = future;
+  }
+
+  /// Drops the oldest settled answers past [_maxResolved]. The map
+  /// keeps insertion order, so the first keys are the stalest.
+  void _trimResolved() {
+    while (_resolved.length > _maxResolved) {
+      _resolved.remove(_resolved.keys.first);
+    }
   }
 
   /// Warms the cache for [song] without waiting for the answer.
