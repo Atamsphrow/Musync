@@ -12,6 +12,7 @@ import 'core/router/app_router.dart';
 import 'features/lyrics/ui/batch_screen.dart';
 import 'core/services/audio_backend_check.dart';
 import 'core/services/debug_log.dart';
+import 'core/services/frame_probe.dart';
 import 'core/utils/snackbar.dart';
 import 'core/services/error_capture.dart';
 import 'core/theme/app_theme.dart';
@@ -161,6 +162,11 @@ Future<void> _start() async {
   // Draw behind the system bars; their icon brightness comes from the theme
   // (see AppTheme.fromScheme).
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
+  // TEMPORARY (the lag hunt): a whole-session probe that only speaks
+  // for jank over 100 ms — « what lags, and when », whichever screen is
+  // up. Remove with the rest of the Perf probes once the hunt is over.
+  FrameProbe.start('global', frames: 1 << 30, thresholdMs: 100);
 
   runApp(
     ProviderScope(
