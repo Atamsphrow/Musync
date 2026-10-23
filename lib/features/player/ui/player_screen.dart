@@ -1,15 +1,17 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:musync/core/utils/snackbar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:musync/core/id3/id3_writer.dart';
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/router/app_router.dart';
 import 'package:musync/core/theme/app_theme.dart';
@@ -216,7 +218,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   /// one of the two suspects for the entrance slide freezing midway.
   /// The list mounts on the first opening pull, or quietly just after
   /// the entrance transition ends, whichever comes first.
-  bool _panelContentBuilt = false;
+  ///
+  /// A notifier, NOT a bool + setState: flipping it must rebuild only
+  /// the panel's content (a ValueListenableBuilder inside the panel),
+  /// never the whole screen — a screen-wide setState at 450 ms landed
+  /// right at the end of the entrance slide.
+  final ValueNotifier<bool> _panelContentBuilt = ValueNotifier<bool>(false);
   Timer? _panelMountTimer;
 
   /// False for the very first frame: the artwork theme applies
@@ -227,9 +234,55 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   /// track changes under an already-open player.
   bool _themeAnimArmed = false;
 
+  /// Memoised player theme: `AppTheme.fromScheme` runs again only when
+  /// the scheme itself changes. Without this, every build of this
+  /// screen created a fresh ThemeData — and if it compared unequal to
+  /// the previous one (the button styles are rebuilt per call), the
+  /// AnimatedTheme below restarted a 500 ms lerp of the whole tree on
+  /// ANY rebuild, mid-slide included.
+  ColorScheme? _themeSource;
+  ThemeData? _themeData;
+
+  ThemeData _themeFor(ColorScheme scheme) {
+    final cached = _themeData;
+    if (cached != null && _themeSource == scheme) return cached;
+    _themeSource = scheme;
+    return _themeData = AppTheme.fromScheme(scheme);
+  }
+
+  /// TEMPORARY diagnostic (the freeze hunt): logs the build/raster cost
+  /// of this screen's first frames to the in-app journal, so the next
+  /// device verdict says WHICH side is slow instead of feeding another
+  /// round of guessing. Remove once the freeze is settled.
+  TimingsCallback? _timingsCallback;
+
+  void _logOpeningFrames() {
+    var n = 0;
+    late final TimingsCallback cb;
+    cb = (List<FrameTiming> timings) {
+      for (final t in timings) {
+        n++;
+        final b = t.buildDuration.inMilliseconds;
+        final r = t.rasterDuration.inMilliseconds;
+        DebugLog.instance.info(
+          'Perf',
+          'ouverture lecteur frame $n : build=${b}ms raster=${r}ms'
+          '${(b > 16 || r > 16) ? '  <-- LENTE' : ''}',
+        );
+        if (n >= 40) {
+          SchedulerBinding.instance.removeTimingsCallback(cb);
+          if (identical(_timingsCallback, cb)) _timingsCallback = null;
+          return;
+        }
+      }
+    };
+    _timingsCallback = cb;
+    SchedulerBinding.instance.addTimingsCallback(cb);
+  }
+
   void _mountPanelWhenOpening() {
-    if (!_panelContentBuilt && _queueController.value > 0) {
-      setState(() => _panelContentBuilt = true);
+    if (!_panelContentBuilt.value && _queueController.value > 0) {
+      _panelContentBuilt.value = true;
     }
   }
 
@@ -243,20 +296,31 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     );
     _queueController.addListener(_mountPanelWhenOpening);
     _panelMountTimer = Timer(const Duration(milliseconds: 450), () {
-      if (mounted && !_panelContentBuilt) {
-        setState(() => _panelContentBuilt = true);
+      if (mounted && !_panelContentBuilt.value) {
+        _panelContentBuilt.value = true;
       }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) setState(() => _themeAnimArmed = true);
+      // Deliberately NO setState: arming through setState rebuilt the
+      // whole screen on frame 2, mid-slide — the same cost this flag
+      // exists to avoid. The flag only matters when the theme next
+      // changes, and that change triggers a build that reads it.
+      _themeAnimArmed = true;
     });
+    _logOpeningFrames();
   }
 
   @override
   void dispose() {
     _panelMountTimer?.cancel();
+    _panelContentBuilt.dispose();
     _queueController.removeListener(_mountPanelWhenOpening);
     _queueController.dispose();
+    final timings = _timingsCallback;
+    if (timings != null) {
+      SchedulerBinding.instance.removeTimingsCallback(timings);
+      _timingsCallback = null;
+    }
     if (_routeSubscribed) {
       _publishPlayerVisible(false);
       appRouteObserver.unsubscribe(this);
@@ -330,7 +394,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
               .valueOrNull;
 
     return AnimatedTheme(
-      data: AppTheme.fromScheme(artworkScheme ?? baseScheme),
+      data: _themeFor(artworkScheme ?? baseScheme),
       duration: _themeAnimArmed
           ? const Duration(milliseconds: 500)
           : Duration.zero,
@@ -469,12 +533,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 class _QueueSlidePanel extends StatelessWidget {
   final AnimationController controller;
 
-  /// Whether the queue list may be built. False on the player's first
-  /// frames (see `_panelContentBuilt` in the screen state): the list is
-  /// the panel's only heavy part, and it used to be built — laid out,
-  /// scrolled to the current track — on the very frame the screen was
-  /// still sliding in, while fully off-screen.
-  final bool contentBuilt;
+  /// Whether the queue list may be built (see `_panelContentBuilt` in
+  /// the screen state): the list is the panel's only heavy part, and it
+  /// used to be built — laid out, scrolled to the current track — on
+  /// the very frame the screen was still sliding in, while fully
+  /// off-screen. A listenable, so flipping it rebuilds only the list
+  /// slot below, not the screen.
+  final ValueListenable<bool> contentBuilt;
   final VoidCallback onClose;
 
   /// The return swipe on the list, forwarded to the screen state, which
@@ -555,13 +620,16 @@ class _QueueSlidePanel extends StatelessWidget {
               ),
               const Divider(height: 1),
               Expanded(
-                child: contentBuilt
-                    ? QueueListBody(
-                        onDragSwipeStart: onDragSwipeStart,
-                        onDragSwipeUpdate: onDragSwipeUpdate,
-                        onDragSwipeEnd: onDragSwipeEnd,
-                      )
-                    : const SizedBox.expand(),
+                child: ValueListenableBuilder<bool>(
+                  valueListenable: contentBuilt,
+                  builder: (context, built, _) => built
+                      ? QueueListBody(
+                          onDragSwipeStart: onDragSwipeStart,
+                          onDragSwipeUpdate: onDragSwipeUpdate,
+                          onDragSwipeEnd: onDragSwipeEnd,
+                        )
+                      : const SizedBox.expand(),
+                ),
               ),
             ],
           ),
