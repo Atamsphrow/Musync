@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/router/app_router.dart';
 import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/services/debug_log.dart';
+import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/core/services/permission_service.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
@@ -69,6 +70,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// only drive one scroll view at a time. Owned here, created once,
   /// disposed once.
   late final List<ScrollController> _scrollControllers;
+
+  /// TEMPORARY diagnostic (the lag hunt): slow frames while the library
+  /// scrolls, in the in-app journal (tag « Perf »).
+  FrameProbe? _scrollProbe;
 
   /// The scroll controller of the page for [status].
   ScrollController _controllerFor(LyricsStatus status) =>
@@ -468,6 +473,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   @override
   void dispose() {
+    _scrollProbe?.stop();
     appRouteObserver.unsubscribe(this);
     MediaStore.stopListeningForSharedAudio();
     WidgetsBinding.instance.removeObserver(this);
@@ -909,9 +915,25 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                     thinking: _chatThinking,
                     scrollController: _chatScrollController,
                   )
-                : TabBarView(
-                    controller: _tabController,
-                    children: [
+                : NotificationListener<ScrollNotification>(
+                    onNotification: (notification) {
+                      // TEMPORARY probe (the lag hunt): observe the
+                      // frames of any library scroll, stop at rest.
+                      if (notification is ScrollStartNotification) {
+                        _scrollProbe?.stop();
+                        _scrollProbe = FrameProbe.start(
+                          'bibliothèque défilement',
+                          frames: 100000,
+                        );
+                      } else if (notification is ScrollEndNotification) {
+                        _scrollProbe?.stop();
+                        _scrollProbe = null;
+                      }
+                      return false;
+                    },
+                    child: TabBarView(
+                      controller: _tabController,
+                      children: [
                       for (final status in LyricsStatus.values)
                         _TabSongList(
                           status: status,
@@ -925,7 +947,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                           onRetry: () =>
                               ref.read(songListProvider.notifier).refresh(),
                         ),
-                    ],
+                      ],
+                    ),
                   ),
         bottomNavigationBar: _DockedMiniPlayer(onLongPress: _locateCurrentSong),
       ),
