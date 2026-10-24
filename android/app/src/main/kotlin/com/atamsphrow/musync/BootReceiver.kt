@@ -59,9 +59,17 @@ class BootReceiver : BroadcastReceiver() {
                         context, 0, it, PendingIntent.FLAG_IMMUTABLE,
                     )
                 }
-                alarmManager.setAlarmClock(
-                    AlarmManager.AlarmClockInfo(trigger, showPending), pending,
-                )
+                // Per alarm, not around the whole loop: one failure
+                // (the exact-alarm permission revoked since this one
+                // was armed, say) must not starve the alarms after it.
+                // Dart re-syncs everything at the next launch anyway.
+                try {
+                    alarmManager.setAlarmClock(
+                        AlarmManager.AlarmClockInfo(trigger, showPending), pending,
+                    )
+                } catch (_: Exception) {
+                    // Skipped on purpose — see above.
+                }
             }
 
             if (stale.isNotEmpty()) {
