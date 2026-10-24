@@ -186,12 +186,73 @@ class TagBackupStore {
   /// must not stop the user embedding lyrics. Losing the ability to undo is a
   /// smaller harm than refusing to work at all — but the caller is told, so it
   /// can say the undo is unavailable rather than offer one that isn't there.
+  /// The bytes [capture] needs: enough of the file that `[0, audioOffset)`
+  /// lies entirely inside them, or the whole file when that cannot be
+  /// established from the header alone.
+  ///
+  /// A truncated head here would not fail loudly — it would be stored, and
+  /// an undo would splice it back over the audio. So every doubt (bad
+  /// syncsafe size, tag larger than the file, parse disagreeing with the
+  /// header) takes the old path: read everything.
+  static Future<Uint8List> _readTagHead(File file) async {
+    final raf = await file.open();
+    try {
+      final length = await raf.length();
+      final header = await raf.read(10);
+      final isId3 = header.length == 10 &&
+          header[0] == 0x49 &&
+          header[1] == 0x44 &&
+          header[2] == 0x33;
+
+      if (isId3) {
+        final syncsafe =
+            ((header[6] | header[7] | header[8] | header[9]) & 0x80) == 0;
+        if (syncsafe) {
+          final size = (header[6] << 21) |
+              (header[7] << 14) |
+              (header[8] << 7) |
+              header[9];
+          // ID3v2.4 footer flag: ten more bytes after the tag.
+          final footer = (header[3] == 4 && (header[5] & 0x10) != 0) ? 10 : 0;
+          final want = 10 + size + footer;
+          // A tag larger than the file is the truncated case: the old code
+          // backed up the whole file there, and so does the fallback.
+          if (want <= length) {
+            await raf.setPosition(0);
+            final head = await raf.read(want);
+            if (head.length == want) {
+              final tag = Id3Tag.parse(head);
+              if (tag != null && tag.audioOffset <= head.length) return head;
+            }
+          }
+        }
+      } else {
+        // No ID3 magic. An MP4 announces itself in its first box, and
+        // capture answers false for it without using anything else — no
+        // reason to read the whole container to say no.
+        await raf.setPosition(0);
+        final prefix = await raf.read(65536);
+        if (AudioContainerReader.detect(prefix) == AudioContainer.mp4) {
+          return prefix;
+        }
+      }
+    } finally {
+      await raf.close();
+    }
+    return file.readAsBytes();
+  }
+
   Future<bool> capture(String filePath) async {
     try {
       final file = File(filePath);
       if (!await file.exists()) return false;
 
-      final bytes = await file.readAsBytes();
+      // Only the head: the backup never keeps a byte past audioOffset,
+      // and reading 8 MB of audio to copy 4 KB of tag was the batch's
+      // first full read per track. Falls back to the whole file
+      // whenever the head cannot be bounded with certainty, so the
+      // blob stored below is unchanged.
+      final bytes = await _readTagHead(file);
       final tag = Id3Tag.parse(bytes);
 
       // An MP4 has no ID3 tag, so parse answers null — but unlike an
