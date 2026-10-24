@@ -351,7 +351,7 @@ class AudioPlayerService {
     final children = [for (final s in _queue) _toSource(s)];
     final tBuild = buildSw.elapsedMilliseconds;
     final sourceSw = Stopwatch()..start();
-    final probe = FrameProbe.start('playSong', frames: 30);
+    final probe = FrameProbe.start('playSong', frames: 120);
     try {
       await _player.setAudioSource(
         ConcatenatingAudioSource(
