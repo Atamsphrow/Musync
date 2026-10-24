@@ -81,6 +81,7 @@ class SleepTimerController extends Notifier<SleepTimerState> {
   Timer? _timer;
   Timer? _ticker;
   StreamSubscription<PlayerState>? _completionSub;
+  StreamSubscription<Duration>? _positionSub;
 
   @override
   SleepTimerState build() {
@@ -102,9 +103,26 @@ class SleepTimerController extends Notifier<SleepTimerState> {
     if (duration != null) {
       _startDurationTimer(option, duration);
     } else {
-      // End of track: just_audio emits `ProcessingState.completed` when the
-      // current source finishes, before moving on (or looping).
+      // End of track. NOT `ProcessingState.completed`: the queue is
+      // one ConcatenatingAudioSource, so just_audio only reports
+      // completed at the end of the LAST track (and never under
+      // LoopMode.one) — a timer waiting on it stops several tracks
+      // late, or never. The reliable signal is the position reaching
+      // the current track's end; the completed listener stays as a
+      // backstop for the queue's final track.
+      //
+      // The cut lands up to ~0.5 s before the real end: position
+      // updates arrive every ~200 ms, so the window must span at
+      // least two ticks to be unmissable.
       final service = ref.read(audioPlayerServiceProvider);
+      _positionSub = service.positionStream.listen((position) {
+        final duration = ref.read(durationProvider).valueOrNull;
+        if (duration == null || duration <= Duration.zero) return;
+        if (position > Duration.zero &&
+            duration - position <= const Duration(milliseconds: 500)) {
+          _onTrackEnded();
+        }
+      });
       _completionSub = service.playerStateStream.listen((playerState) {
         if (playerState.processingState == ProcessingState.completed) {
           _onTrackEnded();
@@ -171,8 +189,10 @@ class SleepTimerController extends Notifier<SleepTimerState> {
     _timer?.cancel();
     _ticker?.cancel();
     _completionSub?.cancel();
+    _positionSub?.cancel();
     _timer = null;
     _ticker = null;
     _completionSub = null;
+    _positionSub = null;
   }
 }
