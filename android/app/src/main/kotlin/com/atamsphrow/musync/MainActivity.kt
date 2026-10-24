@@ -624,6 +624,9 @@ class MainActivity : AudioServiceActivity() {
                 null, 0, 0, 0, null,
             )
         } catch (e: Exception) {
+            // Clear the pending slot: leaving it set makes every later
+            // request answer "busy" until the process restarts.
+            pendingWriteAccessResult = null
             result.success(false)
         }
     }
