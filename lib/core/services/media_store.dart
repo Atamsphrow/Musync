@@ -188,16 +188,49 @@ abstract final class MediaStore {
   ///
   /// Only one listener at a time, which is the truth of it: there is one queue
   /// and one screen that knows what to do with it.
-  static void listenForSharedAudio(void Function() onArrived) {
-    if (!Platform.isAndroid) return;
+  static void Function()? _onSharedAudio;
+  static void Function()? _onOpenBatchReview;
+  static bool _handlerInstalled = false;
+
+  /// The ONE handler for this channel, installed once. A second
+  /// `setMethodCallHandler` REPLACES the first — which is how the
+  /// batch-review opener (registered in `main`) silently died the
+  /// moment the library screen registered its share listener, and
+  /// how stopping that listener later left the channel with no
+  /// handler at all. Listeners register here instead of installing
+  /// themselves; the handler dispatches.
+  static void _ensureHandler() {
+    if (_handlerInstalled || !Platform.isAndroid) return;
+    _handlerInstalled = true;
     _channel.setMethodCallHandler((call) async {
-      if (call.method == 'sharedAudioArrived') onArrived();
+      switch (call.method) {
+        case 'sharedAudioArrived':
+          _onSharedAudio?.call();
+        case 'openBatchReview':
+          _onOpenBatchReview?.call();
+      }
     });
   }
 
-  static void stopListeningForSharedAudio() {
+  static void listenForSharedAudio(void Function() onArrived) {
     if (!Platform.isAndroid) return;
-    _channel.setMethodCallHandler(null);
+    _onSharedAudio = onArrived;
+    _ensureHandler();
+  }
+
+  static void stopListeningForSharedAudio() {
+    // Only the share listener goes: the handler itself stays, the
+    // batch-review opener still needs it.
+    _onSharedAudio = null;
+  }
+
+  /// Registers the « open the batch review » callback (notification
+  /// tap, cold or warm start). See [_ensureHandler] for why this is
+  /// a registration and not a handler of its own.
+  static void listenForBatchReview(void Function() onOpen) {
+    if (!Platform.isAndroid) return;
+    _onOpenBatchReview = onOpen;
+    _ensureHandler();
   }
 
   /// Drains the native share queue.
