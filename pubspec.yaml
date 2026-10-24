@@ -17,6 +17,11 @@ dependencies:
   # Material You — wallpaper-derived color scheme (Android 12+)
   dynamic_color: ^1.7.0
 
+  # Direct because artwork_scheme_provider names QuantizerCelebi/Score:
+  # the player's cover tint quantizes off the main isolate. The version is
+  # pinned by the Flutter SDK itself, so `any` resolves to that one.
+  material_color_utilities: any
+
   # Audio playback
   just_audio: ^0.9.43
   audio_service: ^0.18.17
