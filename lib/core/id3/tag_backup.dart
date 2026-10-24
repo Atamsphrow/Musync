@@ -16,6 +16,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:musync/core/utils/atomic_file.dart';
+import 'package:musync/core/id3/audio_container.dart';
 import 'package:musync/core/id3/id3_tag.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:path_provider/path_provider.dart';
@@ -192,6 +193,18 @@ class TagBackupStore {
 
       final bytes = await file.readAsBytes();
       final tag = Id3Tag.parse(bytes);
+
+      // An MP4 has no ID3 tag, so parse answers null — but unlike an
+      // untagged MP3, backing it up as an empty head would be a lie:
+      // restoring that head restores nothing (M4A lyrics live in an
+      // atom, not in front of the audio), while the UI would still
+      // offer « Annuler ». No backup, no undo: the callers already
+      // handle false, and the M4A undo itself is a separate feature
+      // (it takes copying the ©lyr atom, not a head splice).
+      if (tag == null &&
+          AudioContainerReader.detect(bytes) == AudioContainer.mp4) {
+        return false;
+      }
 
       // A file with no tag backs up as an empty head, which restores correctly:
       // putting nothing in front of the audio is exactly how it started.
