@@ -919,6 +919,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                     onNotification: (notification) {
                       // TEMPORARY probe (the lag hunt): observe the
                       // frames of any library scroll, stop at rest.
+                      // Vertical only: the TabBarView's own page swipes
+                      // bubble up here too and would pollute the series.
+                      if (notification.metrics.axis != Axis.vertical) {
+                        return false;
+                      }
                       if (notification is ScrollStartNotification) {
                         _scrollProbe?.stop();
                         _scrollProbe = FrameProbe.start(
