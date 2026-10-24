@@ -133,8 +133,9 @@ class _ExportDialogState extends State<_ExportDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Crée un fichier JSON dans Téléchargements/Musync avec la lecture, '
-            "les sources de paroles, les fournisseurs IA, la bulle flottante "
+            "Crée un fichier JSON à l'emplacement que tu choisis, avec la "
+            "lecture, les sources de paroles, les fournisseurs IA, la bulle "
+            "flottante "
             "et l'historique des sauvegardes de tags (pour annuler une "
             'écriture après réinstallation).',
           ),
