@@ -13,6 +13,7 @@ import 'features/lyrics/ui/batch_screen.dart';
 import 'core/services/audio_backend_check.dart';
 import 'core/services/debug_log.dart';
 import 'core/services/frame_probe.dart';
+import 'core/services/media_store.dart';
 import 'core/utils/snackbar.dart';
 import 'core/services/error_capture.dart';
 import 'core/theme/app_theme.dart';
@@ -35,6 +36,25 @@ import 'features/lyrics/providers/lyrics_sweep_worker.dart';
 /// screen and an empty log, which is the position this app was in twice.
 void main() => runGuarded(_start);
 
+/// Opens the batch review screen (the « batch search done »
+/// notification was tapped). The navigator key lets this fire without
+/// a BuildContext; on a cold start the navigator may not exist yet
+/// (MaterialApp not built), so this retries for up to 5 s instead of
+/// dropping the request and landing on the library.
+Future<void> _openBatchReview() async {
+  for (var i = 0; i < 10; i++) {
+    final nav = appNavigatorKey.currentState;
+    if (nav != null) {
+      nav.pushNamed(
+        AppRoutes.batch,
+        arguments: const BatchRequest([], reviewOnly: true),
+      );
+      return;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+  }
+}
+
 Future<void> _start() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -49,28 +69,13 @@ Future<void> _start() async {
     }
   }
 
-  // Tapping the "batch search done" notification asks native to open the
-  // review screen. The navigator key lets this fire without a BuildContext.
-  const MethodChannel('com.atamsphrow.musync/media_store').setMethodCallHandler((
-    call,
-  ) async {
-    if (call.method == 'openBatchReview') {
-      // The navigator may not be ready on a cold start (MaterialApp not
-      // built yet): retry for up to 5 s instead of dropping the request
-      // and landing on the library.
-      for (var i = 0; i < 10; i++) {
-        final nav = appNavigatorKey.currentState;
-        if (nav != null) {
-          nav.pushNamed(
-            AppRoutes.batch,
-            arguments: const BatchRequest([], reviewOnly: true),
-          );
-          break;
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 500));
-      }
-    }
-  });
+  // Tapping the "batch search done" notification asks native to open
+  // the review screen. Registered with MediaStore, NOT installed as a
+  // handler of its own: a second setMethodCallHandler on that channel
+  // would replace (and be replaced by) the library's share listener —
+  // which is exactly how this opener used to die. MediaStore owns the
+  // channel's single handler and dispatches.
+  MediaStore.listenForBatchReview(() => unawaited(_openBatchReview()));
 
   // Before anything else that can fail. Musync is sideloaded onto a phone that
   // is rarely attached to a laptop, so an exception that only reaches logcat
