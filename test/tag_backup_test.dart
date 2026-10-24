@@ -98,6 +98,22 @@ void main() {
       expect(await File(path).readAsBytes(), before);
     });
 
+    test('refuses an MP4: no backup, so no fake undo', () async {
+      // A minimal ftyp box is all the container sniffing needs; the
+      // rest is filler standing in for atoms.
+      final path = '${tempDir.path}${Platform.pathSeparator}track.m4a';
+      await File(path).writeAsBytes([
+        0, 0, 0, 24, // atom size
+        ...ascii.encode('ftyp'),
+        ...ascii.encode('M4A '),
+        0, 0, 0, 0,
+        ...List<int>.generate(4096, (i) => (i * 5) % 256),
+      ]);
+
+      expect(await store.capture(path), isFalse);
+      expect(await store.backupFor(path), isNull);
+    });
+
     test('leaves the audio untouched when the tag grew', () async {
       // The written tag is bigger than the original, so the audio moved. The
       // restore has to splice rather than overwrite in place — this is the case
