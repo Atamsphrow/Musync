@@ -30,6 +30,15 @@ class AutomationRunner {
 
   /// À appeler une fois au démarrage de l'app.
   Future<void> init() async {
+    // The alarm that launched the app is read BEFORE any realigning:
+    // alignStale would otherwise drop a one-shot « due now » as stale
+    // before it has rung.
+    final firedId = await SchedulerBridge.takeScheduledAction();
+    // Stale hours are realigned before the re-sync below: syncing a
+    // past fireAtMillis makes Android fire it immediately (the 07:00
+    // wake-up going off at 09:30 because the phone was off overnight).
+    await _ref.read(automationsProvider.notifier).alignStale(except: firedId);
+
     // Le natif est un miroir : Dart réarme tout depuis le store, y compris
     // après un redémarrage où le BootReceiver a déjà fait au mieux.
     final doc = await _ref.read(automationsProvider.future);
@@ -46,7 +55,10 @@ class AutomationRunner {
       }
     });
 
-    // L'alarme a ouvert l'app : l'id attend dans le natif.
+    // L'alarme a ouvert l'app : son id a été lu en tête d'init, avant
+    // le réalignement — on l'exécute, puis on vide ce qui aurait pu
+    // être déposé entre-temps.
+    if (firedId != null) await runFired(firedId);
     await drainAndRun();
   }
 
@@ -70,14 +82,21 @@ class AutomationRunner {
     // onHeadphonesConnected, pas par ici — pas de fondu pour lui.
     final args = Map<String, Object?>.of(action.args);
     args['fadeIn'] = true;
-    final result = await _ref
-        .read(assistantControllerProvider)
-        .runStoredTool(action.toolName, args);
-    DebugLog.instance.info(
-      'Automatisations',
-      '${action.label} : ${result.message}',
-    );
-    await _ref.read(automationsProvider.notifier).advanceAfterFire(id);
+    try {
+      final result = await _ref
+          .read(assistantControllerProvider)
+          .runStoredTool(action.toolName, args);
+      DebugLog.instance.info(
+        'Automatisations',
+        '${action.label} : ${result.message}',
+      );
+    } finally {
+      // Advance (daily) or remove (one-shot) even when the tool
+      // failed: a daily left on its fired hour keeps that stale hour
+      // in the document, and the next launch's re-sync fires it again
+      // immediately — one bad morning would repeat every morning.
+      await _ref.read(automationsProvider.notifier).advanceAfterFire(id);
+    }
   }
 
   /// Écouteurs branchés : exécute le déclencheur, s'il est configuré et que
