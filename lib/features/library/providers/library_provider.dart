@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/permission_service.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/data/music_scanner.dart';
+import 'package:musync/features/library/ui/widgets/song_artwork.dart';
 
 final musicScannerProvider = Provider<MusicScanner>((ref) => MusicScanner());
 
@@ -60,6 +61,10 @@ class SongListNotifier extends AsyncNotifier<List<Song>> {
   }
 
   Future<void> refresh() async {
+    // A rescan can see a changed cover under the same MediaStore
+    // id (tag editor, cover change): drop the thumbnail cache
+    // so rows re-query instead of serving the old picture.
+    ThumbnailCache.instance.clear();
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
       if (!await PermissionService.hasAudioAccess()) return const <Song>[];
