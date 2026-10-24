@@ -213,6 +213,19 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
     final current = state.valueOrNull ?? const AutomationsDoc();
     await _commit(AutomationsDoc(actions: current.actions));
   }
+
+  /// Réarme toutes les alarmes natives depuis l'état chargé, sans écrire
+  /// dans le store. Appelé quand « Alarmes et rappels » vient d'être
+  /// accordé : les automatisations existantes n'ont jamais été armées.
+  Future<void> resync() async {
+    // `future` attend le chargement initial et lève s'il a échoué : on ne
+    // synchronise jamais un document par défaut (une liste vide effacerait
+    // les alarmes natives). L'appelant rattrape et journalise.
+    final doc = await future;
+    final armed = await SchedulerBridge.syncAlarms(doc.actions);
+    ref.read(exactAlarmGrantedProvider.notifier).state =
+        armed ? true : await SchedulerBridge.canScheduleExactAlarms();
+  }
 }
 
 extension on AutomationsDoc {
