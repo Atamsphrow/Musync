@@ -6,6 +6,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/lyrics/data/ai_filename_reader.dart';
 import 'package:musync/features/ai_assistant/data/automation.dart';
 import 'package:musync/features/ai_assistant/data/scheduler_bridge.dart';
@@ -698,13 +699,36 @@ class _AutomationsSectionState extends ConsumerState<_AutomationsSection>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Retour de l'écran système « Alarmes et rappels » : revérifier, puis
-    // réarmer (le notifier resynchronise le natif à chaque _commit, et le
-    // runner au démarrage ; ici on ne fait que mettre l'état à jour).
+    // Retour de l'écran système « Alarmes et rappels » : revérifier, et si
+    // la permission vient d'être accordée, réarmer les automatisations
+    // existantes — sinon elles ne se déclencheraient jamais (avant, seul le
+    // démarrage ou un _commit réarmait le natif).
     if (state == AppLifecycleState.resumed) {
-      SchedulerBridge.canScheduleExactAlarms().then((ok) {
-        if (mounted) ref.read(exactAlarmGrantedProvider.notifier).state = ok;
-      });
+      _recheckExactAlarm();
+    }
+  }
+
+  Future<void> _recheckExactAlarm() async {
+    try {
+      final ok = await SchedulerBridge.canScheduleExactAlarms();
+      if (!mounted) return;
+      final wasGranted = ref.read(exactAlarmGrantedProvider);
+      ref.read(exactAlarmGrantedProvider.notifier).state = ok;
+      // false → true : accordée hors de l'app, rien n'a jamais été armé.
+      // (null → true est couvert par le réarmement au démarrage.)
+      if (ok && wasGranted == false) {
+        final notifier = ref.read(automationsProvider.notifier);
+        await notifier.resync();
+        DebugLog.instance.info(
+          'Automatisations',
+          'Alarmes réarmées après autorisation « Alarmes et rappels »',
+        );
+      }
+    } catch (e) {
+      DebugLog.instance.info(
+        'Automatisations',
+        'Échec du réarmement après autorisation : $e',
+      );
     }
   }
 
