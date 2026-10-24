@@ -8,6 +8,7 @@ import 'package:musync/core/router/app_router.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/core/services/debug_log.dart';
+import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 
@@ -74,6 +75,9 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
               _suppressNextTap = false;
               return;
             }
+            // TEMPORARY (chasse au gel) : 120 frames couvrent la glissade
+            // de 350 ms même à 120 Hz.
+            FrameProbe.start('ouverture mini', frames: 120);
             final service = ref.read(audioPlayerServiceProvider);
             Navigator.pushNamed(
               context,
@@ -358,11 +362,17 @@ class _MiniProgressBar extends ConsumerWidget {
         ? (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
         : 0.0;
 
-    return LinearProgressIndicator(
-      value: progress,
-      backgroundColor: scheme.surfaceContainerHighest,
-      color: scheme.primary,
-      minHeight: 2,
+    // RepaintBoundary: the bar ticks ~5×/s from the playback position.
+    // Without its own boundary, each tick re-records everything up to
+    // the route's boundary — the whole library page behind it — for a
+    // 2 px strip. The indicator alone repaints now.
+    return RepaintBoundary(
+      child: LinearProgressIndicator(
+        value: progress,
+        backgroundColor: scheme.surfaceContainerHighest,
+        color: scheme.primary,
+        minHeight: 2,
+      ),
     );
   }
 }
