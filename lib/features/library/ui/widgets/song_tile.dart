@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:on_audio_query/on_audio_query.dart';
+import 'package:musync/features/library/ui/widgets/song_artwork.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
 import 'package:musync/features/library/data/models/song.dart';
@@ -79,13 +79,9 @@ class SongTile extends ConsumerWidget {
               children: [
                 ClipRRect(
                   borderRadius: BorderRadius.circular(10),
-                  child: QueryArtworkWidget(
-                    id: song.id,
-                    type: ArtworkType.AUDIO,
-                    artworkWidth: 48,
-                    artworkHeight: 48,
-                    artworkFit: BoxFit.cover,
-                    nullArtworkWidget: Container(
+                  child: SongArtwork(
+                    songId: song.id,
+                    placeholder: Container(
                       width: 48,
                       height: 48,
                       color: scheme.surfaceContainerHighest,
