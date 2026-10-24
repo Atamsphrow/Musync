@@ -140,6 +140,48 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
     ));
   }
 
+  /// Realigns the actions whose hour has passed WITHOUT running
+  /// them: a daily moves to its next occurrence, a missed one-shot is
+  /// dropped rather than played hours late.
+  ///
+  /// Why this exists: [AutomationRunner.init] re-syncs every stored
+  /// fireAtMillis to the native scheduler at each launch, and Android
+  /// fires a past alarm immediately. A phone that was off at 07:00
+  /// (flat battery, night shutdown) got its wake-up automation at
+  /// 09:30 on the next open — the native BootReceiver had realigned
+  /// its mirror correctly, but this document still held yesterday's
+  /// hour and overrode it.
+  ///
+  /// [except] spares one id: the alarm that just launched the app,
+  /// which the runner is about to execute — a one-shot « due now »
+  /// must not be dropped as stale before it has rung.
+  Future<void> alignStale({String? except}) async {
+    await _ready();
+    final now = DateTime.now();
+    final current = state.valueOrNull ?? const AutomationsDoc();
+    var changed = false;
+    final next = <ScheduledAction>[];
+    for (final a in current.actions) {
+      if (a.id == except || a.fireAtMillis > now.millisecondsSinceEpoch) {
+        next.add(a);
+        continue;
+      }
+      changed = true;
+      if (a.daily) {
+        next.add(
+          a.copyWith(
+            fireAtMillis: ScheduledAction.nextDailyFire(a.hour, a.minute, now),
+          ),
+        );
+      }
+      // A stale one-shot is simply not carried over.
+    }
+    if (!changed) return;
+    await _commit(
+      AutomationsDoc(actions: next, headphoneTrigger: current.headphoneTrigger),
+    );
+  }
+
   Future<void> cancel(String id) async {
     await _ready();
     final current = state.valueOrNull ?? const AutomationsDoc();
