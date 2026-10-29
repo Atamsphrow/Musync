@@ -102,6 +102,15 @@ public class OverlayService extends Service implements View.OnTouchListener {
         mAnimationHandler.removeCallbacksAndMessages(null);
         safeRemoveView();
         isRunning = false;
+        // Musync: the close-in-flight guard dies with the service. Without
+        // this, a static left true by closeOverlayNow() refused every later
+        // showOverlay in the same process (the guard sits before the reset
+        // on clean start, so nothing could ever clear it short of a process
+        // restart) — the bubble could never come back after its own ×, even
+        // with the toggle ON. The race the flag guards (a show landing while
+        // a close is still tearing down) is unaffected: until onDestroy runs
+        // the flag stays true and the show is still refused.
+        isStopping = false;
         NotificationManager notificationManager = (NotificationManager) getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
         if (notificationManager != null) {
             notificationManager.cancel(OverlayConstants.NOTIFICATION_ID);
