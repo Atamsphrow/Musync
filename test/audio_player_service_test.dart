@@ -78,4 +78,84 @@ void main() {
       );
     });
   });
+
+  group('AudioPlayerService.shouldCorrectLoopAnchor', () {
+    final now = DateTime(2026, 10, 30, 1, 0, 0);
+    const duration = Duration(minutes: 3);
+
+    bool check({
+      Duration prev = const Duration(minutes: 2, seconds: 59),
+      Duration event = const Duration(minutes: 1),
+      int? prevIndex = 0,
+      int? eventIndex = 0,
+      bool loop = true,
+      Duration? dur = duration,
+      bool playing = true,
+      DateTime? lastSeek,
+    }) =>
+        AudioPlayerService.shouldCorrectLoopAnchor(
+          prevExtrapolated: prev,
+          eventUpdatePosition: event,
+          prevIndex: prevIndex,
+          eventIndex: eventIndex,
+          loopEnabled: loop,
+          duration: dur,
+          playing: playing,
+          lastServiceSeekAt: lastSeek,
+          now: now,
+        );
+
+    test('fires on a loop with a stale anchor far from the end', () {
+      expect(check(), isTrue);
+    });
+
+    test('fires on a loop with a stale anchor parked near the end', () {
+      // Jump of only one second, but still a backward jump near the end:
+      // the stale target was the user pausing at 2:59.
+      expect(
+        check(event: const Duration(minutes: 2, seconds: 58)),
+        isTrue,
+      );
+    });
+
+    test('ignores a steady event near the end', () {
+      // Pause/resume or buffering: same position, no backward jump.
+      expect(
+        check(event: const Duration(minutes: 2, seconds: 59)),
+        isFalse,
+      );
+    });
+
+    test('ignores its own seek echo', () {
+      expect(
+        check(lastSeek: now.subtract(const Duration(seconds: 1))),
+        isFalse,
+      );
+    });
+
+    test('ignores a track change', () {
+      expect(check(eventIndex: 1), isFalse);
+    });
+
+    test('ignores a mid-track backward jump', () {
+      // A backward seek mid-song is not a loop: previous position far
+      // from the end.
+      expect(
+        check(prev: const Duration(minutes: 1)),
+        isFalse,
+      );
+    });
+
+    test('ignores everything when not looping', () {
+      expect(check(loop: false), isFalse);
+    });
+
+    test('ignores everything when paused', () {
+      expect(check(playing: false), isFalse);
+    });
+
+    test('ignores everything without a duration', () {
+      expect(check(dur: null), isFalse);
+    });
+  });
 }
