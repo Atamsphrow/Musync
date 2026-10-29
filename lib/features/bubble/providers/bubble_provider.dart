@@ -446,6 +446,16 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     if (shouldShow == _overlayUp) return;
     _overlayUp = shouldShow;
     if (!shouldShow) _overlayUpSince = null;
+    // Journaled on purpose: a bubble that never comes back after a resume
+    // from the notification leaves no trace otherwise, and the absence of
+    // this line at resume time is itself the diagnosis (UI isolate dead).
+    DebugLog.instance.info(
+      'Bulle',
+      shouldShow
+          ? 'Ouverture demandée (lecture, arrière-plan)'
+          : 'Fermeture demandée (active=${state.active}, '
+              'lecture=$_playing, arrière-plan=$backgrounded)',
+    );
     unawaited(shouldShow ? _openOverlay() : _closeOverlayNow());
   }
 
@@ -483,6 +493,10 @@ class LyricsBubbleController extends Notifier<BubbleState> {
         try {
           if (!await FlutterOverlayWindow.isActive()) {
             if (!_overlayUp) return;
+            DebugLog.instance.warning(
+              'Bulle',
+              'Premier open sans effet, nouvel essai',
+            );
             await _showOverlayNative();
             _overlayUpSince = DateTime.now();
           }
