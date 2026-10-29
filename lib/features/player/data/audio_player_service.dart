@@ -34,6 +34,17 @@ class AudioPlayerService {
 
   /// Periodic position checkpoints; kept so it can be cancelled in [dispose].
   StreamSubscription<Duration>? _positionSubscription;
+
+  /// Playback-event watch for the loop re-anchor (see [_onPlaybackEvent]).
+  StreamSubscription<PlaybackEvent>? _loopWatchSubscription;
+
+  /// Last playback event received, for the loop re-anchor comparison.
+  PlaybackEvent? _lastPlaybackEvent;
+
+  /// When this service last asked the player to seek. A playback event
+  /// arriving within [_ownSeekWindow] of it is that seek's own echo, never
+  /// a loop — without this, the correction's own seek(0) would re-trigger.
+  DateTime? _lastServiceSeekAt;
   StreamSubscription<void>? _noisySubscription;
   StreamSubscription<AudioInterruptionEvent>? _interruptionSubscription;
 
@@ -103,6 +114,9 @@ class AudioPlayerService {
       _lastPositionSave = now;
       unawaited(LastSongStore().save(song.filePath, position));
     });
+    _loopWatchSubscription = _player.playbackEventStream.listen(
+      _onPlaybackEvent,
+    );
     unawaited(_watchBecomingNoisy());
   }
 
@@ -304,7 +318,7 @@ class AudioPlayerService {
       // the old track on screen after picking a different one from the same
       // list.
       _setCurrentSong(newQueue.isEmpty ? null : newQueue[resolvedIndex]);
-      await _player.seek(Duration.zero, index: resolvedIndex);
+      await _seekWithRecord(Duration.zero, index: resolvedIndex);
       return;
     }
 
@@ -602,7 +616,7 @@ class AudioPlayerService {
       if (target.isNegative) target = Duration.zero;
       final duration = _player.duration;
       if (duration != null && target >= duration) target = Duration.zero;
-      await _player.seek(target);
+      await _seekWithRecord(target);
       if (state.shuffle) {
         await _player.shuffle();
         await _player.setShuffleModeEnabled(true);
@@ -624,7 +638,120 @@ class AudioPlayerService {
       return false;
     }
   }
-  Future<void> seekTo(Duration position) => _player.seek(position);
+  Future<void> seekTo(Duration position) => _seekWithRecord(position);
+
+  /// Every seek this service asks for, recorded so [_onPlaybackEvent] can
+  /// tell our own seeks' echoes apart from a loop. Notification and lock
+  /// screen seeks bypass this class (see the constructor comment) and so
+  /// are not recorded — a backward notification seek in the last seconds
+  /// of a looping track could in principle read as a loop; rare, and the
+  /// consequence is only a restart of the track.
+  Future<void> _seekWithRecord(Duration position, {int? index}) {
+    _lastServiceSeekAt = DateTime.now();
+    return _player.seek(position, index: index);
+  }
+
+  /// How close to the track end the previous position must sit for a
+  /// backward jump to read as a loop rather than an ordinary seek.
+  static const Duration _loopEndWindow = Duration(seconds: 5);
+
+  /// Smallest backward jump that counts as a loop. Steady-state events
+  /// (pause/resume, buffering) sit within milliseconds of the previous
+  /// sample; a loop jumps by seconds — except a stale anchor parked within
+  /// a second of the end, which is why the threshold is this low rather
+  /// than several seconds.
+  static const Duration _loopJumpThreshold = Duration(milliseconds: 500);
+
+  /// Events from our own seeks are ignored for this long after the seek
+  /// call: the seek's own discontinuity event is a backward jump on the
+  /// same index by construction, and must not read as a loop.
+  static const Duration _ownSeekWindow = Duration(seconds: 2);
+
+  /// Pure loop-back test, exposed for tests.
+  ///
+  /// True when a playback event looks like the loop point of a repeating
+  /// track rather than anything the user did: same item, looping enabled,
+  /// playing, previous position near the end, and the new position jumping
+  /// backwards — while no service seek is in flight.
+  @visibleForTesting
+  static bool shouldCorrectLoopAnchor({
+    required Duration prevExtrapolated,
+    required Duration eventUpdatePosition,
+    required int? prevIndex,
+    required int? eventIndex,
+    required bool loopEnabled,
+    required Duration? duration,
+    required bool playing,
+    required DateTime? lastServiceSeekAt,
+    required DateTime now,
+  }) {
+    if (!playing || !loopEnabled) return false;
+    if (prevIndex == null || prevIndex != eventIndex) return false;
+    if (duration == null || prevExtrapolated < duration - _loopEndWindow) {
+      return false;
+    }
+    if (eventUpdatePosition > prevExtrapolated - _loopJumpThreshold) {
+      return false;
+    }
+    if (lastServiceSeekAt != null &&
+        now.difference(lastServiceSeekAt) < _ownSeekWindow) {
+      return false;
+    }
+    return true;
+  }
+
+  /// Mirrors just_audio's position getter for the previous event: extrapolate
+  /// with the wall clock while playing and ready, else the frozen position.
+  Duration _extrapolatedPosition(PlaybackEvent event, DateTime now) {
+    if (_player.playing &&
+        _player.processingState == ProcessingState.ready) {
+      final result = event.updatePosition +
+          now.difference(event.updateTime) * _player.speed;
+      final duration = event.duration ?? _player.duration;
+      if (duration == null || result <= duration) return result;
+      return duration;
+    }
+    return event.updatePosition;
+  }
+
+  /// Loop re-anchor: just_audio's Android player remembers the last seek
+  /// target (`seekPos`) and only clears it on a READY state transition.
+  /// A seek on a buffered local file often produces none, so the stale
+  /// target survives — and at a LoopMode.one loop the discontinuity event
+  /// broadcasts it as the position. Dart then extrapolates from that wrong
+  /// anchor at the right speed: lyrics (and the progress bar) run desynced
+  /// for the whole looped play, until the next user seek. Detecting the
+  /// loop here and seeking to zero resets the stale target to the one
+  /// value that is always right at a loop point, fixing lyrics and bar
+  /// together without forking just_audio. The seek lands where the audio
+  /// already is (the loop just restarted it), so it is a re-anchor, not
+  /// an audible jump.
+  void _onPlaybackEvent(PlaybackEvent event) {
+    final now = DateTime.now();
+    final prev = _lastPlaybackEvent;
+    _lastPlaybackEvent = event;
+    if (prev == null) return;
+    final duration = event.duration ?? _player.duration;
+    if (shouldCorrectLoopAnchor(
+      prevExtrapolated: _extrapolatedPosition(prev, now),
+      eventUpdatePosition: event.updatePosition,
+      prevIndex: prev.currentIndex,
+      eventIndex: event.currentIndex,
+      loopEnabled: _player.loopMode == LoopMode.one ||
+          _player.loopMode == LoopMode.all,
+      duration: duration,
+      playing: _player.playing,
+      lastServiceSeekAt: _lastServiceSeekAt,
+      now: now,
+    )) {
+      DebugLog.instance.info(
+        'Player',
+        'Boucle détectée (ancre périmée '
+        '${event.updatePosition.inMilliseconds}ms) — recalage seek(0)',
+      );
+      unawaited(_seekWithRecord(Duration.zero));
+    }
+  }
 
   Future<void> togglePlayPause() =>
       _player.playing ? pause() : _player.play();
@@ -657,7 +784,7 @@ class AudioPlayerService {
 
   /// Seeks by [delta], clamped to the track — seeking past the end would skip
   /// to the next song, which is never what a ±5 s button means.
-  Future<void> seekBy(Duration delta) => _player.seek(
+  Future<void> seekBy(Duration delta) => _seekWithRecord(
     clampSeekBy(
       position: _player.position,
       delta: delta,
@@ -782,7 +909,7 @@ class AudioPlayerService {
       final target = index < updated.length ? index : updated.length - 1;
       final oldTarget = index < updated.length ? index + 1 : index - 1;
       _setCurrentSong(updated[target]);
-      await _player.seek(Duration.zero, index: oldTarget);
+      await _seekWithRecord(Duration.zero, index: oldTarget);
       await source.removeAt(index);
     } else {
       await source.removeAt(index);
@@ -836,7 +963,7 @@ class AudioPlayerService {
     final expected = _queue.indexOf(current);
     if (expected < 0 || _player.currentIndex == expected) return;
     try {
-      await _player.seek(_player.position, index: expected);
+      await _seekWithRecord(_player.position, index: expected);
     } catch (_) {
       // Best-effort, see above.
     }
@@ -870,6 +997,8 @@ class AudioPlayerService {
     _cancelVolumeFade();
     await _positionSubscription?.cancel();
     _positionSubscription = null;
+    await _loopWatchSubscription?.cancel();
+    _loopWatchSubscription = null;
     await _noisySubscription?.cancel();
     _noisySubscription = null;
     await _interruptionSubscription?.cancel();
