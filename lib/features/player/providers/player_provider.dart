@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:musync/features/player/data/audio_player_service.dart';
@@ -7,9 +8,20 @@ import 'package:musync/features/library/data/models/song.dart';
 
 final audioPlayerServiceProvider = Provider<AudioPlayerService>((ref) {
   final service = AudioPlayerService();
-  // Not awaited: `onDispose` is synchronous, and the teardown ordering that
-  // matters is inside `dispose` itself.
-  ref.onDispose(() => unawaited(service.dispose()));
+  // Not awaited: `onDispose` is synchronous, so the async teardown cannot
+  // be joined here -- but its failure must not become an unhandled async
+  // error either. This provider is not autoDispose, so `onDispose` only
+  // fires when the container itself is destroyed (app teardown), at which
+  // point the service is already outliving any widget that could use it.
+  ref.onDispose(
+    () => unawaited(
+      service.dispose().catchError((Object error) {
+        // Logged, not dropped: `debugPrint`, not the journal, so the
+        // provider does not depend on the journal service.
+        debugPrint('Lecteur: arrêt du service audio impossible: $error');
+      }),
+    ),
+  );
   return service;
 });
 
