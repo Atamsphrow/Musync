@@ -10,6 +10,7 @@ import 'package:http/testing.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
+import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 
 /// One LRCLIB track entry.
@@ -434,6 +435,7 @@ class _StubSource extends LyricsSource {
     required String artist,
     String? album,
     int? durationMs,
+    FilenameGuess? filenameGuess,
   }) async => results;
 }
 
@@ -447,6 +449,7 @@ class _FailingSource extends LyricsSource {
     required String artist,
     String? album,
     int? durationMs,
+    FilenameGuess? filenameGuess,
   }) async => throw const LyricsSourceException('Cassée', 'injoignable');
 }
 
@@ -461,6 +464,7 @@ class _ExplodingSource implements LyricsSource {
     required String artist,
     String? album,
     int? durationMs,
+    FilenameGuess? filenameGuess,
   }) async => throw StateError('reponse inattendue du serveur');
 }
 
@@ -477,6 +481,7 @@ class _FixedSource implements LyricsSource {
     required String artist,
     String? album,
     int? durationMs,
+    FilenameGuess? filenameGuess,
   }) async => [
     LyricsSearchResult(
       source: name,
