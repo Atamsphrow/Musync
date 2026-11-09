@@ -11,12 +11,16 @@ import 'package:musync/features/player/providers/player_provider.dart';
 enum _TileMenu { playNext }
 
 /// Exact height of every [SongTile]: 3 + 3 outer padding, 8 + 8 inner
-/// padding, and a 48 px content row (artwork and buttons are 48 px tall, the
-/// two single-line texts stay below that).
+/// padding, and a 48 px content row at the default text scale (artwork and
+/// buttons are 48 px tall, the two single-line texts stay below that).
 ///
-/// The library list uses this as its fixed item extent, so jumping to a row
-/// by index is exact — no estimation, no drift down a long list.
-const double kSongTileHeight = 70.0;
+/// At a larger system font the texts grow past 48 px, so the row is sized
+/// for a 1.3x font (texts ≈ 55 px) and the tile clamps its own text scaling
+/// to 1.3x: beyond that the text stops growing instead of clipping inside
+/// the fixed extent. The library list uses this as its fixed item extent,
+/// so jumping to a row by index is exact — no estimation, no drift down a
+/// long list.
+const double kSongTileHeight = 78.0;
 
 class SongTile extends ConsumerWidget {
   final Song song;
@@ -41,9 +45,11 @@ class SongTile extends ConsumerWidget {
 
   String _formatDuration(int milliseconds) {
     final duration = Duration(milliseconds: milliseconds);
+    final hours = duration.inHours;
     final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
     final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
+    // 75 min is 1:15:00, not 15:00: hours are shown once they exist.
+    return hours > 0 ? '$hours:$minutes:$seconds' : '$minutes:$seconds';
   }
 
   @override
@@ -94,7 +100,12 @@ class SongTile extends ConsumerWidget {
                 ),
                 const SizedBox(width: 14),
                 Expanded(
-                  child: Column(
+                  // The two text lines are what outgrows the fixed row at a
+                  // large system font: cap their scaling at 1.3x (the row
+                  // is sized for that) instead of clipping them.
+                  child: MediaQuery.withClampedTextScaling(
+                    maxScaleFactor: 1.3,
+                    child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -119,6 +130,7 @@ class SongTile extends ConsumerWidget {
                         ),
                       ),
                     ],
+                    ),
                   ),
                 ),
                 if (status != null) ...[
