@@ -66,12 +66,21 @@ class SongRouteArgs {
   /// screen is the entry point. Null when the editor is reached any other way.
   final int? initialLineIndex;
 
+  /// Requête pré-remplie pour l'écran de recherche de paroles (venue du
+  /// vérificateur ou de l'assistant IA) : elle prime sur les tags.
+  final String? initialTitle;
+
+  /// Voir [initialTitle].
+  final String? initialArtist;
+
   const SongRouteArgs({
     required this.song,
     this.queue,
     this.index,
     this.editorMode,
     this.initialLineIndex,
+    this.initialTitle,
+    this.initialArtist,
   });
 }
 
@@ -124,7 +133,14 @@ class AppRouter {
 
       case AppRoutes.lyricsSearch:
         if (args is SongRouteArgs) {
-          return _buildRoute(settings, LyricsSearchScreen(song: args.song));
+          return _buildRoute(
+            settings,
+            LyricsSearchScreen(
+              song: args.song,
+              initialTitle: args.initialTitle,
+              initialArtist: args.initialArtist,
+            ),
+          );
         }
         return _buildRoute(
           settings,
