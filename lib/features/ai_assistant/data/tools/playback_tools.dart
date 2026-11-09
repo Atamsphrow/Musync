@@ -59,7 +59,7 @@ class PlayTool extends AiTool {
       if (service.currentSong == null) {
         return AiToolResult.fail('Rien en cours de lecture.');
       }
-      await service.play();
+      await service.play(fadeIn: fadeIn);
       return AiToolResult.ok('Lecture reprise.');
     }
     final matches = matchSongs(await librarySongs(ctx.ref), q);
