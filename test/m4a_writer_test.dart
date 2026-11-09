@@ -174,6 +174,66 @@ List<int> readStco(Uint8List bytes) {
   ];
 }
 
+
+/// Builds an M4A whose `stco` atom declares a size that overruns its parent
+/// `stbl` (but stays inside the file), with an entry count larger than the
+/// entries actually present. Before the fix, `_readHeader` trusted the file
+/// length instead of the parent's end, so `_shiftEntries` wrote the phantom
+/// entries past `stbl` into the neighbouring atoms — the `udta` header came
+/// back mangled and the write failed its own verification.
+Uint8List buildM4aInflatedStco() {
+  // Real stco payload: version/flags + count=5, but only 2 entries present.
+  final stcoBody = BytesBuilder(copy: false)
+    ..add(_u32(0))
+    ..add(_u32(5))
+    ..add(_u32(1000))
+    ..add(_u32(2000));
+  final stcoBytes = stcoBody.toBytes();
+  // Declared size inflated by 32: overruns stbl, stays inside the file.
+  final stco = BytesBuilder(copy: false)
+    ..add(_u32(8 + stcoBytes.length + 32))
+    ..add('stco'.codeUnits)
+    ..add(stcoBytes);
+  final stbl = _atom('stbl', stco.toBytes());
+  final minf = _atom('minf', stbl);
+  final mdia = _atom('mdia', minf);
+  final trak = _atom('trak', mdia);
+
+  final ilst = _atom('ilst', Uint8List(0));
+  final metaPayload = BytesBuilder(copy: false)
+    ..add(_u32(0)) // version/flags
+    ..add(ilst);
+  final meta = _atom('meta', metaPayload.toBytes());
+  final udta = _atom('udta', meta);
+  final moovPayload = Uint8List.fromList([...trak, ...udta]);
+  final moov = _atom('moov', moovPayload);
+
+  final ftypPayload = BytesBuilder(copy: false)
+    ..add('isom'.codeUnits)
+    ..add(_u32(0))
+    ..add('isom'.codeUnits);
+  final ftyp = _atom('ftyp', ftypPayload.toBytes());
+  final mdat = _atom('mdat', Uint8List(100));
+
+  final out = BytesBuilder(copy: false)
+    ..add(ftyp)
+    ..add(moov)
+    ..add(mdat);
+  return out.toBytes();
+}
+
+/// Byte offset of [needle] in [bytes], or -1.
+int _indexOf(Uint8List bytes, List<int> needle) {
+  outer:
+  for (var i = 0; i + needle.length <= bytes.length; i++) {
+    for (var j = 0; j < needle.length; j++) {
+      if (bytes[i + j] != needle[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
+}
+
 void main() {
   late Directory tmp;
 
@@ -388,5 +448,33 @@ void main() {
       off += size;
     }
     expect(udtaCount, 1, reason: 'duplicate udta created');
+  });
+
+  test('F32: a child atom overrunning its parent is not trusted', () async {
+    final path = await writeTemp(buildM4aInflatedStco());
+
+    // Lyrics long enough to grow moov: the shift path runs. Before the fix
+    // the phantom stco entries were written past stbl into the udta header
+    // and the write failed its own verification; now the overrun stco is
+    // rejected against its parent's end and the neighbours stay intact.
+    await M4aWriter.writeLrc(path, 'x' * 500);
+
+    final after = await File(path).readAsBytes();
+    expect(readLyr(after), 'x' * 500);
+
+    final moov = _findChild(after, 0, after.length, 'moov'.codeUnits)!;
+    final (_, moovOff, moovSize) = moov;
+    expect(
+      _findChild(after, moovOff + 8, moovOff + moovSize, 'udta'.codeUnits),
+      isNotNull,
+      reason: 'udta header mangled by the shift',
+    );
+
+    // The real stco entries were never shifted: the atom was rejected, not
+    // trusted. ('stco' type bytes, then version/flags + count, then entries.)
+    final stcoType = _indexOf(after, 'stco'.codeUnits);
+    expect(stcoType, greaterThanOrEqualTo(0));
+    expect(_readU32(after, stcoType + 12), 1000);
+    expect(_readU32(after, stcoType + 16), 2000);
   });
 }
