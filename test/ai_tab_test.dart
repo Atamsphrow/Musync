@@ -5,6 +5,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:musync/features/ai_assistant/data/automation_store.dart';
+import 'package:musync/features/ai_assistant/providers/automation_provider.dart';
 import 'package:musync/features/settings/data/ai_provider_config.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
 import 'package:musync/features/settings/ui/ai_tab.dart';
@@ -33,7 +35,25 @@ class _GatedStore extends AiSettingsStore {
   Future<void> save(AiSettings next) async {}
 }
 
+/// No automations on disk, and no disk to read: see the note in `main`.
+class _EmptyAutomationStore extends AutomationStore {
+  const _EmptyAutomationStore();
+
+  @override
+  Future<AutomationsDoc> load() async => const AutomationsDoc();
+}
+
 void main() {
+  // AiTab also shows the automations section, whose real store reads
+  // `path_provider`: with no plugin in a widget test that call never
+  // resolves, `automationsProvider` stays loading and its spinner keeps
+  // scheduling frames, so `pumpAndSettle` times out. The empty store
+  // below answers at once, in pure Dart — no file, no log line (a
+  // failing locator would log through DebugLog, whose 2 s flush timer
+  // then fails the test teardown as still pending). The settings store
+  // is overridden per test, as before.
+  const noFsAutomationStore = _EmptyAutomationStore();
+
   testWidgets('the add button is disabled until the settings load', (
     tester,
   ) async {
@@ -41,7 +61,10 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: ProviderScope(
-          overrides: [aiSettingsStoreProvider.overrideWithValue(store)],
+          overrides: [
+            aiSettingsStoreProvider.overrideWithValue(store),
+            automationStoreProvider.overrideWithValue(noFsAutomationStore),
+          ],
           child: const AiTab(),
         ),
       ),
@@ -74,7 +97,10 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: ProviderScope(
-          overrides: [aiSettingsStoreProvider.overrideWithValue(store)],
+          overrides: [
+            aiSettingsStoreProvider.overrideWithValue(store),
+            automationStoreProvider.overrideWithValue(noFsAutomationStore),
+          ],
           child: ValueListenableBuilder<bool>(
             valueListenable: showTab,
             builder: (_, show, _) =>
