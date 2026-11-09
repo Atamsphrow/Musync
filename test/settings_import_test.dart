@@ -170,6 +170,54 @@ void main() {
       });
     });
 
+    test('song paths are trimmed, bounded and normalised', () async {
+      // Two spellings of the same path must not become two different
+      // stored values, and an unbounded string must not land in prefs.
+      for (final entry in {
+        '  /storage/music/song.mp3  ': '/storage/music/song.mp3',
+        '/storage//music///song.mp3': '/storage/music/song.mp3',
+        '/storage/music/song.mp3/': '/storage/music/song.mp3',
+      }.entries) {
+        final parsed = await importer.parse(
+          await bundleFile(
+            validBundle()..['preferences'] = {'last_song_path': entry.key},
+          ),
+        );
+        expect(
+          parsed.preferences['last_song_path'],
+          entry.value,
+          reason: 'last_song_path=${entry.key}',
+        );
+      }
+
+      final tooLong = '/${'a' * 5000}';
+      final parsed = await importer.parse(
+        await bundleFile(
+          validBundle()..['preferences'] = {'last_song_path': tooLong},
+        ),
+      );
+      expect(parsed.preferences.containsKey('last_song_path'), isFalse);
+    });
+
+    test('a file over 32 Mo is refused on the bytes actually read', () async {
+      // Just over the limit; the content is irrelevant, the size check
+      // fires first — and it fires on the bytes read, not on a length()
+      // taken before the read.
+      final file = File('${root.path}${Platform.pathSeparator}big.json');
+      await file.writeAsBytes(List<int>.filled(32 * 1024 * 1024 + 1, 0x20));
+
+      await expectLater(
+        importer.parse(file),
+        throwsA(
+          isA<ImportFormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('trop volumineux'),
+          ),
+        ),
+      );
+    });
+
     test('drops invalid last-played track values and unknown keys', () async {
       final bundle = await importer.parse(
         await bundleFile(validBundle()
