@@ -263,25 +263,54 @@ void main() {
       expect(tag.frameById('TIT2'), isNull);
     });
 
-    test('negative number drops that part of the pair', () async {
+    test('negative number drops the whole pair (J31)', () async {
       final file = await fixture(
         'pair.mp3',
         _mp3([..._textFrame('TRCK', '3/12')]),
       );
 
-      // Drop the number, keep the total.
-      await Id3Writer.writeMetadata(file.path, _m(trackNumber: -1,));
+      // Drop the number: the frame goes away, total with it — a total
+      // without a number is never written ("/N" is off-grammar).
+      await Id3Writer.writeMetadata(file.path, _m(trackNumber: -1));
       var read = await Id3Reader.readFullMetadata(file.path);
       expect(read.trackNumber, isNull);
-      expect(read.trackTotal, 12);
+      expect(read.trackTotal, isNull);
+      var tag = Id3Tag.parse(await file.readAsBytes())!;
+      expect(tag.frameById('TRCK'), isNull);
 
-      // Drop both: the frame goes away.
-      await Id3Writer.writeMetadata(file.path, _m(trackNumber: -1,
-trackTotal: -1,));
+      // Drop both: unchanged, frame still absent.
+      await Id3Writer.writeMetadata(
+        file.path,
+        _m(trackNumber: -1, trackTotal: -1),
+      );
       read = await Id3Reader.readFullMetadata(file.path);
       expect(read.trackNumber, isNull);
       expect(read.trackTotal, isNull);
-      final tag = Id3Tag.parse(await file.readAsBytes())!;
+      tag = Id3Tag.parse(await file.readAsBytes())!;
+      expect(tag.frameById('TRCK'), isNull);
+    });
+
+    test('total without a number is never written (J31)', () async {
+      // Existing "/12" frame, total re-set without a number: the frame
+      // is removed instead of being rewritten as "/12".
+      final file = await fixture(
+        'total-only.mp3',
+        _mp3([..._textFrame('TRCK', '/12')]),
+      );
+      await Id3Writer.writeMetadata(file.path, _m(trackTotal: 12));
+      var read = await Id3Reader.readFullMetadata(file.path);
+      expect(read.trackNumber, isNull);
+      expect(read.trackTotal, isNull);
+      var tag = Id3Tag.parse(await file.readAsBytes())!;
+      expect(tag.frameById('TRCK'), isNull);
+
+      // No frame at all, total alone: nothing is written.
+      final fresh = await fixture('no-track.mp3', _mp3([]));
+      await Id3Writer.writeMetadata(fresh.path, _m(trackTotal: 12));
+      read = await Id3Reader.readFullMetadata(fresh.path);
+      expect(read.trackNumber, isNull);
+      expect(read.trackTotal, isNull);
+      tag = Id3Tag.parse(await fresh.readAsBytes())!;
       expect(tag.frameById('TRCK'), isNull);
     });
 
