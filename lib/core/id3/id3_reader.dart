@@ -686,6 +686,16 @@ class Id3Reader {
       final tag = Id3Tag.parse(header);
       if (tag == null) return header;
 
+      // Plafond : un tag qui ment sur sa taille (jusqu'à ~256 Mo en
+      // synchsafe) ne doit pas faire allouer un tampon de cette taille —
+      // `read` ne rend que ce que le fichier contient, mais l'allocation,
+      // elle, est faite pour le compte demandé.
+      if (tag.audioOffset > await handle.length()) {
+        throw const FileSystemException(
+          'Fichier tronqué : tag ID3 incomplet.',
+        );
+      }
+
       await handle.setPosition(0);
       final head = await handle.read(tag.audioOffset);
       if (head.length < tag.audioOffset) {
