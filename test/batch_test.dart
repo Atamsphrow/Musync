@@ -10,6 +10,7 @@ import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/data/music_scanner.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
+import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 import 'package:musync/features/lyrics/providers/batch_provider.dart';
 import 'package:musync/features/lyrics/providers/search_provider.dart';
@@ -38,6 +39,7 @@ class _FakeSource implements LyricsSource {
     required String artist,
     String? album,
     int? durationMs,
+    FilenameGuess? filenameGuess,
   }) async {
     queried.add(title);
     queries.add((title: title, artist: artist, album: album));
