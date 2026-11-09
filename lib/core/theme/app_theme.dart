@@ -78,6 +78,14 @@ class AppTheme {
         centerTitle: false,
         // The app draws edge-to-edge, so the status bar icons have to be the
         // inverse of the surface behind them or they vanish.
+        //
+        // The two transparent colors below are NOT dead: they still take
+        // effect while `targetSdk` is 34. On Android 15 (API 35), for apps
+        // targeting 35, edge-to-edge is enforced and `setStatusBarColor` /
+        // `setNavigationBarColor` become no-ops — so the day `targetSdk`
+        // moves to 35 these two lines can go (the icon-brightness fields
+        // stay useful). Do NOT bump `targetSdk` to remove them: that
+        // decision is pending with the user.
         systemOverlayStyle: SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
           statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
