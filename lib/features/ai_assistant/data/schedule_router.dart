@@ -40,6 +40,7 @@ const _cancelPrefixes = [
   'efface',
   'retir',
   'enlev',
+  'enlèv',
 ];
 
 // Mots neutres autorisés autour de « lance la musique à 4h43 ».
