@@ -224,6 +224,45 @@ void main() {
       expect(props.keys, containsAll(['source', 'enabled']));
     });
 
+    test(
+      'toggle_lyrics_source : enabled absent → erreur explicite dès la '
+      'description',
+      () async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final ctx = _ctx(container.read(_refProbe));
+        final tool = buildAiToolRegistry()['toggle_lyrics_source']!;
+        // Avant le correctif, la description disait « Désactiver » (optBool
+        // absent → false) et execute levait ensuite : l'argument manquant
+        // doit échouer ici, pas là-bas.
+        expect(
+          () => tool.describeAction(ctx, {'source': 'LRCLIB'}),
+          throwsA(isA<AiToolArgError>()),
+        );
+        expect(
+          () => tool.describeAction(
+            ctx,
+            {'source': 'LRCLIB', 'enabled': 'oui'},
+          ),
+          throwsA(isA<AiToolArgError>()),
+        );
+        expect(
+          await tool.describeAction(
+            ctx,
+            {'source': 'LRCLIB', 'enabled': true},
+          ),
+          contains('Activer'),
+        );
+        expect(
+          await tool.describeAction(
+            ctx,
+            {'source': 'LRCLIB', 'enabled': false},
+          ),
+          contains('Désactiver'),
+        );
+      },
+    );
+
     test('les outils d’écriture paroles exigent une confirmation', () {
       final registry = buildAiToolRegistry();
       for (final name in [
