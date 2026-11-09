@@ -51,6 +51,11 @@ class PlaybackStateStore {
   /// service, the bubble controller) never interleave a read-modify-write.
   static Map<String, Object?>? _memory;
 
+  /// In-flight first read: two concurrent readers share one decode, so
+  /// they get the same Map instance instead of each decoding their own
+  /// copy and overwriting the other's merged fields (see [_read]).
+  static Future<Map<String, Object?>>? _pendingRead;
+
   /// Where the file lives. Production reads the app's documents directory;
   /// tests inject a temporary file instead — `path_provider` has no plugin
   /// in a unit test.
@@ -68,6 +73,21 @@ class PlaybackStateStore {
   Future<Map<String, Object?>> _read() async {
     final cached = _memory;
     if (cached != null) return cached;
+    // Serialize the first read: without this, two concurrent callers with
+    // `_memory == null` each decode their own Map, merge into their own
+    // copy, and the last writer silently drops the other's fields.
+    final pending = _pendingRead;
+    if (pending != null) return pending;
+    final future = _readFromDisk();
+    _pendingRead = future;
+    try {
+      return await future;
+    } finally {
+      _pendingRead = null;
+    }
+  }
+
+  Future<Map<String, Object?>> _readFromDisk() async {
     try {
       final file = await _file();
       if (await file.exists()) {
@@ -108,8 +128,11 @@ class PlaybackStateStore {
 
   Future<PlaybackState> load() async {
     final map = await _read();
+    // A non-List `queue` value (corrupt or half-written file) must read
+    // as "nothing to restore", not throw a TypeError out of the cast.
+    final rawQueue = map['queue'];
     final queue = <String>[
-      for (final p in (map['queue'] as List? ?? const []))
+      for (final p in (rawQueue is List ? rawQueue : const []))
         if (p is String && p.isNotEmpty) p,
     ];
     var index = map['index'] is int ? map['index'] as int : 0;
@@ -132,5 +155,6 @@ class PlaybackStateStore {
   /// Test hook: forget the in-memory copy so the next read hits the file.
   static void debugResetForTest() {
     _memory = null;
+    _pendingRead = null;
   }
 }
