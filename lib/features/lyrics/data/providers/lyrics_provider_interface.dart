@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
+import 'package:musync/features/lyrics/data/filename_guess.dart';
+import 'package:musync/features/lyrics/data/lyrics_confidence.dart';
 
 /// A place lyrics can be fetched from.
 ///
@@ -20,6 +22,12 @@ abstract class LyricsSource {
     required String artist,
     String? album,
     int? durationMs,
+
+    /// What the file name says the track is, when the caller resolved it.
+    /// LRCLIB uses it for the filename-agreement bonus and to cap a `/get`
+    /// exact hit that contradicts it; a source that cannot use it ignores
+    /// it. Null means "not resolved".
+    FilenameGuess? filenameGuess,
   });
 }
 
@@ -48,6 +56,16 @@ class LyricsSearchResult {
   /// and duration; anything below 0.5 is a guess.
   final double confidence;
 
+  /// The source's own id for this track (LRCLIB track id), when the source
+  /// has one. Lets the verifier and the provenance store say *which*
+  /// recording the lyrics came from, not just what they are called.
+  final int? trackId;
+
+  /// The recording's duration in milliseconds, when the source knows it.
+  /// The confidence scorer uses it; a source that does not report one
+  /// leaves it null and the duration component simply scores 0.
+  final int? durationMs;
+
   const LyricsSearchResult({
     required this.source,
     required this.title,
@@ -56,6 +74,8 @@ class LyricsSearchResult {
     this.syncedLyrics,
     this.unsyncedLyrics,
     required this.confidence,
+    this.trackId,
+    this.durationMs,
   });
 
   bool get hasSyncedLyrics => syncedLyrics != null && syncedLyrics!.isNotEmpty;
@@ -82,3 +102,22 @@ class LyricsSearchResult {
 LyricsSearchResult? bestLyricsMatch(List<LyricsSearchResult> results) =>
     results.where((r) => r.hasSyncedLyrics).firstOrNull ??
     results.where((r) => r.hasUnsyncedLyrics).firstOrNull;
+
+/// The pick every *automatic* path shares — the AI assistant, the
+/// background sweep, the batch pre-selection: the same synced-first
+/// preference as [bestLyricsMatch], but only among hits at or above
+/// [minConfidence] (0.80 by default, the shared threshold).
+///
+/// A synced hit below the bar never beats a plain hit above it, and
+/// when nothing reaches the bar this answers null instead of picking
+/// the least-bad guess — that refusal is the whole point of the gate.
+/// [results] must already be ranked best-first. Null when the list is
+/// empty or nothing reaches the bar.
+LyricsSearchResult? bestAutoMatch(
+  List<LyricsSearchResult> results, {
+  double minConfidence = LyricsConfidence.autoIntegrateConfidence,
+}) {
+  final above = results.where((r) => r.confidence >= minConfidence);
+  return above.where((r) => r.hasSyncedLyrics).firstOrNull ??
+      above.where((r) => r.hasUnsyncedLyrics).firstOrNull;
+}
