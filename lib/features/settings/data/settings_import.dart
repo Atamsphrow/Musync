@@ -483,12 +483,19 @@ class SettingsImporter {
     );
 
     // Snapshot what is there now for the rollback.
+    //
+    // `null` means "no file" — a read failure is tracked separately in
+    // [indexUnreadable]: confusing the two would let the rollback below
+    // delete a file whose contents could not be read back (même motif que
+    // G79 pour les fichiers de réglages, dans `apply`).
     String? previousIndex;
+    var indexUnreadable = false;
     try {
       previousIndex =
           await indexFile.exists() ? await indexFile.readAsString() : null;
     } catch (_) {
       previousIndex = null;
+      indexUnreadable = true;
     }
     final before = <String>{};
     // Bytes of the files this import is about to overwrite: a failed restore
@@ -520,6 +527,7 @@ class SettingsImporter {
     }
 
     final written = <String>[];
+    var rollbackIncomplete = false;
     try {
       for (final entry in history.entries) {
         final bytes = history.files[entry.storedAs]!;
@@ -546,7 +554,11 @@ class SettingsImporter {
             '${dir.path}${Platform.pathSeparator}$name',
           );
           if (await file.exists()) await file.delete();
-        } catch (_) {}
+        } catch (_) {
+          // Best effort — the original error is the one that matters,
+          // unless the rollback itself could not complete (flagged below).
+          rollbackIncomplete = true;
+        }
       }
       for (final entry in overwritten.entries) {
         try {
@@ -554,15 +566,38 @@ class SettingsImporter {
             File('${dir.path}${Platform.pathSeparator}${entry.key}'),
             entry.value,
           );
-        } catch (_) {}
+        } catch (_) {
+          rollbackIncomplete = true;
+        }
       }
       try {
         if (previousIndex == null) {
-          if (await indexFile.exists()) await indexFile.delete();
+          if (indexUnreadable) {
+            // Lecture en échec : le contenu est inconnu, le fichier est
+            // laissé strictement intact — le supprimer (le chemin
+            // `previous == null`) détruirait l'historique au lieu de le
+            // restaurer. Le rollback est alors incomplet, et l'erreur
+            // ci-dessous le dit explicitement au lieu de prétendre que
+            // l'historique a été restauré.
+            rollbackIncomplete = true;
+          } else if (await indexFile.exists()) {
+            await indexFile.delete();
+          }
         } else {
           await AtomicFile.writeString(indexFile, previousIndex);
         }
-      } catch (_) {}
+      } catch (_) {
+        // La restauration de l'index elle-même a échoué : ne pas prétendre
+        // que l'historique a été restauré.
+        rollbackIncomplete = true;
+      }
+      if (rollbackIncomplete) {
+        throw const ImportFormatException(
+          "L'import de l'historique a échoué et l'historique n'a pas pu "
+          'être entièrement restauré (index illisible) : vérifiez vos '
+          'sauvegardes.',
+        );
+      }
       throw const ImportFormatException(
         "L'import de l'historique a échoué et les sauvegardes ont été "
         'restaurées.',
