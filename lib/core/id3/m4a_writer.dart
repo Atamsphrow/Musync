@@ -150,6 +150,82 @@ class M4aWriter {
     }
   }
 
+  /// Duration of [filePath]'s audio, from the `mvhd` atom (timescale +
+  /// duration), without decoding.
+  ///
+  /// Reads the head of the file, then the tail when `moov` sits at the end
+  /// (non-faststart files): `mvhd` is at the start of `moov`, so the first
+  /// bytes of the atom are enough. Null when the file has no readable `mvhd`.
+  /// Never throws.
+  static Future<Duration?> readDuration(String filePath) async {
+    final file = File(filePath);
+    RandomAccessFile? handle;
+    try {
+      if (!await file.exists()) return null;
+      handle = await file.open();
+      final length = await handle.length();
+      if (length < 8) return null;
+      const probe = 512 * 1024;
+      await handle.setPosition(0);
+      final head = await handle.read(length < probe ? length : probe);
+      final fromHead = durationFromBytes(head);
+      if (fromHead != null) return fromHead;
+      if (length <= probe) return null;
+      await handle.setPosition(length - probe);
+      final tail = await handle.read(probe);
+      return durationFromBytes(tail);
+    } catch (_) {
+      return null;
+    } finally {
+      await handle?.close();
+    }
+  }
+
+  /// Same as [readDuration], against bytes already in memory.
+  ///
+  /// Scans the top-level atoms for `moov`, then reads `mvhd` (version 0:
+  /// 32-bit timescale/duration; version 1: 64-bit duration). Null when no
+  /// `moov`/`mvhd` is found in these bytes — the caller reads the tail next.
+  static Duration? durationFromBytes(Uint8List bytes) {
+    try {
+      final topLevel = _parseChildren(bytes, 0, bytes.length, 0);
+      final moov = _findByType(topLevel, 'moov');
+      if (moov == null) return null;
+      final payload = bytes.sublist(
+        moov.offset + moov.headerSize,
+        moov.offset + moov.size,
+      );
+      final children = _parseChildren(payload, 0, payload.length, 0);
+      final mvhd = _findByType(children, 'mvhd');
+      if (mvhd == null) return null;
+      final body = payload.sublist(
+        mvhd.offset + mvhd.headerSize,
+        mvhd.offset + mvhd.size,
+      );
+      if (body.isEmpty) return null;
+      final version = body[0];
+      int timescale;
+      int duration;
+      if (version == 1) {
+        if (body.length < 32) return null;
+        timescale = _readU32(body, 20);
+        duration = _readU64(body, 24);
+      } else {
+        if (body.length < 20) return null;
+        timescale = _readU32(body, 12);
+        duration = _readU32(body, 16);
+      }
+      if (timescale <= 0 || duration <= 0) return null;
+      // Duration in microseconds; double arithmetic avoids overflow on the
+      // 64-bit v1 duration, and a track is minutes long, not years.
+      final micros = (duration / timescale * 1000000).round();
+      if (micros <= 0) return null;
+      return Duration(microseconds: micros);
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ── File assembly ──
 
   /// Reads the tag-editor metadata (`©nam`, `©ART`, `©alb`, …, `trkn`,
@@ -545,10 +621,20 @@ class M4aWriter {
     final newMoov = _makeAtom('moov', newMoovPayload);
     final delta = newMoov.length - moov.size;
 
-    // Fix chunk offsets when moov grew/shrank in front of mdat.
+    // Fix chunk offsets for the chunks that sit after moov: growing moov
+    // pushes them down by `delta`. Chunks in an `mdat` before moov keep
+    // their offsets — shifting every entry (the old behaviour, gated on
+    // "moov before the first mdat") corrupted those, and skipping the shift
+    // entirely left the later chunks wrong. The threshold is the end of the
+    // old moov: every chunk offset at or past it moved by exactly `delta`,
+    // whichever `mdat` it lives in.
     final Uint8List fixedMoov;
-    if (delta != 0 && _moovIsBeforeMdat(topLevel, moov)) {
-      fixedMoov = _shiftChunkOffsets(newMoov, delta);
+    if (delta != 0) {
+      fixedMoov = _shiftChunkOffsets(
+        newMoov,
+        delta,
+        shiftFrom: moov.offset + moov.size,
+      );
     } else {
       fixedMoov = newMoov;
     }
@@ -858,31 +944,28 @@ class M4aWriter {
 
   // ── Chunk offset fixup ──
 
-  /// True when [moov] sits before the first `mdat` in file order — the case
-  /// where growing moov shifts the audio data and `stco`/`co64` must follow.
-  static bool _moovIsBeforeMdat(List<_AtomHeader> topLevel, _AtomHeader moov) {
-    for (final a in topLevel) {
-      if (_typeEquals(a.type, _typeBytes('mdat'))) {
-        return moov.offset < a.offset;
-      }
-    }
-    return false; // no mdat (unusual) — nothing to shift
-  }
-
-  /// Adds [delta] to every entry of every `stco`/`co64` under [moovBytes].
-  static Uint8List _shiftChunkOffsets(Uint8List moovBytes, int delta) {
+  /// Adds [delta] to every `stco`/`co64` entry at or past [shiftFrom] under
+  /// [moovBytes] — i.e. the chunks stored after moov in the file.
+  static Uint8List _shiftChunkOffsets(
+    Uint8List moovBytes,
+    int delta, {
+    required int shiftFrom,
+  }) {
     final bytes = Uint8List.fromList(moovBytes);
-    // moov payload starts at 8.
-    for (final trak in _parseChildren(bytes, 8, bytes.length, 0)
+    // The moov payload starts after the moov header — 8 bytes, or 16 with a
+    // 64-bit largesize header. Never hardcoded: a largesize moov used to be
+    // parsed 8 bytes off, leaving its chunk offsets uncorrected.
+    final headerSize = _readHeader(bytes, 0, bytes.length)?.headerSize ?? 8;
+    for (final trak in _parseChildren(bytes, headerSize, bytes.length, 0)
         .where((a) => _typeEquals(a.type, _typeBytes('trak')))) {
       final mdia = _singleChild(bytes, trak, 'mdia', 0);
       final minf = mdia == null ? null : _singleChild(bytes, mdia, 'minf', 0);
       final stbl = minf == null ? null : _singleChild(bytes, minf, 'stbl', 0);
       if (stbl == null) continue;
       final stco = _singleChild(bytes, stbl, 'stco', 0);
-      if (stco != null) _shiftEntries(bytes, stco, delta, 4);
+      if (stco != null) _shiftEntries(bytes, stco, delta, 4, shiftFrom);
       final co64 = _singleChild(bytes, stbl, 'co64', 0);
-      if (co64 != null) _shiftEntries(bytes, co64, delta, 8);
+      if (co64 != null) _shiftEntries(bytes, co64, delta, 8, shiftFrom);
     }
     return bytes;
   }
@@ -895,9 +978,15 @@ class M4aWriter {
   }
 
   /// Shifts the chunk-offset entries of one `stco` (4-byte) or `co64`
-  /// (8-byte) atom by [delta]. Done in place on [bytes].
+  /// (8-byte) atom by [delta], for entries at or past [shiftFrom] only.
+  /// Done in place on [bytes].
   static void _shiftEntries(
-      Uint8List bytes, _AtomHeader atom, int delta, int entrySize) {
+    Uint8List bytes,
+    _AtomHeader atom,
+    int delta,
+    int entrySize,
+    int shiftFrom,
+  ) {
     // version/flags(4) + entry_count(4), then entries.
     final base = atom.offset + atom.headerSize;
     if (base + 8 > atom.offset + atom.size) return;
@@ -905,10 +994,14 @@ class M4aWriter {
     var pos = base + 8;
     for (var i = 0; i < count; i++) {
       if (pos + entrySize > atom.offset + atom.size) break;
-      if (entrySize == 4) {
-        _writeU32(bytes, pos, _readU32(bytes, pos) + delta);
-      } else {
-        _writeU64(bytes, pos, _readU64(bytes, pos) + delta);
+      final value =
+          entrySize == 4 ? _readU32(bytes, pos) : _readU64(bytes, pos);
+      if (value >= shiftFrom) {
+        if (entrySize == 4) {
+          _writeU32(bytes, pos, value + delta);
+        } else {
+          _writeU64(bytes, pos, value + delta);
+        }
       }
       pos += entrySize;
     }
@@ -947,7 +1040,14 @@ class M4aWriter {
     }
   }
 
-  /// Reads the UTF-8 text out of a `©lyr` atom's `data` child.
+  /// Reads the text out of a `©lyr` atom's `data` child.
+  ///
+  /// The `data` atom carries a type flag (0 = binary, 1 = UTF-8, 2 = UTF-16)
+  /// before the locale and the text. Musync only ever writes UTF-8, but a
+  /// foreign `©lyr` may be UTF-16 — decoded as UTF-8 it came back as
+  /// mojibake, and malformed UTF-8 threw instead of failing cleanly.
+  /// An unknown type returns null (read as "no lyrics" by the callers, and
+  /// as a mismatch by the temp-file verifier).
   static String? _readLyrText(Uint8List ilst, _AtomHeader lyr) {
     final payload = ilst.sublist(
       lyr.offset + lyr.headerSize,
@@ -960,7 +1060,36 @@ class M4aWriter {
     final start = data.offset + data.headerSize + 8;
     final end = data.offset + data.size;
     if (start > end) return null;
-    return utf8.decode(payload.sublist(start, end));
+    final type = _readU32(payload, data.offset + data.headerSize);
+    final textBytes = payload.sublist(start, end);
+    if (type == 2) return _decodeUtf16(textBytes);
+    if (type == 0 || type == 1) {
+      return utf8.decode(textBytes, allowMalformed: true);
+    }
+    return null;
+  }
+
+  /// UTF-16 text, big-endian unless a little-endian BOM says otherwise.
+  /// Malformed units decode leniently, like `allowMalformed` UTF-8.
+  static String? _decodeUtf16(Uint8List bytes) {
+    if (bytes.length < 2) return '';
+    var littleEndian = false;
+    var offset = 0;
+    if (bytes[0] == 0xFE && bytes[1] == 0xFF) {
+      offset = 2;
+    } else if (bytes[0] == 0xFF && bytes[1] == 0xFE) {
+      littleEndian = true;
+      offset = 2;
+    }
+    final units = <int>[];
+    for (var i = offset; i + 1 < bytes.length; i += 2) {
+      units.add(
+        littleEndian
+            ? bytes[i] | (bytes[i + 1] << 8)
+            : (bytes[i] << 8) | bytes[i + 1],
+      );
+    }
+    return String.fromCharCodes(units);
   }
 
   // ── Byte helpers ──
