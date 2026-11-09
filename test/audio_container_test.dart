@@ -17,7 +17,9 @@ import 'package:musync/core/id3/models/lyrics.dart';
 
 /// The bytes an MP4 opens with: a size field, then `ftyp`, then a brand.
 Uint8List _m4aHeader() => Uint8List.fromList([
-  0x00, 0x00, 0x00, 0x20, // atom size
+  0x00, 0x00, 0x00, 0x18, // atom size : 24 octets (4 taille + 4 `ftyp` +
+  // 4 marque + 4 version + 8 compat) — pas 0x20 : la taille annoncée
+  // doit être la taille réelle de l'atome.
   ...ascii.encode('ftyp'),
   ...ascii.encode('M4A '),
   0x00, 0x00, 0x02, 0x00,
@@ -46,7 +48,14 @@ Uint8List _validM4a() {
     0, 0, 0, 0,
     ...ascii.encode('isom'),
   ]));
-  final moov = atom('moov', Uint8List(0));
+  // Un moov vide n'est pas réaliste : le writer M4A le reconstruit, mais
+  // un vrai moov contient au moins un `mvhd` (timescale + durée, offsets
+  // 12 et 16 du payload, version 0). Le fixture s'en approche.
+  final mvhdPayload = Uint8List(100);
+  final mvhdView = ByteData.sublistView(mvhdPayload);
+  mvhdView.setUint32(12, 1000); // timescale
+  mvhdView.setUint32(16, 1000); // duration (1 s)
+  final moov = atom('moov', atom('mvhd', mvhdPayload));
   final mdat = atom('mdat', Uint8List.fromList(
     List<int>.generate(256, (i) => i % 256),
   ));
@@ -187,18 +196,33 @@ void main() {
     });
 
     test('FLAC, Ogg and WAV are refused as well', () async {
-      for (final magic in ['fLaC', 'OggS']) {
-        final bytes = Uint8List.fromList([
-          ...ascii.encode(magic),
+      // Le WAV n'est pas un simple magic en tête de fichier : `RIFF` +
+      // 4 octets de taille + `WAVE`. Le titre du test l'annonçait, la
+      // boucle ne le couvrait pas.
+      final magics = <String, Uint8List>{
+        'fLaC': Uint8List.fromList([
+          ...ascii.encode('fLaC'),
           ...List<int>.generate(512, (i) => i % 256),
-        ]);
-        final file = await fixture('x_$magic', bytes);
+        ]),
+        'OggS': Uint8List.fromList([
+          ...ascii.encode('OggS'),
+          ...List<int>.generate(512, (i) => i % 256),
+        ]),
+        'WAV': Uint8List.fromList([
+          ...ascii.encode('RIFF'),
+          0, 0, 0, 0, // taille du chunk (ignorée ici)
+          ...ascii.encode('WAVE'),
+          ...List<int>.generate(512, (i) => i % 256),
+        ]),
+      };
+      for (final entry in magics.entries) {
+        final file = await fixture('x_${entry.key}', entry.value);
 
         await expectLater(
           () => Id3Writer.writeLyrics(file.path, synced: lyrics),
           throwsA(isA<Id3WriteException>()),
         );
-        expect(await file.readAsBytes(), bytes);
+        expect(await file.readAsBytes(), entry.value);
       }
     });
 
