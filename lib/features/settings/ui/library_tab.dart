@@ -5,6 +5,8 @@
 /// automatique, le snackbar dit seulement qu'il est en cours.
 library;
 
+import 'dart:async' show unawaited;
+
 import 'dart:io' show Platform;
 
 import 'package:file_picker/file_picker.dart';
@@ -42,6 +44,32 @@ class LibraryTab extends ConsumerWidget {
                 else
                   for (final file in files) _ExcludedFileTile(path: file),
               ],
+            ),
+        // A failed load is not a load in progress: without this branch
+        // the fallback spinner below would run forever, with no message
+        // and no way back.
+        (AsyncError(:final error), _) || (_, AsyncError(:final error)) =>
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Exclusions illisibles : $error',
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.tonal(
+                      onPressed: () {
+                        ref.invalidate(excludedDirsProvider);
+                        ref.invalidate(excludedFilesProvider);
+                      },
+                      child: const Text('Réessayer'),
+                    ),
+                  ],
+                ),
+              ),
             ),
         _ => const Center(child: CircularProgressIndicator()),
       },
@@ -224,6 +252,9 @@ Future<void> _confirmRemove(
     ),
   );
   if (confirmed != true) return;
+  // Before the ref.read below: the mounted check that used to sit
+  // after it comes too late — using ref on a disposed widget throws.
+  if (!context.mounted) return;
 
   if (isFile) {
     await ref.read(excludedFilesProvider.notifier).remove(path);
@@ -245,8 +276,11 @@ Future<void> _confirmRemove(
 /// Manual entry fallback when the folder picker is unusable on this device.
 Future<String?> _askForPath(BuildContext context) async {
   final controller = TextEditingController();
-  try {
-    return await showDialog<String>(
+  // The controller belongs to the dialog's field, which stays mounted
+  // while the pop animation runs: disposing it the moment showDialog
+  // completes (in a finally) can kill a field that is still on screen.
+  // It is disposed once the animation is over instead.
+  final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Ajouter un dossier'),
@@ -259,9 +293,14 @@ Future<String?> _askForPath(BuildContext context) async {
             context,
             controller.text.trim().isEmpty ? null : controller.text.trim(),
           ),
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             labelText: 'Chemin du dossier',
-            hintText: '/storage/emulated/0/MonDossier',
+            // The manual fallback is reachable on iOS too (the picker
+            // is desktop-only there), where an Android storage path
+            // does not exist: show a folder name instead.
+            hintText: Platform.isIOS
+                ? 'MonDossier'
+                : '/storage/emulated/0/MonDossier',
           ),
         ),
         actions: [
@@ -279,7 +318,11 @@ Future<String?> _askForPath(BuildContext context) async {
         ],
       ),
     );
-  } finally {
-    controller.dispose();
-  }
+  unawaited(
+    Future.delayed(
+      const Duration(milliseconds: 350),
+      controller.dispose,
+    ),
+  );
+  return result;
 }
