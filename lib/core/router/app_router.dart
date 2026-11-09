@@ -90,6 +90,12 @@ class AppRouter {
 
       case AppRoutes.batch:
         if (args is BatchRequest) {
+          if (args.songs.isEmpty) {
+            return _buildRoute(
+              settings,
+              const _RouteError('Aucun morceau à traiter.'),
+            );
+          }
           return _buildRoute(
             settings,
             BatchScreen(
@@ -100,6 +106,12 @@ class AppRouter {
           );
         }
         if (args is List<Song>) {
+          if (args.isEmpty) {
+            return _buildRoute(
+              settings,
+              const _RouteError('Aucun morceau à traiter.'),
+            );
+          }
           return _buildRoute(settings, BatchScreen(songs: args));
         }
         return _buildRoute(
@@ -160,7 +172,14 @@ class AppRouter {
           'Navigation',
           'Route inconnue, ouverture de la bibliothèque : ${settings.name}',
         );
-        return _buildRoute(settings, const LibraryScreen());
+        // La route de repli porte le nom de la route réellement construite,
+        // pas celui de l'inconnue : un `settings.name` divergent faussait
+        // `ModalRoute.of(context).settings.name`, l'observateur de routes et
+        // `popUntil`.
+        return _buildRoute(
+          RouteSettings(name: AppRoutes.library, arguments: settings.arguments),
+          const LibraryScreen(),
+        );
     }
   }
 
