@@ -107,8 +107,21 @@ class DebugLog extends ChangeNotifier {
   final Queue<LogEntry> _entries = Queue<LogEntry>();
   Timer? _flushTimer;
 
-  /// Newest first, which is the order the panel reads in.
-  List<LogEntry> get entries => _entries.toList().reversed.toList();
+  /// Newest first, which is the order the panel reads in. One allocation:
+  /// the queue is copied once, then reversed in place.
+  List<LogEntry> get entries {
+    final list = _entries.toList();
+    var i = 0;
+    var j = list.length - 1;
+    while (i < j) {
+      final tmp = list[i];
+      list[i] = list[j];
+      list[j] = tmp;
+      i++;
+      j--;
+    }
+    return list;
+  }
 
   bool get isEmpty => _entries.isEmpty;
 
@@ -209,6 +222,11 @@ class DebugLog extends ChangeNotifier {
       add(LogLevel.info, source, message);
 
   /// Keys already reported by [once], so a repeat is dropped.
+  ///
+  /// Bounded (FIFO): unlike `_entries` this set used to grow with every
+  /// distinct key for the whole session. Past the cap the oldest key is
+  /// forgotten, so it can be reported again — a repeat line, not a leak.
+  static const int _onceCap = 128;
   final Set<String> _reportedOnce = <String>{};
 
   /// Logs the first occurrence of [key] and ignores the rest.
@@ -228,7 +246,11 @@ class DebugLog extends ChangeNotifier {
     String message, {
     Object? error,
   }) {
-    if (!_reportedOnce.add(key)) return;
+    if (_reportedOnce.contains(key)) return;
+    if (_reportedOnce.length >= _onceCap) {
+      _reportedOnce.remove(_reportedOnce.first);
+    }
+    _reportedOnce.add(key);
     add(level, source, message, error: error);
   }
 
@@ -261,6 +283,9 @@ class DebugLog extends ChangeNotifier {
   }
 
   /// The whole log as one string, for the Copy button.
+  ///
+  /// Paths are redacted (see [_redactPaths]): the report is copied and
+  /// shared, and the messages carry absolute file paths verbatim otherwise.
   String report() {
     if (_entries.isEmpty) return 'Journal vide.';
     return [
@@ -270,8 +295,22 @@ class DebugLog extends ChangeNotifier {
       '',
       // Oldest first here, unlike the on-screen list: a report is read as a
       // story, from what happened first.
-      for (final entry in _entries) entry.format(),
+      for (final entry in _entries) _redactPaths(entry.format()),
     ].join('\n');
+  }
+
+  /// Reduces absolute file paths to their file name, so the directory layout
+  /// of the phone (and the music folders) doesn't travel with a shared
+  /// report. Diagnostics keep the file that matters, not where it lives.
+  static String _redactPaths(String text) {
+    return text.replaceAllMapped(
+      RegExp(r"/[^\s'\)\]]+"),
+      (match) {
+        final path = match.group(0)!;
+        final slash = path.lastIndexOf('/');
+        return slash < 0 ? path : path.substring(slash + 1);
+      },
+    );
   }
 
   /// Routes Flutter's own errors here as well as to the console.
