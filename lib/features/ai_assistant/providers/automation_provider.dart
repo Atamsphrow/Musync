@@ -37,6 +37,38 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
     await future;
   }
 
+  /// File d'attente des mutations : chaque mutation (lecture de l'état,
+  /// calcul du document suivant, sauvegarde, resync native) s'exécute
+  /// entièrement avant la suivante. Sans ça, deux `_commit` concurrents
+  /// pouvaient terminer `syncAlarms` dans le désordre et laisser le natif
+  /// avec la liste d'alarmes la plus ancienne — et un `save` lent pouvait
+  /// écraser un `save` plus récent déjà terminé.
+  ///
+  /// `_commit` n'est appelé que depuis un travail sérialisé (directement,
+  /// ou via `resync` pour le seul `syncAlarms`).
+  Future<void> _gate = Future.value();
+
+  /// Vrai pendant l'exécution d'un travail sérialisé : un appel imbriqué
+  /// (`advanceAfterFire` → `cancel`) s'exécute directement au lieu
+  /// d'attendre sa propre place dans la file — sinon interblocage.
+  bool _gateHeld = false;
+
+  Future<T> _serialized<T>(Future<T> Function() work) {
+    if (_gateHeld) return work();
+    final run = _gate.then((_) async {
+      _gateHeld = true;
+      try {
+        return await work();
+      } finally {
+        _gateHeld = false;
+      }
+    });
+    // La file ne doit jamais rester bloquée par une erreur : l'erreur est
+    // avalée ici, l'appelant la reçoit via `run`.
+    _gate = run.then<void>((_) {}, onError: (_) {});
+    return run;
+  }
+
   /// Sauvegarde + miroir natif. Le natif ne jette jamais (voir
   /// [SchedulerBridge]) : une alarme non armée est loggée, pas crashée.
   Future<void> _commit(AutomationsDoc next) async {
@@ -68,25 +100,26 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
     required String tool,
     Map<String, Object?> args = const {},
     required String label,
-  }) async {
-    await _ready();
-    final action = ScheduledAction(
-      id: 'sched-${DateTime.now().microsecondsSinceEpoch}',
-      daily: false,
-      fireAtMillis: at.millisecondsSinceEpoch,
-      hour: at.hour,
-      minute: at.minute,
-      toolName: tool,
-      args: args,
-      label: label,
-    );
-    final current = state.valueOrNull ?? const AutomationsDoc();
-    await _commit(AutomationsDoc(
-      actions: [...current.actions, action],
-      headphoneTrigger: current.headphoneTrigger,
-    ));
-    return action;
-  }
+  }) =>
+      _serialized(() async {
+        await _ready();
+        final action = ScheduledAction(
+          id: 'sched-${DateTime.now().microsecondsSinceEpoch}',
+          daily: false,
+          fireAtMillis: at.millisecondsSinceEpoch,
+          hour: at.hour,
+          minute: at.minute,
+          toolName: tool,
+          args: args,
+          label: label,
+        );
+        final current = state.valueOrNull ?? const AutomationsDoc();
+        await _commit(AutomationsDoc(
+          actions: [...current.actions, action],
+          headphoneTrigger: current.headphoneTrigger,
+        ));
+        return action;
+      });
 
   /// « tous les jours à 22h, minuteur 30 min ».
   Future<ScheduledAction> scheduleDaily({
@@ -95,50 +128,53 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
     required String tool,
     Map<String, Object?> args = const {},
     required String label,
-  }) async {
-    await _ready();
-    final now = DateTime.now();
-    final action = ScheduledAction(
-      id: 'sched-${now.microsecondsSinceEpoch}',
-      daily: true,
-      fireAtMillis: ScheduledAction.nextDailyFire(hour, minute, now),
-      hour: hour,
-      minute: minute,
-      toolName: tool,
-      args: args,
-      label: label,
-    );
-    final current = state.valueOrNull ?? const AutomationsDoc();
-    await _commit(AutomationsDoc(
-      actions: [...current.actions, action],
-      headphoneTrigger: current.headphoneTrigger,
-    ));
-    return action;
-  }
+  }) =>
+      _serialized(() async {
+        await _ready();
+        final now = DateTime.now();
+        final action = ScheduledAction(
+          id: 'sched-${now.microsecondsSinceEpoch}',
+          daily: true,
+          fireAtMillis: ScheduledAction.nextDailyFire(hour, minute, now),
+          hour: hour,
+          minute: minute,
+          toolName: tool,
+          args: args,
+          label: label,
+        );
+        final current = state.valueOrNull ?? const AutomationsDoc();
+        await _commit(AutomationsDoc(
+          actions: [...current.actions, action],
+          headphoneTrigger: current.headphoneTrigger,
+        ));
+        return action;
+      });
 
   /// Après le tir d'une action : la quotidienne est avancée au lendemain et
   /// réarmée, l'unique est supprimée.
-  Future<void> advanceAfterFire(String id) async {
-    await _ready();
-    final current = state.valueOrNull ?? const AutomationsDoc();
-    final action = current.byId(id);
-    if (action == null) return;
-    if (!action.daily) {
-      await cancel(id);
-      return;
-    }
-    final next = action.copyWith(
-      fireAtMillis: ScheduledAction.nextDailyFire(
-        action.hour,
-        action.minute,
-        DateTime.now().add(const Duration(minutes: 1)),
-      ),
-    );
-    await _commit(AutomationsDoc(
-      actions: [for (final a in current.actions) if (a.id == id) next else a],
-      headphoneTrigger: current.headphoneTrigger,
-    ));
-  }
+  Future<void> advanceAfterFire(String id) => _serialized(() async {
+        await _ready();
+        final current = state.valueOrNull ?? const AutomationsDoc();
+        final action = current.byId(id);
+        if (action == null) return;
+        if (!action.daily) {
+          await cancel(id);
+          return;
+        }
+        final next = action.copyWith(
+          fireAtMillis: ScheduledAction.nextDailyFire(
+            action.hour,
+            action.minute,
+            DateTime.now().add(const Duration(minutes: 1)),
+          ),
+        );
+        await _commit(AutomationsDoc(
+          actions: [
+            for (final a in current.actions) if (a.id == id) next else a,
+          ],
+          headphoneTrigger: current.headphoneTrigger,
+        ));
+      });
 
   /// Realigns the actions whose hour has passed WITHOUT running
   /// them: a daily moves to its next occurrence, a missed one-shot is
@@ -155,77 +191,84 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
   /// [except] spares one id: the alarm that just launched the app,
   /// which the runner is about to execute — a one-shot « due now »
   /// must not be dropped as stale before it has rung.
-  Future<void> alignStale({String? except}) async {
-    await _ready();
-    final now = DateTime.now();
-    final current = state.valueOrNull ?? const AutomationsDoc();
-    var changed = false;
-    final next = <ScheduledAction>[];
-    for (final a in current.actions) {
-      if (a.id == except || a.fireAtMillis > now.millisecondsSinceEpoch) {
-        next.add(a);
-        continue;
-      }
-      changed = true;
-      if (a.daily) {
-        next.add(
-          a.copyWith(
-            fireAtMillis: ScheduledAction.nextDailyFire(a.hour, a.minute, now),
+  Future<void> alignStale({String? except}) => _serialized(() async {
+        await _ready();
+        final now = DateTime.now();
+        final current = state.valueOrNull ?? const AutomationsDoc();
+        var changed = false;
+        final next = <ScheduledAction>[];
+        for (final a in current.actions) {
+          if (a.id == except || a.fireAtMillis > now.millisecondsSinceEpoch) {
+            next.add(a);
+            continue;
+          }
+          changed = true;
+          if (a.daily) {
+            next.add(
+              a.copyWith(
+                fireAtMillis:
+                    ScheduledAction.nextDailyFire(a.hour, a.minute, now),
+              ),
+            );
+          }
+          // A stale one-shot is simply not carried over.
+        }
+        if (!changed) return;
+        await _commit(
+          AutomationsDoc(
+            actions: next,
+            headphoneTrigger: current.headphoneTrigger,
           ),
         );
-      }
-      // A stale one-shot is simply not carried over.
-    }
-    if (!changed) return;
-    await _commit(
-      AutomationsDoc(actions: next, headphoneTrigger: current.headphoneTrigger),
-    );
-  }
+      });
 
-  Future<void> cancel(String id) async {
-    await _ready();
-    final current = state.valueOrNull ?? const AutomationsDoc();
-    await _commit(AutomationsDoc(
-      actions: [for (final a in current.actions) if (a.id != id) a],
-      headphoneTrigger: current.headphoneTrigger,
-    ));
-  }
+  Future<void> cancel(String id) => _serialized(() async {
+        await _ready();
+        final current = state.valueOrNull ?? const AutomationsDoc();
+        await _commit(AutomationsDoc(
+          actions: [for (final a in current.actions) if (a.id != id) a],
+          headphoneTrigger: current.headphoneTrigger,
+        ));
+      });
 
   Future<void> setHeadphoneTrigger({
     required String tool,
     Map<String, Object?> args = const {},
     required String label,
-  }) async {
-    await _ready();
-    final current = state.valueOrNull ?? const AutomationsDoc();
-    await _commit(AutomationsDoc(
-      actions: current.actions,
-      headphoneTrigger: HeadphoneTrigger(
-        toolName: tool,
-        args: args,
-        label: label,
-      ),
-    ));
-  }
+  }) =>
+      _serialized(() async {
+        await _ready();
+        final current = state.valueOrNull ?? const AutomationsDoc();
+        await _commit(AutomationsDoc(
+          actions: current.actions,
+          headphoneTrigger: HeadphoneTrigger(
+            toolName: tool,
+            args: args,
+            label: label,
+          ),
+        ));
+      });
 
-  Future<void> clearHeadphoneTrigger() async {
-    await _ready();
-    final current = state.valueOrNull ?? const AutomationsDoc();
-    await _commit(AutomationsDoc(actions: current.actions));
-  }
+  Future<void> clearHeadphoneTrigger() => _serialized(() async {
+        await _ready();
+        final current = state.valueOrNull ?? const AutomationsDoc();
+        await _commit(AutomationsDoc(actions: current.actions));
+      });
 
   /// Réarme toutes les alarmes natives depuis l'état chargé, sans écrire
   /// dans le store. Appelé quand « Alarmes et rappels » vient d'être
   /// accordé : les automatisations existantes n'ont jamais été armées.
-  Future<void> resync() async {
-    // `future` attend le chargement initial et lève s'il a échoué : on ne
-    // synchronise jamais un document par défaut (une liste vide effacerait
-    // les alarmes natives). L'appelant rattrape et journalise.
-    final doc = await future;
-    final armed = await SchedulerBridge.syncAlarms(doc.actions);
-    ref.read(exactAlarmGrantedProvider.notifier).state =
-        armed ? true : await SchedulerBridge.canScheduleExactAlarms();
-  }
+  Future<void> resync() => _serialized(() async {
+        // `future` attend le chargement initial et lève s'il a échoué : on ne
+        // synchronise jamais un document par défaut (une liste vide effacerait
+        // les alarmes natives). L'appelant rattrape et journalise.
+        // Sérialisé comme les mutations : un `syncAlarms` concurrent avec un
+        // `_commit` pourrait sinon terminer après lui avec une liste périmée.
+        final doc = await future;
+        final armed = await SchedulerBridge.syncAlarms(doc.actions);
+        ref.read(exactAlarmGrantedProvider.notifier).state =
+            armed ? true : await SchedulerBridge.canScheduleExactAlarms();
+      });
 }
 
 extension on AutomationsDoc {
