@@ -219,4 +219,30 @@ void main() {
       expect(decoded, original);
     });
   });
+
+  group('baseUrl validée (L95)', () {
+    LyricsSourceConfig? valid(String baseUrl) => LyricsSourceConfig.fromJson({
+      'id': 'custom-1',
+      'name': 'Miroir',
+      'baseUrl': baseUrl,
+    });
+
+    test('http et https avec hôte passent', () {
+      expect(valid('https://lrclib.net/api'), isNotNull);
+      expect(valid('http://192.168.1.10:8080/api'), isNotNull);
+    });
+
+    test('un schéma autre que http/https est rejeté', () {
+      expect(valid('ftp://miroir.example/api'), isNull);
+      expect(valid('file:///etc/passwd'), isNull);
+      expect(valid('javascript:alert(1)'), isNull);
+    });
+
+    test('sans schéma ou sans hôte, rejeté', () {
+      expect(valid('lrclib.net/api'), isNull);
+      expect(valid('https://'), isNull);
+      expect(valid('https:///api'), isNull);
+      expect(valid(''), isNull);
+    });
+  });
 }
