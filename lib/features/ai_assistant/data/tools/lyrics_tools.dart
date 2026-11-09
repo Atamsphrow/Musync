@@ -36,15 +36,16 @@ class FetchLyricsTool extends AiTool {
       'configurées et les intègre au fichier (meilleur résultat).';
 
   @override
-  Map<String, Object?> get parametersSchema =>
-      {'type': 'object', 'properties': const {}};
+  Map<String, Object?> get parametersSchema => {
+    'type': 'object',
+    'properties': const {},
+  };
 
   @override
   Future<String> describeAction(
     AiToolContext ctx,
     Map<String, Object?> args,
-  ) async =>
-      'Récupérer les paroles du morceau en cours.';
+  ) async => 'Récupérer les paroles du morceau en cours.';
 
   @override
   Future<AiToolResult> execute(
@@ -84,7 +85,7 @@ class FetchLyricsTool extends AiTool {
     } catch (e) {
       return AiToolResult.fail('Écriture impossible : $e');
     }
-    ctx.ref.invalidate(currentLyricsProvider);
+    _invalidateLyricsAfterWrite(ctx.ref);
     final kind = best.hasSyncedLyrics ? 'synchronisées' : 'simples';
     return AiToolResult.ok(
       'Paroles $kind récupérées pour ${songLabel(song)} '
@@ -110,15 +111,16 @@ class PrepareLyricsForSyncTool extends AiTool {
       'de synchronisation. L’IA ne cale pas elle-même.';
 
   @override
-  Map<String, Object?> get parametersSchema =>
-      {'type': 'object', 'properties': const {}};
+  Map<String, Object?> get parametersSchema => {
+    'type': 'object',
+    'properties': const {},
+  };
 
   @override
   Future<String> describeAction(
     AiToolContext ctx,
     Map<String, Object?> args,
-  ) async =>
-      'Préparer les paroles pour le calage (ouvre l’éditeur).';
+  ) async => 'Préparer les paroles pour le calage (ouvre l’éditeur).';
 
   @override
   Future<AiToolResult> execute(
@@ -132,7 +134,8 @@ class PrepareLyricsForSyncTool extends AiTool {
     final repository = ctx.ref.read(lyricsRepositoryProvider);
     final pair = await repository.readLyrics(song.filePath);
     final syncedOk = pair.synced != null && pair.synced!.isNotEmpty;
-    final plainOk = pair.unsynced != null && pair.unsynced!.text.trim().isNotEmpty;
+    final plainOk =
+        pair.unsynced != null && pair.unsynced!.text.trim().isNotEmpty;
     if (syncedOk) {
       return AiToolResult.ok(
         '${songLabel(song)} a déjà des paroles synchronisées.',
@@ -152,7 +155,8 @@ class PrepareLyricsForSyncTool extends AiTool {
       } catch (e) {
         return AiToolResult.fail('Recherche impossible : $e');
       }
-      final plain = results.where((r) => r.hasUnsyncedLyrics).firstOrNull ??
+      final plain =
+          results.where((r) => r.hasUnsyncedLyrics).firstOrNull ??
           (results.isNotEmpty ? results.first : null);
       if (plain == null) {
         return AiToolResult.fail(
@@ -168,7 +172,7 @@ class PrepareLyricsForSyncTool extends AiTool {
       } catch (e) {
         return AiToolResult.fail('Écriture impossible : $e');
       }
-      ctx.ref.invalidate(currentLyricsProvider);
+      _invalidateLyricsAfterWrite(ctx.ref);
     }
     return AiToolResult.ok(
       'Paroles prêtes — à toi de les caler au tap dans l’éditeur.',
@@ -193,19 +197,21 @@ class AdjustLyricsOffsetTool extends AiTool {
 
   @override
   Map<String, Object?> get parametersSchema => {
-        'type': 'object',
-        'properties': {
-          'milliseconds':
-              'integer, requis — décalage en ms, entre -1000 et 1000',
-        },
-      };
+    'type': 'object',
+    'properties': {
+      'milliseconds': 'integer, requis — décalage en ms, entre -1000 et 1000',
+    },
+  };
 
   @override
   Future<String> describeAction(
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
-    final ms = optInt(args, 'milliseconds');
+    final ms = optInt(
+      args,
+      'milliseconds',
+    )?.clamp(-PlaybackSettings.maxOffsetMs, PlaybackSettings.maxOffsetMs);
     return ms == null
         ? 'Régler le décalage des paroles.'
         : 'Régler le décalage des paroles à ${ms >= 0 ? '+' : ''}$ms ms.';
@@ -216,8 +222,10 @@ class AdjustLyricsOffsetTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
-    final ms = reqInt(args, 'milliseconds')
-        .clamp(-PlaybackSettings.maxOffsetMs, PlaybackSettings.maxOffsetMs);
+    final ms = reqInt(
+      args,
+      'milliseconds',
+    ).clamp(-PlaybackSettings.maxOffsetMs, PlaybackSettings.maxOffsetMs);
     await ctx.ref
         .read(playbackSettingsProvider.notifier)
         .setOffset(Duration(milliseconds: ms));
@@ -244,12 +252,11 @@ class BatchFetchLyricsTool extends AiTool {
 
   @override
   Map<String, Object?> get parametersSchema => {
-        'type': 'object',
-        'properties': {
-          'max':
-              'integer, optionnel — nombre max de morceaux (défaut 10, max 50)',
-        },
-      };
+    'type': 'object',
+    'properties': {
+      'max': 'integer, optionnel — nombre max de morceaux (défaut 10, max 50)',
+    },
+  };
 
   @override
   bool get requiresConfirmation => true;
@@ -270,8 +277,7 @@ class BatchFetchLyricsTool extends AiTool {
     Map<String, Object?> args,
   ) async {
     final max = (optInt(args, 'max') ?? 10).clamp(1, 50);
-    final byStatus =
-        ctx.ref.read(songsByStatusProvider).valueOrNull;
+    final byStatus = ctx.ref.read(songsByStatusProvider).valueOrNull;
     final candidates = byStatus?[LyricsStatus.none] ?? const [];
     if (candidates.isEmpty) {
       return AiToolResult.ok('Aucun morceau sans paroles.');
@@ -300,7 +306,7 @@ class BatchFetchLyricsTool extends AiTool {
         // Un morceau raté n'arrête pas le lot.
       }
     }
-    ctx.ref.invalidate(currentLyricsProvider);
+    _invalidateLyricsAfterWrite(ctx.ref);
     return AiToolResult.ok(
       'Paroles intégrées pour $done morceau${done > 1 ? 'x' : ''} '
       '($tried essayé${tried > 1 ? 's' : ''}).',
@@ -309,6 +315,25 @@ class BatchFetchLyricsTool extends AiTool {
 }
 
 // ---- écritures paroles avec sauvegarde ------------------------------------
+
+/// Drops every cached lyrics answer after a write, so the catalogue tabs
+/// and the current-song lyrics agree with the file on disk.
+///
+/// Invalidating `currentLyricsProvider` alone was not enough:
+/// [songsByStatusProvider] only watches `songListProvider` and
+/// `lyricsStatusProvider`, so a track that just gained lyrics stayed in
+/// « sans paroles » until a manual refresh — and the batch tool re-read
+/// its candidates from that stale grouping. The five tools that write
+/// through [_writeLyricsUndoable] already get the status invalidation
+/// through `TagChangeService.fileChanged`; the three that embed directly
+/// (`fetch_lyrics`, `prepare_lyrics_for_sync`, `batch_fetch_lyrics`)
+/// never did. One helper for all eight call sites, so the two paths
+/// cannot drift apart again.
+void _invalidateLyricsAfterWrite(Ref ref) {
+  ref.invalidate(currentLyricsProvider);
+  ref.invalidate(lyricsStatusProvider);
+  ref.invalidate(songsByStatusProvider);
+}
 
 /// Écrit des paroles avec le protocole backup + historique : chaque écriture
 /// est annulable depuis Paramètres › Historique, comme les écritures auto.
@@ -339,13 +364,30 @@ Future<bool> _writeLyricsUndoable(
   return true;
 }
 
+/// Validates the `scope` argument shared by the lyrics tools.
+///
+/// Only 'current' (the default) and 'all' exist. Anything else used to
+/// fall through to the current song — silently doing less than asked for,
+/// with no way to tell a typo ('All', 'tout') from the default.
+/// Throws [AiToolArgError]: the confirmation dialogue shows it instead
+/// of confirming the wrong target, and `execute` fails the same way.
+String _lyricsScopeArg(Map<String, Object?> args) {
+  final scope = optString(args, 'scope') ?? 'current';
+  if (scope != 'current' && scope != 'all') {
+    throw AiToolArgError(
+      'scope invalide : « $scope » (attendu : "current" ou "all").',
+    );
+  }
+  return scope;
+}
+
 /// Morceaux visés par les outils de paroles : le morceau en cours par défaut,
 /// ou tous les morceaux synchronisés quand scope vaut 'all'.
 Future<List<Song>> _lyricsScope(
   AiToolContext ctx,
   Map<String, Object?> args,
 ) async {
-  if ((optString(args, 'scope') ?? 'current') == 'all') {
+  if (_lyricsScopeArg(args) == 'all') {
     final byStatus = ctx.ref.read(songsByStatusProvider).valueOrNull;
     return [...(byStatus?[LyricsStatus.synced] ?? const <Song>[])];
   }
@@ -359,9 +401,9 @@ String _plural(int n, String one, String many) =>
 /// Lit les paroles d'un morceau, ou null si illisibles.
 Future<LyricsPair?> _readPair(AiToolContext ctx, Song song) async {
   try {
-    return await ctx.ref.read(lyricsRepositoryProvider).readLyrics(
-          song.filePath,
-        );
+    return await ctx.ref
+        .read(lyricsRepositoryProvider)
+        .readLyrics(song.filePath);
   } catch (_) {
     return null;
   }
@@ -419,15 +461,16 @@ class CheckCurrentSongTool extends AiTool {
       'lignes, simples, ou absentes). Lecture seule.';
 
   @override
-  Map<String, Object?> get parametersSchema =>
-      {'type': 'object', 'properties': const {}};
+  Map<String, Object?> get parametersSchema => {
+    'type': 'object',
+    'properties': const {},
+  };
 
   @override
   Future<String> describeAction(
     AiToolContext ctx,
     Map<String, Object?> args,
-  ) async =>
-      'Vérifier le morceau en cours.';
+  ) async => 'Vérifier le morceau en cours.';
 
   @override
   Future<AiToolResult> execute(
@@ -487,12 +530,12 @@ class TrimEmptyLastLyricLineTool extends AiTool {
 
   @override
   Map<String, Object?> get parametersSchema => {
-        'type': 'object',
-        'properties': {
-          'scope':
-              'string, optionnel — "current" (défaut) ou "all" pour toute la bibliothèque',
-        },
-      };
+    'type': 'object',
+    'properties': {
+      'scope':
+          'string, optionnel — "current" (défaut) ou "all" pour toute la bibliothèque',
+    },
+  };
 
   @override
   bool get requiresConfirmation => true;
@@ -567,13 +610,15 @@ class TrimEmptyLastLyricLineTool extends AiTool {
         failed++;
       }
     }
-    ctx.ref.invalidate(currentLyricsProvider);
+    _invalidateLyricsAfterWrite(ctx.ref);
     final parts = <String>[
       _plural(trimmed, 'morceau nettoyé', 'morceaux nettoyés'),
     ];
     if (clean > 0) parts.add('$clean sans ligne vide finale');
     if (failed > 0) parts.add('$failed échec(s)');
-    return AiToolResult.ok('Dernière ligne vide supprimée : ${parts.join(', ')}.');
+    return AiToolResult.ok(
+      'Dernière ligne vide supprimée : ${parts.join(', ')}.',
+    );
   }
 }
 
@@ -597,12 +642,12 @@ class CleanLyricsTool extends AiTool {
 
   @override
   Map<String, Object?> get parametersSchema => {
-        'type': 'object',
-        'properties': {
-          'scope':
-              'string, optionnel — "current" (défaut) ou "all" pour toute la bibliothèque',
-        },
-      };
+    'type': 'object',
+    'properties': {
+      'scope':
+          'string, optionnel — "current" (défaut) ou "all" pour toute la bibliothèque',
+    },
+  };
 
   @override
   bool get requiresConfirmation => true;
@@ -664,8 +709,7 @@ class CleanLyricsTool extends AiTool {
           removed++;
           continue;
         }
-        if (kept.isNotEmpty &&
-            kept.last.text.trim() == line.text.trim()) {
+        if (kept.isNotEmpty && kept.last.text.trim() == line.text.trim()) {
           removed++;
           continue;
         }
@@ -687,7 +731,7 @@ class CleanLyricsTool extends AiTool {
         failed++;
       }
     }
-    ctx.ref.invalidate(currentLyricsProvider);
+    _invalidateLyricsAfterWrite(ctx.ref);
     final parts = <String>[
       _plural(cleaned, 'morceau nettoyé', 'morceaux nettoyés'),
     ];
@@ -721,14 +765,13 @@ class ShiftLyricsTimestampsTool extends AiTool {
 
   @override
   Map<String, Object?> get parametersSchema => {
-        'type': 'object',
-        'properties': {
-          'milliseconds':
-              'integer, requis — décalage en ms, entre -10000 et 10000',
-          'scope':
-              'string, optionnel — "current" (défaut) ou "all" pour toute la bibliothèque',
-        },
-      };
+    'type': 'object',
+    'properties': {
+      'milliseconds': 'integer, requis — décalage en ms, entre -10000 et 10000',
+      'scope':
+          'string, optionnel — "current" (défaut) ou "all" pour toute la bibliothèque',
+    },
+  };
 
   @override
   bool get requiresConfirmation => true;
@@ -816,7 +859,7 @@ class ShiftLyricsTimestampsTool extends AiTool {
         failed++;
       }
     }
-    ctx.ref.invalidate(currentLyricsProvider);
+    _invalidateLyricsAfterWrite(ctx.ref);
     final dir = ms >= 0 ? '+' : '−';
     final parts = <String>[
       _plural(shifted, 'morceau décalé', 'morceaux décalés'),
@@ -824,7 +867,8 @@ class ShiftLyricsTimestampsTool extends AiTool {
     if (clean > 0) parts.add('$clean sans paroles synchronisées');
     if (failed > 0) parts.add('$failed échec(s)');
     return AiToolResult.ok(
-        'Timestamps décalés de $dir${ms.abs()} ms : ${parts.join(', ')}.');
+      'Timestamps décalés de $dir${ms.abs()} ms : ${parts.join(', ')}.',
+    );
   }
 }
 
@@ -847,12 +891,12 @@ class FixLyricLineTool extends AiTool {
 
   @override
   Map<String, Object?> get parametersSchema => {
-        'type': 'object',
-        'properties': {
-          'line': 'integer, requis — numéro de ligne (1 = première)',
-          'text': 'string, requis — nouveau texte de la ligne',
-        },
-      };
+    'type': 'object',
+    'properties': {
+      'line': 'integer, requis — numéro de ligne (1 = première)',
+      'text': 'string, requis — nouveau texte de la ligne',
+    },
+  };
 
   @override
   bool get requiresConfirmation => true;
@@ -868,8 +912,9 @@ class FixLyricLineTool extends AiTool {
     }
     final index = reqInt(args, 'line') - 1;
     final text = reqString(args, 'text');
-    final pair =
-        await ctx.ref.read(lyricsRepositoryProvider).readLyrics(song.filePath);
+    final pair = await ctx.ref
+        .read(lyricsRepositoryProvider)
+        .readLyrics(song.filePath);
     final synced = pair.synced;
     if (synced == null || index < 0 || index >= synced.lines.length) {
       throw AiToolArgError(
@@ -897,8 +942,7 @@ class FixLyricLineTool extends AiTool {
     try {
       pair = await repository.readLyrics(song.filePath);
     } catch (_) {
-      return AiToolResult.fail(
-          'Lecture impossible pour ${songLabel(song)}.');
+      return AiToolResult.fail('Lecture impossible pour ${songLabel(song)}.');
     }
     final synced = pair.synced;
     if (synced == null || index < 0 || index >= synced.lines.length) {
@@ -915,9 +959,11 @@ class FixLyricLineTool extends AiTool {
       synced: SyncedLyrics(lines),
       unsynced: pair.unsynced,
     );
-    ctx.ref.invalidate(currentLyricsProvider);
+    _invalidateLyricsAfterWrite(ctx.ref);
     return ok
-        ? AiToolResult.ok('Ligne ${index + 1} corrigée pour ${songLabel(song)}.')
+        ? AiToolResult.ok(
+            'Ligne ${index + 1} corrigée pour ${songLabel(song)}.',
+          )
         : AiToolResult.fail('Écriture impossible pour ${songLabel(song)}.');
   }
 }
@@ -941,18 +987,21 @@ class RemoveLyricsTool extends AiTool {
 
   @override
   Map<String, Object?> get parametersSchema => {
-        'type': 'object',
-        'properties': {
-          'scope':
-              'string, optionnel — "current" (défaut) ou "all" pour tous les morceaux avec paroles',
-        },
-      };
+    'type': 'object',
+    'properties': {
+      'scope':
+          'string, optionnel — "current" (défaut) ou "all" pour tous les morceaux avec paroles',
+    },
+  };
 
   @override
   bool get requiresConfirmation => true;
 
-  Future<List<Song>> _targets(AiToolContext ctx, Map<String, Object?> args) async {
-    if ((optString(args, 'scope') ?? 'current') == 'all') {
+  Future<List<Song>> _targets(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    if (_lyricsScopeArg(args) == 'all') {
       final byStatus = ctx.ref.read(songsByStatusProvider).valueOrNull;
       return [
         ...(byStatus?[LyricsStatus.synced] ?? const <Song>[]),
@@ -975,7 +1024,8 @@ class RemoveLyricsTool extends AiTool {
     if (songs.length == 1) {
       final song = songs.first;
       final pair = await _readPair(ctx, song);
-      final hasAny = (pair?.synced?.isNotEmpty ?? false) ||
+      final hasAny =
+          (pair?.synced?.isNotEmpty ?? false) ||
           (pair?.unsynced?.isNotEmpty ?? false);
       if (!hasAny) {
         throw AiToolArgError(
@@ -1008,7 +1058,8 @@ class RemoveLyricsTool extends AiTool {
         failed++;
         continue;
       }
-      final hasAny = (pair.synced?.isNotEmpty ?? false) ||
+      final hasAny =
+          (pair.synced?.isNotEmpty ?? false) ||
           (pair.unsynced?.isNotEmpty ?? false);
       if (!hasAny) {
         clean++;
@@ -1021,9 +1072,9 @@ class RemoveLyricsTool extends AiTool {
         failed++;
       }
     }
-    ctx.ref.invalidate(currentLyricsProvider);
+    _invalidateLyricsAfterWrite(ctx.ref);
     final parts = <String>[
-      _plural(removed, 'paroles supprimées', 'paroles supprimées'),
+      _plural(removed, 'parole supprimée', 'paroles supprimées'),
     ];
     if (clean > 0) parts.add('$clean déjà sans paroles');
     if (failed > 0) parts.add('$failed échec(s)');
