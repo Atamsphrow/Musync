@@ -55,13 +55,31 @@ class AppTheme {
     return ColorScheme.fromSeed(seedColor: brandSeed, brightness: brightness);
   }
 
+  /// The status/navigation bar style for [scheme]: transparent bars with
+  /// icons in the inverse brightness of the surface behind them.
+  ///
+  /// Used by `appBarTheme` (screens with an AppBar) AND as the root
+  /// `AnnotatedRegion` in `main.dart` (screens without one — the player,
+  /// the library — otherwise had no style at all and the icons could
+  /// vanish against the surface).
+  static SystemUiOverlayStyle overlayStyleFor(ColorScheme scheme) {
+    final isDark = scheme.brightness == Brightness.dark;
+    return SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+      statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarIconBrightness: isDark
+          ? Brightness.light
+          : Brightness.dark,
+    );
+  }
+
   /// Builds the full [ThemeData] for a given scheme.
   ///
   /// Called for the light scheme, the dark scheme, and again with an
   /// artwork-derived scheme when the player screen re-tints itself.
   static ThemeData fromScheme(ColorScheme scheme) {
-    final isDark = scheme.brightness == Brightness.dark;
-
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
@@ -86,15 +104,10 @@ class AppTheme {
         // moves to 35 these two lines can go (the icon-brightness fields
         // stay useful). Do NOT bump `targetSdk` to remove them: that
         // decision is pending with the user.
-        systemOverlayStyle: SystemUiOverlayStyle(
-          statusBarColor: Colors.transparent,
-          statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
-          statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
-          systemNavigationBarColor: Colors.transparent,
-          systemNavigationBarIconBrightness: isDark
-              ? Brightness.light
-              : Brightness.dark,
-        ),
+        //
+        // The style itself lives in `overlayStyleFor` : it is also applied
+        // at the root (see `main.dart`), for the screens without an AppBar.
+        systemOverlayStyle: overlayStyleFor(scheme),
         titleTextStyle: TextStyle(
           fontSize: 22,
           fontWeight: FontWeight.w600,
