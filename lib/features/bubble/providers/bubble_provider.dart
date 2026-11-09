@@ -736,8 +736,10 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   /// blow up the fixed-width layout (the height already adapts).
   double _textScaleFactor() {
     try {
-      // ignore: deprecated_member_use
-      return PlatformDispatcher.instance.textScaleFactor.clamp(0.5, 3.0);
+      // scaleFontSize is the current API: the scaled size of a 1.0 font is
+      // the effective factor, including non-linear system scaling — the
+      // same source the framework's own SystemTextScaler reads.
+      return PlatformDispatcher.instance.scaleFontSize(1.0).clamp(0.5, 3.0);
     } catch (_) {
       return 1.0;
     }
