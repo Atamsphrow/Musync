@@ -13,6 +13,10 @@ import 'package:musync/features/ai_assistant/data/tools/lyrics_tools.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/catalogue_provider.dart';
+import 'package:musync/features/lyrics/data/ai_lyrics_finder.dart';
+import 'package:musync/features/lyrics/data/filename_guess.dart';
+import 'package:musync/features/lyrics/data/lyrics_provenance.dart';
+import 'package:musync/features/lyrics/data/lyrics_query_resolver.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 import 'package:musync/features/lyrics/providers/search_provider.dart';
@@ -42,21 +46,31 @@ class _FakeRepo extends LyricsRepository {
 
   int embeds = 0;
 
+  /// Texte du hit rendu : 'Une' par défaut, comme les paroles déjà dans
+  /// le fichier — le test G55 le change pour que le finder intègre au
+  /// lieu de garder l'existant identique (idempotence).
+  String hitText = 'Une';
+
   @override
   Future<List<LyricsSearchResult>> searchAll({
     required String title,
     required String artist,
     String? album,
     int? durationMs,
+    FilenameGuess? filenameGuess,
   }) async => [
     LyricsSearchResult(
       source: 'fake',
       title: title,
       artist: artist,
       syncedLyrics: SyncedLyrics([
-        const LyricLine(timestamp: Duration(seconds: 1), text: 'Une'),
+        LyricLine(timestamp: const Duration(seconds: 1), text: hitText),
       ]),
       confidence: 0.9,
+      // Durée calée sur le morceau : le finder rescore à 0,85 (titre
+      // 0,35 + artiste 0,30 + durée 0,15 + synchro 0,05), au-dessus du
+      // seuil 0,80 — sinon fetch_lyrics ne fait que proposer.
+      durationMs: 180000,
     ),
   ];
 
@@ -78,6 +92,8 @@ class _FakeRepo extends LyricsRepository {
   );
 }
 
+FilenameGuess _noGuess(String _) => (artist: '', title: '');
+
 final _refProbe = Provider<Ref>((ref) => ref);
 
 AiToolContext _ctx(Ref ref) => AiToolContext(
@@ -95,14 +111,41 @@ void main() {
 
   group('G55 — invalidation après écriture', () {
     test('fetch_lyrics invalide aussi le statut et le groupement', () async {
-      final player = _FakePlayer()..current = _song();
-      final repo = _FakeRepo();
+      // Le finder n'écrit que si la sauvegarde réussit : il faut un vrai
+      // fichier, et un hit différent des paroles déjà dans le fichier
+      // (sinon l'idempotence garde l'existant sans écrire).
+      final dir = await Directory.systemTemp.createTemp('g55_');
+      addTearDown(() => dir.delete(recursive: true));
+      final file = File('${dir.path}/1.mp3')..createSync();
+      final song = Song(
+        id: 1,
+        title: 'Titre',
+        artist: 'Artiste',
+        album: '',
+        duration: 180000,
+        filePath: file.path,
+      );
+      final player = _FakePlayer()..current = song;
+      final repo = _FakeRepo()..hitText = 'Deux';
+      final support = Directory('${dir.path}/support')..createSync();
       var statusBuilds = 0;
       var groupingBuilds = 0;
       final container = ProviderContainer(
         overrides: [
           audioPlayerServiceProvider.overrideWithValue(player),
           lyricsRepositoryProvider.overrideWithValue(repo),
+          aiLyricsFinderProvider.overrideWithValue(
+            AiLyricsFinder(
+              repository: repo,
+              resolver: const LyricsQueryResolver(
+                parseFilename: _noGuess,
+              ),
+              provenance: LyricsProvenanceStore(root: support),
+              backups: TagBackupStore(root: support),
+              fileChanged: (_) {},
+              hasWriteAccess: () async => true,
+            ),
+          ),
           lyricsStatusProvider.overrideWith((ref) async {
             statusBuilds++;
             return <String, LyricsStatus>{};
