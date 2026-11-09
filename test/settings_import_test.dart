@@ -87,7 +87,102 @@ void main() {
     });
 
     test('rejects a bundle with no known settings file', () async {
-      final file = await bundleFile(validBundle(files: {}));
+      final file = await bundleFile(
+        validBundle(files: {})..remove('preferences'),
+      );
+
+      expect(
+        () => importer.parse(file),
+        throwsA(isA<ImportFormatException>()),
+      );
+    });
+
+    test('accepts a bundle with only preferences', () async {
+      // Avant le correctif, le test files.isEmpty rejetait ce bundle avant
+      // même de lire les préférences.
+      final file = await bundleFile(
+        validBundle(files: {})..['preferences'] = {'bubble_lines': 2},
+      );
+
+      final bundle = await importer.parse(file);
+
+      expect(bundle.files, isEmpty);
+      expect(bundle.preferences, {'bubble_lines': 2});
+    });
+
+    test('accepts a bundle with only a tag-backup history', () async {
+      final file = await bundleFile(
+        validBundle(files: {})
+          ..['preferences'] = {}
+          ..['tagBackups'] = {
+            'index': [
+              {
+                'filePath': '/music/a.mp3',
+                'writtenAt': '2026-09-30T20:00:00.000',
+                'tagBytes': 4,
+                'writtenMtime': 0,
+                'storedAs': 'a-1.tag',
+              },
+            ],
+            'files': {'a-1.tag': base64Encode(utf8.encode('tag!'))},
+          },
+      );
+
+      final bundle = await importer.parse(file);
+
+      expect(bundle.files, isEmpty);
+      expect(bundle.preferences, isEmpty);
+      expect(bundle.tagBackups, isNotNull);
+      expect(bundle.tagBackups!.entries, hasLength(1));
+    });
+
+    test('unreferenced backup bytes are never decoded', () async {
+      // Avant le correctif, tout le base64 était décodé avant la validation
+      // de l'index : une entrée non référencée corrompue — ou au nom
+      // dangereux — rejetait le bundle après avoir alloué ses octets.
+      final file = await bundleFile(
+        validBundle()
+          ..['tagBackups'] = {
+            'index': [
+              {
+                'filePath': '/music/a.mp3',
+                'writtenAt': '2026-09-30T20:00:00.000',
+                'tagBytes': 4,
+                'writtenMtime': 0,
+                'storedAs': 'a-1.tag',
+              },
+            ],
+            'files': {
+              'a-1.tag': base64Encode(utf8.encode('tag!')),
+              'unreferenced.tag': '!!! not base64 !!!',
+              '../evil.tag': base64Encode(utf8.encode('x')),
+            },
+          },
+      );
+
+      final bundle = await importer.parse(file);
+
+      expect(bundle.tagBackups!.entries, hasLength(1));
+      expect(bundle.tagBackups!.files.keys, ['a-1.tag']);
+    });
+
+    test('a referenced backup with corrupt base64 still fails the import',
+        () async {
+      final file = await bundleFile(
+        validBundle()
+          ..['tagBackups'] = {
+            'index': [
+              {
+                'filePath': '/music/a.mp3',
+                'writtenAt': '2026-09-30T20:00:00.000',
+                'tagBytes': 4,
+                'writtenMtime': 0,
+                'storedAs': 'a-1.tag',
+              },
+            ],
+            'files': {'a-1.tag': '!!! not base64 !!!'},
+          },
+      );
 
       expect(
         () => importer.parse(file),
@@ -386,5 +481,45 @@ void main() {
           'stored-token');
       expect(report.secretsKept, 1);
     });
+
+    test(
+      'a failed import never deletes a file whose backup could not be read',
+      () async {
+        // Double défaillance du finding : la lecture de la sauvegarde
+        // échoue (UTF-8 invalide — readAsString lève, même en root), puis
+        // une écriture échoue (la cible du 2e fichier est un répertoire, le
+        // rename atomique lève). Avant le correctif, le rollback confondait
+        // la lecture en échec avec « pas de fichier » et supprimait
+        // l'original ; il doit désormais le laisser intact et le dire.
+        final playback = File(
+          '${support.path}${Platform.pathSeparator}playback_settings.json',
+        );
+        await playback.writeAsBytes([0xFF, 0xFE, 0x41]);
+        await Directory(
+          '${documents.path}${Platform.pathSeparator}lyrics_sources.json',
+        ).create();
+        final bundle = await importer.parse(await bundleFile(validBundle()));
+        final prefs = await SharedPreferences.getInstance();
+
+        await expectLater(
+          importer.apply(bundle, prefs),
+          throwsA(
+            isA<ImportFormatException>().having(
+              (e) => e.message,
+              'message',
+              contains('sauvegarde illisible'),
+            ),
+          ),
+        );
+
+        expect(await playback.exists(), isTrue);
+        // Le rollback n'a pas pu restaurer l'ancien contenu (illisible) :
+        // le fichier garde le contenu importé — il n'a pas été supprimé.
+        expect(
+          jsonDecode(await playback.readAsString()),
+          {'lyricsOffsetMs': 40},
+        );
+      },
+    );
   });
 }
