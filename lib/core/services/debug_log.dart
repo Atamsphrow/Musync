@@ -107,6 +107,16 @@ class DebugLog extends ChangeNotifier {
   final Queue<LogEntry> _entries = Queue<LogEntry>();
   Timer? _flushTimer;
 
+  /// Flushes are serialized: the snapshot is computed inside the queued
+  /// step, so a flush started before a `clear()` cannot resurrect entries
+  /// the clear already removed.
+  Future<void> _flushQueue = Future.value();
+
+  /// The restore started by [install], if any: a flush waits for it, so it
+  /// cannot overwrite the file with the in-memory entries alone before the
+  /// disk entries have been merged in.
+  Future<void>? _restoreStarted;
+
   /// Newest first, which is the order the panel reads in. One allocation:
   /// the queue is copied once, then reversed in place.
   List<LogEntry> get entries {
@@ -166,7 +176,9 @@ class DebugLog extends ChangeNotifier {
   }
 
   void _scheduleFlush() {
-    _flushTimer?.cancel();
+    // Un seul timer à la fois : annuler-recréer à chaque `add()` repoussait
+    // le flush indéfiniment sous un flux d'erreurs soutenu (> 1 / 2 s).
+    if (_flushTimer != null) return;
     _flushTimer = Timer(_flushDelay, flush);
   }
 
@@ -176,14 +188,27 @@ class DebugLog extends ChangeNotifier {
     _flushTimer?.cancel();
     _flushTimer = null;
 
+    final restore = _restoreStarted;
+    if (restore != null) await restore;
+    _flushQueue = _flushQueue.then(
+      (_) => _writeSnapshot(),
+      onError: (_) => _writeSnapshot(),
+    );
+    await _flushQueue;
+  }
+
+  /// Writes the current entries to disk. Never throws: a log that cannot be
+  /// written must not become a second problem on top of whatever it was
+  /// recording.
+  Future<void> _writeSnapshot() async {
     try {
       await AtomicFile.writeString(
         await _file(),
         jsonEncode([for (final entry in _entries) entry.toJson()]),
       );
     } catch (_) {
-      // A log that cannot be written must not become a second problem on top of
-      // whatever it was recording.
+      // A log that cannot be written must not become a second problem on top
+      // of whatever it was recording.
     }
   }
 
@@ -320,8 +345,10 @@ class DebugLog extends ChangeNotifier {
   /// anticipated — which are the ones worth having a report for.
   static void install() {
     // Not awaited: startup must not wait on a disk read, and anything logged
-    // in the meantime is merged in front of what comes back.
-    unawaited(instance._restore());
+    // in the meantime is merged in front of what comes back. The future is
+    // kept so `flush()` can wait for the restore before writing.
+    instance._restoreStarted = instance._restore();
+    unawaited(instance._restoreStarted);
 
     // One uncaught async error can surface twice: the framework reports it
     // through FlutterError, and the zone reports it through the dispatcher.
