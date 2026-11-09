@@ -41,11 +41,14 @@ class ScheduledAction {
 
   /// La prochaine occurrence de [hour]:[minute] strictement après [from].
   static int nextDailyFire(int hour, int minute, DateTime from) {
-    var candidate = DateTime(from.year, from.month, from.day, hour, minute);
-    if (!candidate.isAfter(from)) {
-      candidate = candidate.add(const Duration(days: 1));
-    }
-    return candidate.millisecondsSinceEpoch;
+    final candidate = DateTime(from.year, from.month, from.day, hour, minute);
+    if (candidate.isAfter(from)) return candidate.millisecondsSinceEpoch;
+    // Jour calendaire, pas 24 h absolues : `Duration(days: 1)` vaut
+    // exactement 24 h et décale l'heure murale d'1 h aux changements
+    // d'heure (DST). `DateTime(y, m, d + 1, ...)` normalise (fin de
+    // mois/année incluse) et garde l'heure murale.
+    return DateTime(from.year, from.month, from.day + 1, hour, minute)
+        .millisecondsSinceEpoch;
   }
 
   /// « Tous les jours à 22:00 » / « Le ven. 9 oct. à 07:00 ».
