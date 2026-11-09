@@ -26,23 +26,45 @@ class BootReceiver : BroadcastReceiver() {
             val alarmManager =
                 context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             val now = System.currentTimeMillis()
-            val dayMillis = 24L * 60 * 60 * 1000
             val stale = mutableListOf<String>()
 
             for ((key, value) in prefs.all) {
                 if (!key.startsWith("trigger_")) continue
                 val id = key.removePrefix("trigger_")
                 var trigger = value as? Long ?: continue
-                val daily = prefs.getBoolean("daily_$id", false)
+                // Lectures protégées une par une : getBoolean/getInt lèvent
+                // ClassCastException quand le type stocké ne correspond pas,
+                // et sans ça une seule pref corrompue tuait toute la boucle
+                // (le try global ne servait qu'à abandonner le boot).
+                val daily = try {
+                    prefs.getBoolean("daily_$id", false)
+                } catch (_: ClassCastException) {
+                    false
+                }
                 if (trigger <= now) {
                     if (!daily) {
                         stale.add(id)
                         continue
                     }
-                    while (trigger <= now) trigger += dayMillis
+                    // Jour calendaire, pas 24 h absolues : ajouter des
+                    // millisecondes décale l'heure murale d'1 h aux
+                    // changements d'heure (DST). `Calendar.add(DAY_OF_MONTH)`
+                    // garde l'heure locale — cohérent avec `nextDailyFire`
+                    // côté Dart.
+                    val calendar = java.util.Calendar.getInstance().apply {
+                        timeInMillis = trigger
+                    }
+                    while (trigger <= now) {
+                        calendar.add(java.util.Calendar.DAY_OF_MONTH, 1)
+                        trigger = calendar.timeInMillis
+                    }
                     prefs.edit().putLong("trigger_$id", trigger).apply()
                 }
-                val rc = prefs.getInt("rc_$id", 0)
+                val rc = try {
+                    prefs.getInt("rc_$id", 0)
+                } catch (_: ClassCastException) {
+                    0
+                }
                 if (rc == 0) continue
                 val alarmIntent = Intent(context, MainActivity::class.java).apply {
                     action = "com.atamsphrow.musync.SCHEDULED_ACTION"
