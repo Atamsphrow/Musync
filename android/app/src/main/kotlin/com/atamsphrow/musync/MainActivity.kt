@@ -304,26 +304,44 @@ class MainActivity : AudioServiceActivity() {
                 }
                 "openExactAlarmSettings" -> {
                     // Écran système « Alarmes et rappels » pour Musync. Sur les
-                    // ROMs qui n'ont pas cet écran, repli sur la fiche app.
-                    val grantedAction = Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
+                    // ROMs qui n'ont pas cet écran, repli sur la fiche app —
+                    // vérifié lui aussi par resolveActivity, sinon le repli
+                    // n'est qu'une promesse. Le startActivity est dans le
+                    // try : sur une ROM exotique sans aucun des deux écrans,
+                    // il lèverait ActivityNotFoundException.
+                    // Pas de FLAG_ACTIVITY_NEW_TASK : on est déjà dans une
+                    // Activity, il est superflu ici.
+                    val fallback = Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    ).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
                     val intent = try {
-                        Intent(grantedAction).apply {
-                            data = Uri.parse("package:$packageName")
-                        }.takeIf {
-                            it.resolveActivity(packageManager) != null
-                        } ?: Intent(
-                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        val primary = Intent(
+                            Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
                         ).apply {
                             data = Uri.parse("package:$packageName")
                         }
-                    } catch (_: Exception) {
-                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                            data = Uri.parse("package:$packageName")
+                        when {
+                            primary.resolveActivity(packageManager) != null ->
+                                primary
+                            fallback.resolveActivity(packageManager) != null ->
+                                fallback
+                            else -> primary
                         }
+                    } catch (_: Exception) {
+                        fallback
                     }
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(intent)
-                    result.success(null)
+                    try {
+                        startActivity(intent)
+                        result.success(null)
+                    } catch (_: Exception) {
+                        result.error(
+                            "no-settings",
+                            "Impossible d'ouvrir les réglages d'alarmes.",
+                            null,
+                        )
+                    }
                 }
                 "takeScheduledAction" -> {
                     result.success(pendingScheduledActionIds.removeFirstOrNull())
@@ -491,8 +509,19 @@ class MainActivity : AudioServiceActivity() {
                 // A buggy sender can put something else than a Uri in
                 // EXTRA_STREAM (a String, …). The unchecked cast inside
                 // getParcelableExtra must not crash Musync on receive.
+                // API 33+ : l'overload générique est déprécié, la classe
+                // doit être explicite — comme getParcelableArrayListCompat
+                // ci-dessous.
                 try {
-                    listOfNotNull(intent.getParcelableExtra(Intent.EXTRA_STREAM))
+                    val uri = if (android.os.Build.VERSION.SDK_INT >= 33) {
+                        intent.getParcelableExtra(
+                            Intent.EXTRA_STREAM, Uri::class.java,
+                        )
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                    }
+                    listOfNotNull(uri)
                 } catch (_: Exception) {
                     emptyList()
                 }
@@ -622,9 +651,17 @@ class MainActivity : AudioServiceActivity() {
                 )
             }
             val openIntent = packageManager.getLaunchIntentForPackage(packageName)
+            if (openIntent == null) {
+                // `getLaunchIntentForPackage` rend null quand le package n'a
+                // pas d'activité de lancement : passé tel quel à
+                // `PendingIntent.getActivity` (paramètre non-null), c'était
+                // une NPE rattrapée seulement par le try englobant.
+                result.error("NOTIFY_FAILED", "Intent de lancement introuvable.", null)
+                return
+            }
             // Tapping the notification must land on the batch review screen,
             // not just reopen the app wherever it was.
-            openIntent?.putExtra("musync_open_batch", true)
+            openIntent.putExtra("musync_open_batch", true)
             val pending = PendingIntent.getActivity(
                 this,
                 0,
