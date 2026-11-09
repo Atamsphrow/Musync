@@ -106,6 +106,64 @@ Future<Song?> _resolveSingleTarget(
   return ctx.ref.read(audioPlayerServiceProvider).currentSong;
 }
 
+/// Cible figée au moment de la confirmation.
+///
+/// [describeAction] résout les cibles et les fige ici ; [execute] reprend
+/// exactement ces cibles et ne re-résout plus depuis l'état courant. Sans ça,
+/// une action destructive (suppression, tags, pochette, déplacement, renommage
+/// en lot) pouvait porter sur un autre fichier que celui confirmé : le morceau
+/// en cours ou la bibliothèque peuvent changer entre l'aperçu et le « Confirmer ».
+///
+/// Le snapshot voyage dans [args] sous [_snapshotKey] : c'est la même Map qui
+/// traverse [AssistantNeedsConfirmation] jusqu'à `runConfirmed`, donc aucune
+/// autre pièce n'a besoin de changer. [Song] est immuable : figer l'objet fige
+/// aussi son chemin. Pour `fix_tags_from_filename`, la correction proposée
+/// ([FilenameGuess]) est figée avec le morceau, sinon `execute` rappellerait
+/// l'IA et pourrait écrire une autre correction que celle montrée.
+typedef _ConfirmedTarget = ({Song song, FilenameGuess? guess});
+
+/// Clé interne du snapshot — jamais un argument du modèle, ajoutée par
+/// [describeAction] après la validation stricte des arguments.
+const _snapshotKey = '__musync_confirmed_targets';
+
+/// Dernier snapshot connu par outil, quand [args] refuse l'écriture : le
+/// contrôleur passe `const {}` quand le modèle omet « args », et écrire dans
+/// une Map constante lèverait. [execute] y puise alors, au lieu d'échouer ou
+/// de re-résoudre. Écrasé à chaque [describeAction], un seul dialogue de
+/// confirmation ne pouvant être ouvert à la fois.
+final Map<String, List<_ConfirmedTarget>> _fallbackTargets = {};
+
+void _freezeTargets(
+  Map<String, Object?> args,
+  String toolName,
+  List<_ConfirmedTarget> targets,
+) {
+  final frozen = List<_ConfirmedTarget>.unmodifiable(targets);
+  try {
+    args[_snapshotKey] = frozen;
+    // Un snapshot précédent en repli ne doit pas survivre : il daterait
+    // d'une confirmation annulée.
+    _fallbackTargets.remove(toolName);
+  } on UnsupportedError {
+    _fallbackTargets[toolName] = frozen;
+  }
+}
+
+/// Les cibles confirmées, ou null si [describeAction] n'a pas tourné avant
+/// (appel direct d'[execute], sans confirmation : on re-résout alors comme
+/// avant, faute de cible confirmée à honorer).
+List<_ConfirmedTarget>? _confirmedTargets(
+  Map<String, Object?> args,
+  String toolName,
+) {
+  final raw = args[_snapshotKey];
+  if (raw is List<_ConfirmedTarget>) return List.of(raw);
+  // Repli consommé d'un coup : un snapshot ne sert qu'à l'exécution qui suit
+  // sa confirmation, jamais à un appel ultérieur sans describe.
+  final fallback = _fallbackTargets.remove(toolName);
+  return fallback == null ? null : List.of(fallback);
+}
+
 /// Modifie les tags du morceau (un fichier à la fois, confirmation).
 class EditTagsTool extends AiTool {
   const EditTagsTool();
@@ -180,6 +238,8 @@ class EditTagsTool extends AiTool {
         'Morceau introuvable${query == null ? '' : ' : « $query »'}.',
       );
     }
+    // Fige la cible confirmée : execute ne re-résoudra pas.
+    _freezeTargets(args, name, [(song: target, guess: null)]);
     final lines = <String>[
       'Modifier les tags de ${songLabel(target)} :',
     ];
@@ -204,8 +264,12 @@ class EditTagsTool extends AiTool {
     Map<String, Object?> args,
   ) async {
     final metadata = _diff(args);
-    final target =
-        await _resolveSingleTarget(ctx, optString(args, 'query'));
+    // Cible confirmée par describeAction ; sans elle (appel direct),
+    // résolution comme avant.
+    final confirmed = _confirmedTargets(args, name);
+    final target = confirmed != null && confirmed.isNotEmpty
+        ? confirmed.first.song
+        : await _resolveSingleTarget(ctx, optString(args, 'query'));
     if (target == null) {
       return AiToolResult.fail('Morceau introuvable.');
     }
@@ -249,6 +313,8 @@ class DeleteFileTool extends AiTool {
         'Morceau introuvable${query == null ? '' : ' : « $query »'}.',
       );
     }
+    // Fige la cible confirmée : execute ne re-résoudra pas.
+    _freezeTargets(args, name, [(song: target, guess: null)]);
     return 'Supprimer DÉFINITIVEMENT le fichier :\n'
         '${target.filePath}\n'
         '${songLabel(target)}';
@@ -259,8 +325,12 @@ class DeleteFileTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
-    final target =
-        await _resolveSingleTarget(ctx, optString(args, 'query'));
+    // Cible confirmée par describeAction ; sans elle (appel direct),
+    // résolution comme avant.
+    final confirmed = _confirmedTargets(args, name);
+    final target = confirmed != null && confirmed.isNotEmpty
+        ? confirmed.first.song
+        : await _resolveSingleTarget(ctx, optString(args, 'query'));
     if (target == null) {
       return AiToolResult.fail('Morceau introuvable.');
     }
@@ -322,10 +392,22 @@ class FixTagsFromFilenameTool extends AiTool {
 
   /// Les changements prévus, en lecture seule : le dialogue de confirmation
   /// montre exactement ce qui sera écrit.
+  ///
+  /// Avec [confirmed] (cibles figées par [describeAction]), reprend le
+  /// morceau ET la correction proposée sans re-résoudre ni rappeler l'IA :
+  /// la correction exécutée est celle qui a été montrée.
   Future<List<({Song song, FilenameGuess guess})>> _planned(
     AiToolContext ctx,
-    String? query,
-  ) async {
+    String? query, {
+    List<_ConfirmedTarget>? confirmed,
+  }) async {
+    if (confirmed != null) {
+      return [
+        for (final target in confirmed)
+          if (target.guess != null)
+            (song: target.song, guess: target.guess!),
+      ];
+    }
     final target = await _resolveSingleTarget(ctx, query);
     if (target == null) {
       throw AiToolArgError(
@@ -358,6 +440,12 @@ class FixTagsFromFilenameTool extends AiTool {
     Map<String, Object?> args,
   ) async {
     final planned = await _planned(ctx, optString(args, 'query'));
+    // Fige morceau + correction proposée : execute ne re-résoudra pas et ne
+    // rappellera pas l'IA.
+    _freezeTargets(args, name, [
+      for (final item in planned)
+        (song: item.song, guess: item.guess),
+    ]);
     if (planned.isEmpty) {
       return 'Aucune correction proposée (nom de fichier illisible).';
     }
@@ -376,7 +464,14 @@ class FixTagsFromFilenameTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
-    final planned = await _planned(ctx, optString(args, 'query'));
+    // Cibles confirmées par describeAction (morceau + correction) ; sans
+    // elles (appel direct), planification comme avant.
+    final confirmed = _confirmedTargets(args, name);
+    final planned = await _planned(
+      ctx,
+      optString(args, 'query'),
+      confirmed: confirmed,
+    );
     if (planned.isEmpty) {
       return AiToolResult.fail(
         'Aucune correction proposée (nom de fichier illisible).',
@@ -480,6 +575,10 @@ class BatchRenameFilesTool extends AiTool {
     if (songs.isEmpty) {
       throw const AiToolArgError('Aucun morceau correspondant.');
     }
+    // Fige la liste confirmée : execute ne relira pas la bibliothèque.
+    _freezeTargets(args, name, [
+      for (final song in songs) (song: song, guess: null),
+    ]);
     final pattern = optString(args, 'pattern') ?? 'artist-title';
     final preview = songs.take(3).map((s) {
       final name = _newName(s, pattern);
@@ -495,7 +594,12 @@ class BatchRenameFilesTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
-    final songs = await _targets(ctx, args);
+    // Liste confirmée par describeAction ; sans elle (appel direct),
+    // résolution comme avant.
+    final confirmed = _confirmedTargets(args, name);
+    final songs = confirmed == null
+        ? await _targets(ctx, args)
+        : [for (final target in confirmed) target.song];
     if (songs.isEmpty) {
       return AiToolResult.fail('Aucun morceau correspondant.');
     }
@@ -586,6 +690,8 @@ class ChangeCoverTool extends AiTool {
         'Morceau introuvable${query == null ? '' : ' : « $query »'}.',
       );
     }
+    // Fige la cible confirmée : execute ne re-résoudra pas.
+    _freezeTargets(args, name, [(song: target, guess: null)]);
     final image = reqString(args, 'image');
     return 'Changer la pochette de ${songLabel(target)} '
         'avec l’image :\n$image';
@@ -596,7 +702,12 @@ class ChangeCoverTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
-    final target = await _resolveSingleTarget(ctx, optString(args, 'query'));
+    // Cible confirmée par describeAction ; sans elle (appel direct),
+    // résolution comme avant.
+    final confirmed = _confirmedTargets(args, name);
+    final target = confirmed != null && confirmed.isNotEmpty
+        ? confirmed.first.song
+        : await _resolveSingleTarget(ctx, optString(args, 'query'));
     if (target == null) {
       return AiToolResult.fail('Morceau introuvable.');
     }
@@ -698,6 +809,11 @@ class MoveSongsTool extends AiTool {
     if (songs.isEmpty) {
       throw const AiToolArgError('Aucun morceau visé.');
     }
+    // Fige la liste confirmée : execute ne relira pas la bibliothèque ni le
+    // morceau en cours.
+    _freezeTargets(args, name, [
+      for (final song in songs) (song: song, guess: null),
+    ]);
     if (songs.length == 1) {
       return 'Déplacer ${songLabel(songs.first)} vers :\n$folder';
     }
@@ -716,7 +832,12 @@ class MoveSongsTool extends AiTool {
     } catch (_) {
       return AiToolResult.fail('Dossier inaccessible : $folder');
     }
-    final songs = await _targets(ctx, args);
+    // Liste confirmée par describeAction ; sans elle (appel direct),
+    // résolution comme avant.
+    final confirmed = _confirmedTargets(args, name);
+    final songs = confirmed == null
+        ? await _targets(ctx, args)
+        : [for (final target in confirmed) target.song];
     if (songs.isEmpty) {
       return AiToolResult.fail('Aucun morceau visé.');
     }
