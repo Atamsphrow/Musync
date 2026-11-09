@@ -221,12 +221,21 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// Quitte le mode chat et vide l'historique. Appelé uniquement par la
   /// croix × : le clavier ne peut plus faire quitter la conversation.
   void _exitChatMode() {
-    if (!_chatMode && _chatMessages.isEmpty && !_chatThinking) return;
+    // Le champ aussi : sans ça, `_showChat` reste vrai tant qu'il commence
+    // par `!` — la conversation reste affichée alors qu'on vient de la
+    // quitter. Le garde ci-dessous couvrait aussi le cas d'un `!` saisi
+    // mais jamais envoyé (ni mode, ni message, ni réflexion) : il faut
+    // alors quand même vider le champ.
+    final hasBang = _searchController.text.trim().startsWith('!');
+    if (!_chatMode && _chatMessages.isEmpty && !_chatThinking && !hasBang) {
+      return;
+    }
     setState(() {
       _chatMode = false;
       _chatMessages.clear();
       _chatThinking = false;
     });
+    _searchController.clear();
   }
 
   Future<void> _restoreLastPlayed() async {
@@ -830,6 +839,16 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // instead of waiting for the route callbacks, so a share never leaves the
     // bubble sitting on top of "Lecture en cours".
     ref.read(playerScreenVisibleProvider.notifier).state = true;
+
+    // Before navigating, not after: `pushNamed` only completes when the
+    // player is popped, so a search started after it would only run once
+    // the player is closed. `fetchForShared` re-reads each track's status
+    // before searching, so starting it now is safe.
+    if (needSearch.isNotEmpty) {
+      unawaited(
+        ref.read(backgroundLyricsServiceProvider).fetchForShared(needSearch),
+      );
+    }
     if (songs.length == 1) {
       await Navigator.pushNamed(
         context,
@@ -860,15 +879,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           queue: songs,
           index: 0,
         ),
-      );
-    }
-
-    // And the ones missing synced lyrics are searched for silently in the
-    // background — no batch screen, nothing shown: WiFi only, one at a time.
-    // Each write lands in Settings › Historique with its undo.
-    if (needSearch.isNotEmpty) {
-      unawaited(
-        ref.read(backgroundLyricsServiceProvider).fetchForShared(needSearch),
       );
     }
   }
