@@ -30,9 +30,10 @@ void main() {
   });
 
   group('outils indisponibles sur iOS annoncés dans leur description', () {
-    test('les 4 outils Android-only le disent', () {
+    test('les 5 outils Android-only le disent', () {
       final registry = buildAiToolRegistry();
       for (final name in [
+        'close_app',
         'schedule_once',
         'schedule_daily',
         'set_headphone_trigger',
