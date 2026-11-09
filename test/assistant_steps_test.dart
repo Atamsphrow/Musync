@@ -54,6 +54,14 @@ class _FakeTool extends AiTool {
 
 final _refProbe = Provider<Ref>((ref) => ref);
 
+/// Faux outil dont le schéma n'a pas de clé `properties` (J58).
+class _NoPropertiesTool extends _FakeTool {
+  _NoPropertiesTool(super.name, {required super.onExecute});
+
+  @override
+  Map<String, Object?> get parametersSchema => {'type': 'object'};
+}
+
 AssistantController _controllerWith(List<AiTool> tools) {
   final container = ProviderContainer();
   addTearDown(container.dispose);
@@ -98,9 +106,34 @@ void main() {
         ]),
       );
 
-      expect(outcome, isA<AssistantDone>());
-      expect((outcome as AssistantDone).message, 'A raté');
+      expect(outcome, isA<AssistantFailed>());
+      expect((outcome as AssistantFailed).message, 'A raté');
       expect(b.calls, isEmpty);
+    });
+
+    test('outil unique en échec : AssistantFailed, pas AssistantDone',
+        () async {
+      final a = _FakeTool('a', onExecute: (_) => AiToolResult.fail('Non.'));
+      final controller = _controllerWith([a]);
+      final outcome = await controller.executePlan(
+        const AssistantSteps([AssistantToolCall('a')]),
+      );
+      expect(outcome, isA<AssistantFailed>());
+      expect((outcome as AssistantFailed).message, 'Non.');
+    });
+
+    test('une Error levée par un outil se propage (pas avalée)', () async {
+      final boom = _FakeTool(
+        'boom',
+        onExecute: (_) => throw StateError('plantage interne'),
+      );
+      final controller = _controllerWith([boom]);
+      await expectLater(
+        controller.executePlan(
+          const AssistantSteps([AssistantToolCall('boom')]),
+        ),
+        throwsA(isA<StateError>()),
+      );
     });
 
     test('une étape à confirmation est refusée d’emblée', () async {
@@ -164,6 +197,28 @@ void main() {
       );
       // Rien ne s'exécute quand le plan est invalide.
       expect(a.calls, isEmpty);
+    });
+  });
+
+  group('parsePlan — schéma incomplet (J58)', () {
+    test('outil sans clé « properties » : erreur explicite', () {
+      final tool = _NoPropertiesTool(
+        'sans_schema',
+        onExecute: (_) => AiToolResult.ok('jamais'),
+      );
+      final controller = _controllerWith([tool]);
+      expect(
+        () => controller.parsePlan(
+          '{"tool": "sans_schema", "args": {"a": 1}}',
+        ),
+        throwsA(
+          isA<AssistantParseError>().having(
+            (e) => e.message,
+            'message',
+            contains('properties'),
+          ),
+        ),
+      );
     });
   });
 
