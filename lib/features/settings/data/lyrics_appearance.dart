@@ -45,10 +45,10 @@ class LyricsAppearance {
 
   /// Font scale applied on top of the theme size and the system text scale.
   double get fontScale => switch (fontSize) {
-        LyricsFontSize.small => 0.85,
-        LyricsFontSize.medium => 1.0,
-        LyricsFontSize.large => 1.2,
-      };
+    LyricsFontSize.small => 0.85,
+    LyricsFontSize.medium => 1.0,
+    LyricsFontSize.large => 1.2,
+  };
 
   LyricsAppearance copyWith({
     LyricsFontSize? fontSize,
@@ -57,24 +57,48 @@ class LyricsAppearance {
     bool? italic,
     LyricsColorMode? colorMode,
     LyricsColorMode? bubbleColorMode,
-  }) =>
-      LyricsAppearance(
-        fontSize: fontSize ?? this.fontSize,
-        textAlign: textAlign ?? this.textAlign,
-        fontStyle: fontStyle ?? this.fontStyle,
-        italic: italic ?? this.italic,
-        colorMode: colorMode ?? this.colorMode,
-        bubbleColorMode: bubbleColorMode ?? this.bubbleColorMode,
-      );
+  }) => LyricsAppearance(
+    fontSize: fontSize ?? this.fontSize,
+    textAlign: textAlign ?? this.textAlign,
+    fontStyle: fontStyle ?? this.fontStyle,
+    italic: italic ?? this.italic,
+    colorMode: colorMode ?? this.colorMode,
+    bubbleColorMode: bubbleColorMode ?? this.bubbleColorMode,
+  );
+
+  // Value equality, like LyricsSourceConfig and PlaybackSettings: the
+  // class is a Riverpod state object, and without it every copyWith —
+  // even one that changes nothing — is a new instance that notifies
+  // and rebuilds for nothing.
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LyricsAppearance &&
+          other.fontSize == fontSize &&
+          other.textAlign == textAlign &&
+          other.fontStyle == fontStyle &&
+          other.italic == italic &&
+          other.colorMode == colorMode &&
+          other.bubbleColorMode == bubbleColorMode;
+
+  @override
+  int get hashCode => Object.hash(
+    fontSize,
+    textAlign,
+    fontStyle,
+    italic,
+    colorMode,
+    bubbleColorMode,
+  );
 
   Map<String, Object?> toJson() => {
-        'fontSize': fontSize.name,
-        'textAlign': textAlign.name,
-        'fontStyle': fontStyle.name,
-        'italic': italic,
-        'colorMode': colorMode.name,
-        'bubbleColorMode': bubbleColorMode.name,
-      };
+    'fontSize': fontSize.name,
+    'textAlign': textAlign.name,
+    'fontStyle': fontStyle.name,
+    'italic': italic,
+    'colorMode': colorMode.name,
+    'bubbleColorMode': bubbleColorMode.name,
+  };
 
   static T _enumOf<T>(List<T> values, Object? raw, T fallback) {
     if (raw is String) {
@@ -90,16 +114,31 @@ class LyricsAppearance {
     final m = raw.cast<String, Object?>();
     return LyricsAppearance(
       fontSize: _enumOf(
-          LyricsFontSize.values, m['fontSize'], LyricsFontSize.medium),
+        LyricsFontSize.values,
+        m['fontSize'],
+        LyricsFontSize.medium,
+      ),
       textAlign: _enumOf(
-          LyricsTextAlign.values, m['textAlign'], LyricsTextAlign.center),
+        LyricsTextAlign.values,
+        m['textAlign'],
+        LyricsTextAlign.center,
+      ),
       fontStyle: _enumOf(
-          LyricsFontStyle.values, m['fontStyle'], LyricsFontStyle.stylized),
+        LyricsFontStyle.values,
+        m['fontStyle'],
+        LyricsFontStyle.stylized,
+      ),
       italic: m['italic'] is bool ? m['italic'] as bool : true,
       colorMode: _enumOf(
-          LyricsColorMode.values, m['colorMode'], LyricsColorMode.white),
+        LyricsColorMode.values,
+        m['colorMode'],
+        LyricsColorMode.white,
+      ),
       bubbleColorMode: _enumOf(
-          LyricsColorMode.values, m['bubbleColorMode'], LyricsColorMode.white),
+        LyricsColorMode.values,
+        m['bubbleColorMode'],
+        LyricsColorMode.white,
+      ),
     );
   }
 }
