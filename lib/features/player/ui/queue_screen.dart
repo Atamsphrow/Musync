@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -86,7 +87,9 @@ class _QueueScreenState extends State<QueueScreen>
       _settlePops = false;
       Navigator.of(context).pop();
     });
-    _openProbe = FrameProbe.start('ouverture file', frames: 40);
+    // Debug only: in release this sampled every opening and persisted a
+    // journal line per frame batch.
+    if (kDebugMode) _openProbe = FrameProbe.start('ouverture file', frames: 40);
   }
 
   @override
@@ -493,12 +496,22 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
       final handleContext = _handleContext;
       if (down != null && handleContext != null && handleContext.mounted) {
         try {
-          SliverReorderableList.maybeOf(handleContext)?.startItemDragReorder(
-            index: _handleIndex,
-            event: down,
-            recognizer: ImmediateMultiDragGestureRecognizer(),
-          );
-          _handleReorder = true;
+          // Only claim the reorder when the framework actually started
+          // it: `maybeOf` can be null (no `SliverReorderableList`
+          // above), and an unconditional `_handleReorder = true` made
+          // `_handleDragMove` return early for the rest of the gesture,
+          // killing it outright. (There is no bool to check here:
+          // `startItemDragReorder` returns void and throws on a
+          // non-visible item, which the catch below already covers.)
+          final sliver = SliverReorderableList.maybeOf(handleContext);
+          if (sliver != null) {
+            sliver.startItemDragReorder(
+              index: _handleIndex,
+              event: down,
+              recognizer: ImmediateMultiDragGestureRecognizer(),
+            );
+            _handleReorder = true;
+          }
         } catch (_) {
           // The row vanished mid-gesture (queue mutated under the
           // finger): let the gesture die quietly.
@@ -629,7 +642,13 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
 
   /// F6 hook: mirrors the player's queue into the active named queue, so the
   /// named queue stays an exact snapshot after a reorder/remove/play-next.
+  ///
+  /// Best-effort: the queue mutation itself already succeeded. The `mounted`
+  /// guard matters because the callers run after an await — by then this
+  /// widget may be disposed, and using `ref` then throws (and would be
+  /// swallowed by the catch below, skipping the sync silently).
   Future<void> _syncActiveQueue() async {
+    if (!mounted) return;
     try {
       await ref.read(namedQueuesProvider.notifier).syncActiveFromPlayer();
     } catch (_) {
@@ -867,13 +886,23 @@ class _RowExtentProbe extends StatefulWidget {
 }
 
 class _RowExtentProbeState extends State<_RowExtentProbe> {
+  /// A post-frame callback is already queued: scheduling another one on
+  /// every build stacked a callback (and a measure) per rebuild of every
+  /// row. One pending callback is enough — the measure reads the layout
+  /// as of the next frame, whatever triggered it.
+  bool _callbackPending = false;
+
   @override
   Widget build(BuildContext context) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final box = context.findRenderObject() as RenderBox?;
-      if (box != null && box.hasSize) widget.onExtent(box.size.height);
-    });
+    if (!_callbackPending) {
+      _callbackPending = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _callbackPending = false;
+        if (!mounted) return;
+        final box = context.findRenderObject() as RenderBox?;
+        if (box != null && box.hasSize) widget.onExtent(box.size.height);
+      });
+    }
     return widget.child;
   }
 }
