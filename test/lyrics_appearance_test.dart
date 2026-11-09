@@ -93,4 +93,29 @@ void main() {
       }
     });
   });
+
+  group('égalité (L92)', () {
+    test('deux apparences identiques sont égales, avec le même hashCode', () {
+      const a = LyricsAppearance();
+      const b = LyricsAppearance();
+      expect(a, b);
+      expect(a.hashCode, b.hashCode);
+    });
+
+    test('copyWith sans changement donne une valeur égale', () {
+      const a = LyricsAppearance();
+      expect(a.copyWith(), a);
+      expect(a.copyWith().hashCode, a.hashCode);
+    });
+
+    test('un champ différent donne une valeur différente', () {
+      const a = LyricsAppearance();
+      expect(a.copyWith(italic: false), isNot(a));
+      expect(a.copyWith(fontSize: LyricsFontSize.large), isNot(a));
+      expect(
+        a.copyWith(bubbleColorMode: LyricsColorMode.materialYou),
+        isNot(a),
+      );
+    });
+  });
 }
