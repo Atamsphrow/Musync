@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/providers/named_queue_provider.dart';
@@ -512,9 +513,16 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
             );
             _handleReorder = true;
           }
-        } catch (_) {
+        } catch (e) {
           // The row vanished mid-gesture (queue mutated under the
-          // finger): let the gesture die quietly.
+          // finger): let the gesture die quietly — but log it, so a
+          // systematic failure here is visible in the journal instead of
+          // silently swallowed.
+          DebugLog.instance.warning(
+            'QueueScreen',
+            'Drag start failed: row vanished mid-gesture',
+            error: e,
+          );
         }
       }
     } else if (_handleDx > 0) {
@@ -689,6 +697,9 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
   }
 
   Future<void> _playAt(List<Song> queue, int index) async {
+    // The queue can shrink between the tap and the call (a song removed
+    // from elsewhere): an out-of-range index crashed here.
+    if (index < 0 || index >= queue.length) return;
     await ref
         .read(audioPlayerServiceProvider)
         .playSong(queue[index], queue: queue, index: index);
@@ -697,8 +708,10 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
 
   String _formatDuration(int milliseconds) {
     final duration = Duration(milliseconds: milliseconds);
+    final hours = duration.inHours;
     final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
     final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    if (hours > 0) return '$hours:$minutes:$seconds';
     return '$minutes:$seconds';
   }
 
