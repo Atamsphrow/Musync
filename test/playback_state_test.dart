@@ -86,4 +86,31 @@ void main() {
     final loaded = await store().load();
     expect(loaded.repeat, 'off');
   });
+
+  test('a non-List queue value reads as defaults, not a TypeError', () async {
+    final file = File('${tmp.path}/playback_state.json');
+    await file.writeAsString('{"queue": "not-a-list", "index": 2}');
+    PlaybackStateStore.debugResetForTest();
+    final fresh = PlaybackStateStore(fileLocator: () async => file);
+    final state = await fresh.load();
+    expect(state.queuePaths, isEmpty);
+    expect(state.index, 0);
+  });
+
+  test('concurrent first reads share one decode', () async {
+    final s = store();
+    await s.update(queuePaths: ['/a.mp3', '/b.mp3'], index: 1);
+    // Two readers racing the first read must both see the same state —
+    // each decoding its own Map used to let the last writer drop the
+    // other's merged fields.
+    PlaybackStateStore.debugResetForTest();
+    final results = await Future.wait([
+      PlaybackStateStore(fileLocator: s.fileLocator).load(),
+      PlaybackStateStore(fileLocator: s.fileLocator).load(),
+    ]);
+    for (final state in results) {
+      expect(state.queuePaths, ['/a.mp3', '/b.mp3']);
+      expect(state.index, 1);
+    }
+  });
 }
