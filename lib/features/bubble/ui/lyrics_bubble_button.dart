@@ -35,12 +35,27 @@ class LyricsBubbleButton extends ConsumerWidget {
         if (!context.mounted) return;
         switch (result) {
           case BubbleStart.started:
+            // Without a current song there is nothing for the bubble to
+            // show: starting playback is impossible, and sending the app
+            // to the background would leave an empty bubble floating over
+            // the home screen — exactly what the play-first block below
+            // says it wants to avoid. Stay put and say so instead.
+            if (ref.read(currentSongProvider) == null) {
+              ScaffoldMessenger.of(context).showOnly(
+                const SnackBar(
+                  content: Text(
+                    'Aucun morceau en cours : lance d’abord un morceau.',
+                  ),
+                ),
+              );
+              break;
+            }
             // The bubble only shows while playing: if the track is paused or
             // stopped, start it first — otherwise the app would go to the
             // background with nothing to show.
             final playing =
                 ref.read(playerStateProvider).valueOrNull?.playing ?? false;
-            if (!playing && ref.read(currentSongProvider) != null) {
+            if (!playing) {
               // Fire and forget: awaiting play() here once wedged the whole
               // sequence — the track started playing but the app never went
               // to the background, because just_audio's future only resolves
@@ -80,9 +95,9 @@ class LyricsBubbleButton extends ConsumerWidget {
               ),
             );
           case BubbleStart.failed:
-            ScaffoldMessenger.of(
-              context,
-            ).showOnly(const SnackBar(content: Text('Impossible d\'ouvrir la bulle.')));
+            ScaffoldMessenger.of(context).showOnly(
+              const SnackBar(content: Text('Impossible d\'ouvrir la bulle.')),
+            );
         }
       },
     );
