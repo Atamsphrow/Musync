@@ -9,7 +9,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
+import 'dart:io' show HttpException, Platform, SocketException;
 
 import 'package:http/http.dart' as http;
 import 'package:musync/features/lyrics/data/ai_filename_reader.dart';
@@ -49,13 +49,32 @@ class AssistantHistory {
 
 class AssistantBridge {
   final http.Client _client;
+
+  /// True when the client was created here (default constructor): only then
+  /// does this bridge own it and close it. An injected client (the app's
+  /// shared HTTP client in production) belongs to its provider, which closes
+  /// it when the scope goes away — closing it here would break every other
+  /// network caller.
+  final bool _ownsClient;
+
   static const Duration _timeout = Duration(seconds: 30);
 
   /// Un peu plus que les 200 tokens du lecteur de noms de fichiers : une
   /// commande multi-étapes reste courte, mais pas deux mots.
   static const int _maxTokens = 600;
 
-  AssistantBridge({http.Client? client}) : _client = client ?? http.Client();
+  AssistantBridge({http.Client? client})
+      : _client = client ?? http.Client(),
+        _ownsClient = client == null;
+
+  /// Closes the client this bridge created, if any. A no-op for an injected
+  /// (shared) client. Call when the bridge is discarded.
+  void close() {
+    if (_ownsClient) _client.close();
+  }
+
+  /// Alias for [close], for callers that treat the bridge as a resource.
+  void dispose() => close();
 
   /// Le prompt système : qui je suis, l'heure du téléphone, les outils, et
   /// la consigne de ne répondre qu'en JSON.
@@ -259,18 +278,47 @@ ${_iosNote()}- Résolution des morceaux : « query » accepte titre + artiste da
   /// POST JSON avec les erreurs traduites en français. Même contrat que le
   /// lecteur de noms de fichiers : l'exception d'origine est avalée plutôt
   /// qu'enrobée, car certains clients l'écho avec la requête (clé incluse).
+  ///
+  /// Seules les erreurs réseau/timeout attendues sont converties : une erreur
+  /// de programmation (payload non encodable, headers invalides) se propage
+  /// telle quelle au lieu d'être déguisée en « provider injoignable ».
+  ///
+  /// Limite du timeout : `.timeout` n'annule que l'attente, pas la requête —
+  /// un `Future` n'est pas annulable. La requête orpheline continue en
+  /// arrière-plan, sauf si ce pont possède son client ([close] en cas de
+  /// timeout l'interrompt) ; un client partagé, lui, doit rester ouvert pour
+  /// ses autres utilisateurs.
   Future<Map<String, Object?>> _post(
     Uri uri, {
     required Map<String, String> headers,
     required Map<String, Object?> payload,
     required AiProviderConfig provider,
   }) async {
+    // Encodé hors du try : un payload non encodable est une erreur de
+    // programmation, pas un provider injoignable.
+    final body = jsonEncode(payload);
     final http.Response response;
     try {
       response = await _client
-          .post(uri, headers: headers, body: jsonEncode(payload))
+          .post(uri, headers: headers, body: body)
           .timeout(_timeout);
-    } catch (_) {
+    } on TimeoutException {
+      if (_ownsClient) _client.close();
+      throw AiReaderException(
+        '${provider.name} est injoignable. Vérifiez la connexion et l’adresse.',
+        model: provider.model,
+      );
+    } on http.ClientException {
+      throw AiReaderException(
+        '${provider.name} est injoignable. Vérifiez la connexion et l’adresse.',
+        model: provider.model,
+      );
+    } on SocketException {
+      throw AiReaderException(
+        '${provider.name} est injoignable. Vérifiez la connexion et l’adresse.',
+        model: provider.model,
+      );
+    } on HttpException {
       throw AiReaderException(
         '${provider.name} est injoignable. Vérifiez la connexion et l’adresse.',
         model: provider.model,
@@ -318,7 +366,6 @@ ${_iosNote()}- Résolution des morceaux : « query » accepte titre + artiste da
     try {
       final decoded = jsonDecode(utf8.decode(response.bodyBytes));
       if (decoded is Map<String, Object?>) return decoded;
-      if (decoded is Map) return Map<String, Object?>.from(decoded);
     } catch (_) {
       // Même message : le corps peut contenir n'importe quoi, le citer
       // serait du bruit.
