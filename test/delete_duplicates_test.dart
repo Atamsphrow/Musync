@@ -211,4 +211,79 @@ void main() {
       expect(await kept.exists(), isTrue);
     });
   });
+
+  group('F48 — clé de regroupement', () {
+    test('« A|B » + « C » ne collisionne pas avec « A » + « B|C »', () async {
+      // Avant le correctif, la clé était la chaîne 'titre|artiste' : les
+      // deux paires donnaient la même clé 'a|b|c' et formaient un faux
+      // groupe de doublons.
+      final container = makeContainer([
+        _song(1, 'A|B', 'C', '/a/1.mp3'),
+        _song(2, 'A', 'B|C', '/b/2.mp3'),
+      ]);
+      final ctx = _ctx(container.read(_refProbe));
+      final tool = buildAiToolRegistry()['find_duplicates']!;
+      final result = await tool.execute(ctx, {});
+      expect(result.ok, isTrue);
+      expect(result.message, contains('Aucun doublon'));
+    });
+  });
+
+  group('F49 — plan figé entre confirmation et exécution', () {
+    test('le plan confirmé est honoré malgré les changements', () async {
+      final a1 = await makeFile('a1.mp3');
+      final a2 = await makeFile('a2.mp3');
+      final songs = [
+        _song(1, 'Same', 'X', a1.path),
+        _song(2, 'Same', 'X', a2.path),
+      ];
+      final container = makeContainer(songs);
+      final ctx = _ctx(container.read(_refProbe));
+      final tool = buildAiToolRegistry()['delete_duplicates']!;
+      final args = <String, Object?>{};
+      final description = await tool.describeAction(ctx, args);
+      expect(description, contains('1 fichier'));
+      // La bibliothèque change entre la confirmation et l'exécution : un
+      // nouveau groupe apparaît (C). Sans plan figé, l'exécution
+      // re-calculerait les groupes et supprimerait aussi C2.
+      final c1 = await makeFile('c1.mp3');
+      final c2 = await makeFile('c2.mp3');
+      songs.addAll([
+        _song(3, 'Other', 'Y', c1.path),
+        _song(4, 'Other', 'Y', c2.path),
+      ]);
+      container.invalidate(songListProvider);
+      final result = await tool.execute(ctx, args);
+      expect(result.ok, isTrue);
+      expect(result.message, contains('1 fichier en double supprimé'));
+      expect(await a1.exists(), isTrue);
+      expect(await a2.exists(), isFalse);
+      expect(await c1.exists(), isTrue);
+      expect(await c2.exists(), isTrue);
+    });
+
+    test('un morceau déjà parti n’est pas supprimé', () async {
+      final a1 = await makeFile('a1.mp3');
+      final a2 = await makeFile('a2.mp3');
+      final songs = [
+        _song(1, 'Same', 'X', a1.path),
+        _song(2, 'Same', 'X', a2.path),
+      ];
+      final container = makeContainer(songs);
+      final ctx = _ctx(container.read(_refProbe));
+      final tool = buildAiToolRegistry()['delete_duplicates']!;
+      final args = <String, Object?>{};
+      await tool.describeAction(ctx, args);
+      // A2 quitte la bibliothèque avant l'exécution : le plan le
+      // cherchait par id, il est absent — on l'ignore au lieu de
+      // supprimer son fichier à l'aveugle.
+      songs.removeAt(1);
+      container.invalidate(songListProvider);
+      final result = await tool.execute(ctx, args);
+      expect(result.ok, isTrue);
+      expect(result.message, contains('0 fichier en double supprimé'));
+      expect(await a1.exists(), isTrue);
+      expect(await a2.exists(), isTrue);
+    });
+  });
 }
