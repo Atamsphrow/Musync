@@ -156,8 +156,9 @@ void main() {
 
     test('the legacy bundled lyrics.ovh entry is dropped on load', () {
       // Stored before the preset change: the old default, still marked
-      // built-in. It must not survive — the unreliable service stops being
-      // queried by default.
+      // built-in. L94 : `fromJson` l'abandonne dès la lecture — le
+      // service, peu fiable, n'est plus jamais interrogé. Le repli
+      // par id dans `_withBuiltIn` reste en seconde ligne de défense.
       final legacy = LyricsSourceConfig.fromJson({
         'id': 'lyrics-ovh',
         'name': 'lyrics.ovh',
@@ -165,12 +166,12 @@ void main() {
         'isBuiltIn': true,
         'kind': 'lyricsOvh',
       });
-      final loaded = LyricsSourceStore.withBuiltInForTest([legacy!]);
-      expect(loaded.map((s) => s.id), ['lrclib']);
+      expect(legacy, isNull);
     });
 
     test('any lyrics.ovh entry is dropped, preset or legacy', () {
-      // The preset is gone: whatever the flag, the id means legacy.
+      // The preset is gone: whatever the flag, the kind means legacy —
+      // L94 abandonne l'entrée dès `fromJson`, même avec un autre id.
       final readded = LyricsSourceConfig.fromJson({
         'id': 'lyrics-ovh',
         'name': 'lyrics.ovh',
@@ -178,22 +179,39 @@ void main() {
         'isBuiltIn': false,
         'kind': 'lyricsOvh',
       });
-      final loaded = LyricsSourceStore.withBuiltInForTest([readded!]);
+      expect(readded, isNull);
+    });
+
+    test('an entry reusing the legacy id is still dropped by id', () {
+      // Seconde ligne de défense : même avec un kind valide, l'id
+      // historique ne revient jamais.
+      const reused = LyricsSourceConfig(
+        id: 'lyrics-ovh',
+        name: 'Miroir',
+        baseUrl: 'https://miroir.example/api',
+      );
+      final loaded = LyricsSourceStore.withBuiltInForTest([reused]);
       expect(loaded.map((s) => s.id), ['lrclib']);
     });
 
     test(
-      'kinds are distinct, and lrclib is the default for a stored record',
+      'lrclib is the default for a stored record, lyricsOvh is dropped',
       () {
         expect(lrclibDefault.kind, LyricsSourceKind.lrclib);
-        const ovh = LyricsSourceConfig(
-          id: 'lyrics-ovh',
-          name: 'lyrics.ovh',
-          baseUrl: 'https://api.lyrics.ovh',
-          kind: LyricsSourceKind.lyricsOvh,
+
+        // L94 : une entrée stockée avec kind lyricsOvh — seul chemin qui
+        // pouvait encore le produire, via un JSON forgé — est abandonnée
+        // au chargement, quel que soit son id : le service n'est plus
+        // jamais interrogé.
+        expect(
+          LyricsSourceConfig.fromJson({
+            'id': 'custom-ovh',
+            'name': 'lyrics.ovh',
+            'baseUrl': 'https://api.lyrics.ovh',
+            'kind': 'lyricsOvh',
+          }),
+          isNull,
         );
-        expect(ovh.kind, LyricsSourceKind.lyricsOvh);
-        expect(ovh.isBuiltIn, isFalse);
 
         // A record written before `kind` existed can only have been an LRCLIB
         // mirror — that was the only kind a user could add.
@@ -211,7 +229,7 @@ void main() {
         id: 'x',
         name: 'X',
         baseUrl: 'https://x.example/api',
-        kind: LyricsSourceKind.lyricsOvh,
+        kind: LyricsSourceKind.lrclib,
       );
       final decoded = LyricsSourceConfig.fromJson(
         jsonDecode(jsonEncode(original.toJson())),
