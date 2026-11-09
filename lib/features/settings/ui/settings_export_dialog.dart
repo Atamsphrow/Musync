@@ -111,8 +111,23 @@ String _exportStamp(DateTime t) {
   return '${t.year}${two(t.month)}${two(t.day)}-${two(t.hour)}${two(t.minute)}${two(t.second)}';
 }
 
-String _shortPath(String path) =>
-    path.replaceFirst('/storage/emulated/0/', '');
+/// Shortens a saved location for the confirmation snackbar.
+///
+/// `saveFile` returns a Storage Access Framework URI on Android, and a
+/// `content://…` URI contains no `/storage/emulated/0/` to strip: without
+/// this the snackbar showed the whole URI. For a SAF URI the file name is
+/// the last path segment, URL-decoded; a plain path keeps the old shortening.
+String _shortPath(String path) {
+  final uri = Uri.tryParse(path);
+  if (uri != null && uri.scheme == 'content') {
+    final name = Uri.decodeComponent(uri.path).split('/').last;
+    return name.isEmpty ? path : name;
+  }
+  final filePath = uri != null && uri.scheme == 'file'
+      ? uri.toFilePath()
+      : path;
+  return filePath.replaceFirst('/storage/emulated/0/', '');
+}
 
 class _ExportDialog extends StatefulWidget {
   const _ExportDialog();
@@ -128,6 +143,7 @@ class _ExportDialogState extends State<_ExportDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Exporter les paramètres'),
+      scrollable: true,
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
