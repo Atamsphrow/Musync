@@ -3,23 +3,18 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/media_store.dart';
-import 'package:musync/core/services/permission_service.dart';
 import 'package:musync/core/utils/snackbar.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/catalogue_provider.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
-import 'package:musync/features/lyrics/data/filename_guess.dart';
-import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
+import 'package:musync/features/lyrics/data/ai_lyrics_finder.dart';
+import 'package:musync/features/lyrics/data/lyrics_provenance.dart';
 import 'package:musync/features/lyrics/data/sweep_memory.dart';
-import 'package:musync/features/lyrics/providers/search_provider.dart';
 import 'package:musync/features/lyrics/providers/tag_change_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
-import 'package:musync/features/settings/providers/ai_settings_provider.dart';
-import 'package:musync/features/settings/providers/backup_provider.dart';
 import 'package:workmanager/workmanager.dart';
 
 /// App-scoped service. Started once from the root widget's `initState`,
@@ -32,15 +27,15 @@ final backgroundLyricsServiceProvider = Provider<BackgroundLyricsService>(
 ///
 /// * The playing track: when a track with no lyrics — or plain, untimed
 ///   lyrics — starts playing, the service first checks the device is actually
-///   online (otherwise it does nothing at all), resolves a trustworthy
-///   artist/title (tags first, then the filename heuristic, then the AI
-///   reader as a last resort), and asks the lyrics sources for a synced
-///   version. The best hit is written straight into the file, synced or
-///   plain — no confidence gate, no confirmation dialog, just the usual
-///   quiet snackbar (with undo).
+///   online (otherwise it does nothing at all) and hands the track to the
+///   shared [AiLyricsFinder]: identity resolution, search, confidence score,
+///   integration only at or above 0.80. A synced track whose provenance says
+///   « written by the app below 0.80 » (or nothing at all) is re-verified
+///   rather than skipped: a wrong synced lyric used to be « done » forever.
+///   A write shows the usual quiet snackbar (with undo).
 /// * The whole library: some time after startup, and only on WiFi, every
-///   track that still lacks synced lyrics gets the same treatment, one after
-///   another with a breather between searches.
+///   track that still lacks settled synced lyrics gets the same treatment,
+///   one after another with a breather between searches.
 ///
 /// Every write goes through the tag backup store, so it shows up in
 /// Settings › Historique like any other write, and can be undone from there.
@@ -146,9 +141,16 @@ class BackgroundLyricsService {
     if (_attempted.contains(song.filePath)) return;
     _attempted.add(song.filePath);
 
-    // Local check first: a synced track needs nothing.
+    // Local check first: a track with no lyrics needs a search. A synced
+    // track needs one too when its lyrics are unproven — written by the
+    // app below 0.80, or before provenance existed. Only a settled
+    // synced track (user lyrics, or auto at 0.80+) is left alone.
     final status = precheck[1] as LyricsStatus?;
-    if (status == null || status == LyricsStatus.synced) return;
+    if (status == null) return;
+    if (status == LyricsStatus.synced &&
+        await _syncedIsSettled(song.filePath)) {
+      return;
+    }
     if (_ref.read(currentSongProvider)?.filePath != song.filePath) return;
 
     final written = await _searchAndWrite(song);
@@ -201,7 +203,10 @@ class BackgroundLyricsService {
           .statusOf(song.filePath)
           .then<LyricsStatus?>((s) => s)
           .catchError((_) => null);
-      if (status == LyricsStatus.synced) continue;
+      if (status == LyricsStatus.synced &&
+          await _syncedIsSettled(song.filePath)) {
+        continue;
+      }
       _attempted.add(song.filePath);
       await _searchAndWrite(song);
       await Future.delayed(_searchGap);
@@ -228,11 +233,22 @@ class BackgroundLyricsService {
 
     var written = 0;
     for (final song in songs) {
-      if (statuses[song.filePath] == LyricsStatus.synced) continue;
+      if (statuses[song.filePath] == LyricsStatus.synced &&
+          await _syncedIsSettled(song.filePath)) {
+        continue;
+      }
       if (_attempted.contains(song.filePath)) continue;
       // Searched at a previous launch and confirmed absent: believed
-      // for a fortnight (see SweepMemory) instead of re-queried.
-      if (await _sweepMemory.recentlyMissed(song.filePath)) continue;
+      // for a fortnight (see SweepMemory) instead of re-queried — unless
+      // the track was retagged since, in which case the old answer is
+      // about a different identity.
+      if (await _sweepMemory.recentlyMissed(
+        song.filePath,
+        title: song.title,
+        artist: song.artist,
+      )) {
+        continue;
+      }
       _attempted.add(song.filePath);
       // WiFi dropped mid-sweep: stop here, next launch resumes.
       if (!await MediaStore.isWifiConnected()) break;
@@ -245,7 +261,11 @@ class BackgroundLyricsService {
       if (outcome != null) {
         written++;
       } else if (confirmedMiss) {
-        await _sweepMemory.markMissed(song.filePath);
+        await _sweepMemory.markMissed(
+          song.filePath,
+          title: song.title,
+          artist: song.artist,
+        );
       }
       await Future.delayed(_searchGap);
     }
@@ -262,119 +282,51 @@ class BackgroundLyricsService {
     }
   }
 
-  /// Searches for lyrics for [song] and silently writes the best hit.
+  /// Searches for lyrics for [song] and silently writes the best hit —
+  /// through the shared [AiLyricsFinder], so the background writes
+  /// nothing below the 0.80 bar, never overwrites user lyrics alone,
+  /// and always goes through backup + Historique + provenance.
   ///
-  /// Ranked best-first by the repository: the first synced hit wins, no
-  /// confidence gate; otherwise the first hit with plain text. When the
-  /// tag-based query finds nothing, the AI gets one shot at reading the
-  /// file name and the search runs a second time with its guess — never
-  /// twice with the same query. Returns whether an undo is available and
-  /// whether the written lyrics are synced, or null when nothing was
-  /// written. The backup behind the undo is what puts the write in
-  /// Settings › Historique.
+  /// Returns whether an undo is available and whether the written
+  /// lyrics are synced, or null when nothing was written. The backup
+  /// behind the undo is what puts the write in Settings › Historique.
+  /// [onConfirmedMiss] fires only on a confirmed absence: searches ran
+  /// on a good-quality query and found nothing — never on a network
+  /// failure or an unresolvable query.
   Future<({bool canUndo, bool synced})?> _searchAndWrite(
     Song song, {
     bool aiFallback = true,
     void Function()? onConfirmedMiss,
   }) async {
-    // A search is only as good as its query: tags first, then the filename
-    // heuristic, then the AI reader as a last resort.
-    final query = await _resolveQuery(song, aiFallback: aiFallback);
-    if (query == null) return null;
-
-    final repository = _ref.read(lyricsRepositoryProvider);
-    List<LyricsSearchResult> results;
-    try {
-      results = await repository.searchAll(
-        title: query.title,
-        artist: query.artist,
-        durationMs: song.duration,
-      );
-    } catch (_) {
-      // Every source failed: stay silent, try again next session.
-      DebugLog.instance.info(
-        'Paroles auto',
-        'Recherche impossible pour ${song.title}',
-      );
-      return null;
-    }
-    var match = _bestMatch(results);
-    // The tags led nowhere: one AI guess from the file name, then a second
-    // search with it.
-    if (match == null && aiFallback && !query.aiUsed) {
-      final aiGuess = await _aiGuess(song);
-      final aiTitle = aiGuess?.title.trim() ?? '';
-      final aiArtist = aiGuess?.artist.trim() ?? '';
-      final sameQuery = aiTitle.toLowerCase() == query.title.toLowerCase() &&
-          aiArtist.toLowerCase() == query.artist.toLowerCase();
-      if (aiTitle.isNotEmpty && aiArtist.isNotEmpty && !sameQuery) {
-        DebugLog.instance.info(
-          'Paroles auto',
-          'Nouvel essai via IA pour ${song.title}',
-        );
-        try {
-          results = await repository.searchAll(
-            title: aiTitle,
-            artist: aiArtist,
-            durationMs: song.duration,
-          );
-        } catch (_) {
-          return null;
-        }
-        match = _bestMatch(results);
-      }
-    }
-    if (match == null) {
-      // The searches RAN and came back empty (tag query, plus the AI
-      // second chance when enabled): a confirmed absence, as opposed
-      // to the nulls above and below — network failure, no resolvable
-      // query, no write permission — which prove nothing. Only this
-      // point may tell the sweep memory.
+    final result = await _ref.read(aiLyricsFinderProvider).findFor(
+      song,
+      aiFallback: aiFallback,
+      origin: LyricsProvenanceOrigin.autoBackground,
+    );
+    if (result.verdict == LyricsFindVerdict.notFound &&
+        result.queryGoodQuality &&
+        !result.searchesFailed) {
       onConfirmedMiss?.call();
-      return null;
     }
-    // Idempotent: a repeated sweep must not rewrite identical lyrics and
-    // spam the Historique with no-op writes.
-    try {
-      final current = await Id3Reader.readLyrics(song.filePath);
-      final sameSynced = match.hasSyncedLyrics &&
-          current.synced != null &&
-          current.synced == match.syncedLyrics;
-      final samePlain = !match.hasSyncedLyrics &&
-          current.unsynced == match.unsyncedLyrics;
-      if (sameSynced || samePlain) return null;
-    } catch (_) {
-      // Unreadable tags: fall through and let the write try.
-    }
-    // No permission prompt from the background: without write access there is
-    // simply no silent write.
-    if (!await PermissionService.hasWriteAccess()) return null;
-
-    // Backup, write, record — the same trio the manual embed performs, minus
-    // the confirmation UI.
-    final backups = _ref.read(tagBackupStoreProvider);
-    final changes = _ref.read(tagChangeProvider);
-    final canUndo = await backups.capture(song.filePath);
-    try {
-      await repository.embedLyrics(
-        song.filePath,
-        synced: match.syncedLyrics,
-        unsynced: match.unsyncedLyrics,
-      );
-    } catch (e, stack) {
-      DebugLog.instance.error(
-        'Paroles auto',
-        "Échec de l'écriture pour ${song.title}",
-        error: e,
-        stackTrace: stack,
-      );
-      if (canUndo) await backups.discardLatest(song.filePath);
-      return null;
-    }
-    if (canUndo) await backups.markWritten(song.filePath);
-    changes.fileChanged(song.filePath);
-    return (canUndo: canUndo, synced: match.hasSyncedLyrics);
+    if (result.verdict != LyricsFindVerdict.integrated) return null;
+    // The finder only writes when the backup succeeded, so an undo is
+    // always available for a write it made.
+    return (canUndo: true, synced: result.best?.hasSyncedLyrics ?? false);
   }
+
+  /// Vrai quand un morceau synchronisé peut être sauté : ses paroles
+  /// sont soit protégées (utilisateur), soit écrites par l'app à haute
+  /// confiance. Sans provenance, ou à basse confiance, le balayage
+  /// revérifie au lieu de sauter.
+  Future<bool> _syncedIsSettled(String filePath) async {
+    final provenance = await _ref
+        .read(lyricsProvenanceStoreProvider)
+        .forPath(filePath);
+    if (provenance == null) return false;
+    if (provenance.isUserOrigin) return true;
+    return !provenance.isLowConfidenceAuto;
+  }
+
 
   Future<void> _undo(String filePath) async {
     final message = await _ref.read(tagChangeProvider).undo(filePath);
@@ -400,51 +352,4 @@ class BackgroundLyricsService {
     }
   }
 
-  /// Best-first: the first synced hit wins, otherwise the first hit with
-  /// plain text, when that is all there is.
-  LyricsSearchResult? _bestMatch(List<LyricsSearchResult> results) =>
-      bestLyricsMatch(results);
-
-  /// The artist/title the search runs on.
-  ///
-  /// The tags first; when they are blank, the same filename heuristic as the
-  /// search screen's « Deviner Artiste/Titre » button fills the gaps; when
-  /// that still leaves blanks, the configured AI providers get one shot at
-  /// reading the file name. Null when nothing yields something searchable:
-  /// a blind search is worse than none.
-  Future<({String title, String artist, bool aiUsed})?> _resolveQuery(
-    Song song, {
-    bool aiFallback = true,
-  }) async {
-    var title = song.title.trim();
-    var artist = song.artist.trim();
-    var aiUsed = false;
-    if (title.isEmpty || artist.isEmpty) {
-      final guess = FilenameParser.parse(song.filePath);
-      if (title.isEmpty) title = guess.title.trim();
-      if (artist.isEmpty) artist = guess.artist.trim();
-    }
-    if ((title.isEmpty || artist.isEmpty) && aiFallback) {
-      final aiGuess = await _aiGuess(song);
-      if (aiGuess != null) {
-        if (title.isEmpty) title = aiGuess.title.trim();
-        if (artist.isEmpty) artist = aiGuess.artist.trim();
-        aiUsed = true;
-      }
-    }
-    if (title.isEmpty || artist.isEmpty) return null;
-    return (title: title, artist: artist, aiUsed: aiUsed);
-  }
-
-  /// One AI shot at reading the artist/title out of the file name.
-  /// Null when no provider is configured or none could answer.
-  Future<FilenameGuess?> _aiGuess(Song song) async {
-    final settings = _ref.read(aiSettingsProvider).valueOrNull;
-    if (settings == null || settings.usable.isEmpty) return null;
-    final fileName = song.filePath.split(RegExp(r'[/\\]')).last;
-    final resolution = await _ref
-        .read(aiFilenameResolverProvider)
-        .resolve(settings: settings, fileName: fileName);
-    return resolution.guess;
-  }
 }
