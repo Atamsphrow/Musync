@@ -204,6 +204,15 @@ class AiSettingsNotifier extends AsyncNotifier<AiSettings> {
     );
   }
 
+  /// [value] trimmed, or [fallback] when it is blank — the same defaults
+  /// [add] applies. Null (not provided) stays null, so copyWith keeps the
+  /// stored value instead of overwriting it with an empty string.
+  static String? _nonBlank(String? value, String fallback) {
+    if (value == null) return null;
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? fallback : trimmed;
+  }
+
   Future<void> edit(
     String id, {
     String? name,
@@ -218,10 +227,10 @@ class AiSettingsNotifier extends AsyncNotifier<AiSettings> {
           for (final p in _current.providers)
             if (p.id == id)
               p.copyWith(
-                name: name?.trim(),
+                name: _nonBlank(name, labelFor(kind ?? p.kind)),
                 kind: kind,
-                baseUrl: baseUrl?.trim(),
-                model: model?.trim(),
+                baseUrl: _nonBlank(baseUrl, defaultBaseUrlFor(kind ?? p.kind)),
+                model: _nonBlank(model, defaultModelFor(kind ?? p.kind)),
                 apiKey: apiKey?.trim(),
               )
             else
