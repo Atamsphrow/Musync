@@ -30,7 +30,14 @@ import 'package:musync/core/id3/id3_tag.dart';
 import 'package:musync/core/id3/id3_writer.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 
-const String _evidence = r'D:\musync-diag\evidence';
+/// Dossier des MP3 réels à sonder. Surchargeable par la variable
+/// d'environnement `MUSYNC_PROBE_EVIDENCE` (ex. `D:\musync-diag\evidence`
+/// sous Windows) ; par défaut un dossier sous le temp système, portable
+/// — l'ancien chemin Windows en dur faisait skipper le test partout
+/// ailleurs sans qu'on sache pourquoi.
+final String _evidence = Platform.environment['MUSYNC_PROBE_EVIDENCE'] ??
+    '${Directory.systemTemp.path}${Platform.pathSeparator}musync-diag'
+        '${Platform.pathSeparator}evidence';
 
 /// Offset of the first MPEG frame, found by its sync word rather than by
 /// trusting the tag — the point is to catch a tag that lies about its size.
@@ -77,10 +84,18 @@ Future<void> _probe(String name, SyncedLyrics lyrics) async {
   final work = File(
     '${Directory.systemTemp.path}${Platform.pathSeparator}probe_$name',
   );
-  await work.writeAsBytes(before);
-
   try {
-    final beforeTag = Id3Tag.parse(before)!;
+    // Dans le `try` : si la copie échoue (disque plein, droits), le
+    // `finally` nettoie quand même — avant, l'échec laissait le fichier
+    // de travail derrière lui.
+    await work.writeAsBytes(before);
+    final parsedBefore = Id3Tag.parse(before);
+    expect(
+      parsedBefore,
+      isNotNull,
+      reason: 'tag illisible avant écriture : $name',
+    );
+    final beforeTag = parsedBefore!;
     final beforeFrames = _frameSizes(before);
     final beforeAudioAt = _audioStart(before, beforeTag.audioOffset - 4);
     // A tag lying about its size can leave no valid sync after it:
@@ -99,7 +114,13 @@ Future<void> _probe(String name, SyncedLyrics lyrics) async {
     );
 
     final after = await work.readAsBytes();
-    final afterTag = Id3Tag.parse(after)!;
+    final parsedAfter = Id3Tag.parse(after);
+    expect(
+      parsedAfter,
+      isNotNull,
+      reason: 'tag illisible après écriture : $name',
+    );
+    final afterTag = parsedAfter!;
     final afterFrames = _frameSizes(after);
     final afterAudioAt = _audioStart(after, afterTag.audioOffset - 4);
     expect(
@@ -185,7 +206,9 @@ Future<void> _probe(String name, SyncedLyrics lyrics) async {
     // depends on the encoding — one byte for latin-1/UTF-8, two for UTF-16.
     // Slicing at a fixed 5 read v2.3's text half a code unit out of phase,
     // which is why it came back as mojibake.
-    final uslt = afterTag.frameById('USLT')!.decodedBody;
+    final usltFrame = afterTag.frameById('USLT');
+    expect(usltFrame, isNotNull, reason: 'USLT absente après écriture');
+    final uslt = usltFrame!.decodedBody;
     final encoding = uslt[0];
     final textStart = 4 + Id3Encoding.terminatorLength(encoding);
     final plainText = Id3Tag.decodeText(uslt.sublist(textStart), encoding);
