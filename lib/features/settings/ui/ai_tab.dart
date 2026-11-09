@@ -1,6 +1,7 @@
 /// Settings › IA: the models, their keys, and what they are told to do.
 library;
 
+import 'dart:async' show unawaited;
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
@@ -59,8 +60,13 @@ class AiTab extends ConsumerWidget {
           ],
         ),
       ),
+      // Disabled until the stored settings have loaded: `add` starts from
+      // the current state, and an empty one would overwrite the providers
+      // already on disk with just the new model.
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openEditor(context, ref),
+        onPressed: settingsAsync.hasValue
+            ? () => _openEditor(context, ref)
+            : null,
         icon: const Icon(Icons.add),
         label: const Text('Ajouter un modèle'),
       ),
@@ -82,10 +88,27 @@ class _InstructionCard extends ConsumerStatefulWidget {
 
 class _InstructionCardState extends ConsumerState<_InstructionCard> {
   TextEditingController? _controller;
+  // The notifier, captured while the widget is alive: `ref` must not be
+  // used in dispose, and the Focus listener is gone by then (see below).
+  AiSettingsNotifier? _notifier;
+  // What the field held the last time it was saved, so dispose only
+  // writes when something actually changed.
+  String? _savedInstruction;
   bool _open = false;
 
   @override
   void dispose() {
+    // The Focus widget removes its listener before the detach unfocuses
+    // the field (SDK _FocusState.dispose), so onFocusChange(false) never
+    // fires here: without this save, closing the screen with the field
+    // focused would drop the edit.
+    final controller = _controller;
+    final notifier = _notifier;
+    if (controller != null &&
+        notifier != null &&
+        controller.text != _savedInstruction) {
+      unawaited(notifier.setInstruction(controller.text));
+    }
     _controller?.dispose();
     super.dispose();
   }
@@ -95,9 +118,11 @@ class _InstructionCardState extends ConsumerState<_InstructionCard> {
     final settings = ref.watch(aiSettingsProvider).valueOrNull;
     if (settings == null) return const SizedBox.shrink();
 
+    _notifier ??= ref.read(aiSettingsProvider.notifier);
     // Created on first open, from the stored value. Not rebuilt afterwards, so
     // typing is never interrupted by the save that typing itself triggers.
     _controller ??= TextEditingController(text: settings.instruction);
+    _savedInstruction ??= settings.instruction;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12),
@@ -107,7 +132,7 @@ class _InstructionCardState extends ConsumerState<_InstructionCard> {
             leading: const Icon(Icons.assignment_outlined),
             title: const Text('Instruction donnée au modèle'),
             subtitle: _open
-                ? const Text('Enregistrée en quittant le champ')
+                ? const Text('Enregistrée en quittant le champ ou l\u2019écran')
                 : null,
             trailing: Icon(_open ? Icons.expand_less : Icons.expand_more),
             onTap: () => setState(() => _open = !_open),
@@ -121,6 +146,7 @@ class _InstructionCardState extends ConsumerState<_InstructionCard> {
                 // second while someone types would be absurd.
                 onFocusChange: (hasFocus) {
                   if (hasFocus) return;
+                  _savedInstruction = _controller!.text;
                   ref
                       .read(aiSettingsProvider.notifier)
                       .setInstruction(_controller!.text);
@@ -150,6 +176,7 @@ class _InstructionCardState extends ConsumerState<_InstructionCard> {
                 child: TextButton.icon(
                   onPressed: () {
                     _controller!.text = defaultAiInstruction;
+                    _savedInstruction = defaultAiInstruction;
                     ref
                         .read(aiSettingsProvider.notifier)
                         .setInstruction(defaultAiInstruction);
@@ -318,6 +345,7 @@ Future<void> _confirmDelete(
     ),
   );
   if (confirmed == true) {
+    if (!context.mounted) return;
     // The status is keyed by id, and ids come from a timestamp — so a stale
     // entry would not be reused by a new provider, but it would sit in the map
     // forever. Dropped with the thing it describes.
@@ -344,6 +372,7 @@ Future<void> _openEditor(
     builder: (context) => _ProviderDialog(existing: existing),
   );
   if (result == null) return;
+  if (!context.mounted) return;
 
   final notifier = ref.read(aiSettingsProvider.notifier);
   if (existing == null) {
