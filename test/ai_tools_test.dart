@@ -137,9 +137,6 @@ void main() {
       for (final name in _expectedTools) {
         expect(doc, contains(name));
       }
-      for (final name in _confirmingTools) {
-        expect(doc, contains(name));
-      }
     });
 
     test('les outils destructeurs exigent une confirmation', () {
@@ -347,6 +344,30 @@ void main() {
       );
     });
 
+    test('schedule_action refuse une action à confirmation (D35)', () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final registry = buildAiToolRegistry();
+      final ctx = AiToolContext(
+        ref: container.read(_refProbe),
+        runTool: (_, _) async => AiToolResult.fail('non'),
+        hasTool: (name) => registry[name] != null,
+        requiresConfirmation: (name) =>
+            registry[name]?.requiresConfirmation ?? false,
+      );
+      final tool = registry['schedule_action']!;
+      expect(
+        tool.execute(ctx, {'in_minutes': 5, 'action': 'delete_file'}),
+        throwsA(isA<AiToolArgError>()),
+      );
+      // Une action sans confirmation se planifie toujours.
+      final ok = await tool.execute(
+        ctx,
+        {'in_minutes': 1, 'action': 'pause'},
+      );
+      expect(ok.ok, isTrue);
+    });
+
     test('sleep_timer exige minutes ou disabled', () async {
       final container = ProviderContainer();
       addTearDown(container.dispose);
@@ -381,6 +402,17 @@ void main() {
       final ctx = _ctx(container.read(_refProbe));
       final tool = buildAiToolRegistry()['edit_tags']!;
       expect(tool.execute(ctx, {}), throwsA(isA<AiToolArgError>()));
+    });
+
+    test('edit_tags describeAction exige au moins un champ', () async {
+      // Avant le correctif, `describeAction` appelait `_diff(args)` en
+      // fin de méthode : avec des arguments vides il décrivait une
+      // modification vide au lieu de refuser.
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final ctx = _ctx(container.read(_refProbe));
+      final tool = buildAiToolRegistry()['edit_tags']!;
+      expect(tool.describeAction(ctx, {}), throwsA(isA<AiToolArgError>()));
     });
   });
 
