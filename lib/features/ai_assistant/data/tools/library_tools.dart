@@ -356,6 +356,11 @@ class DeleteDuplicatesTool extends AiTool {
         // Ceinture + bretelles : même si le gardé n'est pas le représentant
         // retenu pour son chemin, son chemin ne part jamais à la suppression.
         if (song.filePath == keep.filePath) continue;
+        // Bilan exact : un fichier déjà absent n'est ni supprimé ni en
+        // échec ; un rescan raté après une suppression réussie ne
+        // transforme pas la suppression en échec (le fichier est parti,
+        // seul l'index est périmé).
+        var removed = false;
         try {
           // Ne jamais supprimer le fichier sous le lecteur.
           if (service.currentSong?.id == song.id) {
@@ -369,12 +374,19 @@ class DeleteDuplicatesTool extends AiTool {
               service.queue.indexWhere((s) => s.id == song.id);
           if (index >= 0) await service.removeFromQueue(index);
           final file = File(song.filePath);
-          if (await file.exists()) await file.delete();
-          await MediaStore.rescan(song.filePath);
-          deleted++;
+          final existed = await file.exists();
+          if (existed) await file.delete();
+          removed = existed;
         } catch (_) {
           failed++;
+          continue;
         }
+        try {
+          await MediaStore.rescan(song.filePath);
+        } catch (_) {
+          // Rescan raté : index périmé seulement, la suppression a réussi.
+        }
+        if (removed) deleted++;
       }
     }
     ctx.ref.invalidate(songListProvider);
