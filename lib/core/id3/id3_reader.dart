@@ -229,14 +229,30 @@ class Id3Reader {
         walked += 10 + size;
 
         if (id == 'SYLT' || id == 'USLT') {
-          final frame = Id3Frame(
+          // Le test d'opacité ne dépend que des flags, pas du corps : il
+          // est fait avant la lecture, pour ne pas allouer (puis jeter) le
+          // corps d'une frame compressée ou chiffrée — la pochette en tête
+          // de liste, typiquement.
+          final probe = Id3Frame(
             id: id,
             majorVersion: major,
-            body: await handle.read(size),
+            body: Uint8List(0),
             flagsHi: frameHeader[8],
             flagsLo: frameHeader[9],
           );
-          if (frame.isOpaque) continue;
+          if (probe.isOpaque) {
+            await handle.setPosition(await handle.position() + size);
+            continue;
+          }
+          final body = await handle.read(size);
+          if (body.length < size) break; // Fichier tronqué : on s'arrête.
+          final frame = Id3Frame(
+            id: id,
+            majorVersion: major,
+            body: body,
+            flagsHi: frameHeader[8],
+            flagsLo: frameHeader[9],
+          );
           if (id == 'SYLT') {
             synced ??= _parseSylt(frame.decodedBody);
           } else {
@@ -577,14 +593,28 @@ class Id3Reader {
         walked += 10 + size;
 
         if (wanted.contains(id) && !found.containsKey(id)) {
-          final frame = Id3Frame(
+          // Comme dans readLyricsFrames : l'opacité ne dépend que des flags,
+          // elle est testée avant de lire le corps.
+          final probe = Id3Frame(
             id: id,
             majorVersion: major,
-            body: await handle.read(size),
+            body: Uint8List(0),
             flagsHi: frameHeader[8],
             flagsLo: frameHeader[9],
           );
-          if (frame.isOpaque) continue;
+          if (probe.isOpaque) {
+            await handle.setPosition(await handle.position() + size);
+            continue;
+          }
+          final body = await handle.read(size);
+          if (body.length < size) break; // Fichier tronqué : on s'arrête.
+          final frame = Id3Frame(
+            id: id,
+            majorVersion: major,
+            body: body,
+            flagsHi: frameHeader[8],
+            flagsLo: frameHeader[9],
+          );
           final text = _parseTextFrame(frame.decodedBody);
           if (text != null) found[id] = text;
         } else {
@@ -643,7 +673,10 @@ class Id3Reader {
   /// Reads enough of the file to cover the whole tag.
   ///
   /// The header states the tag's length, so this takes two passes: 10 bytes to
-  /// learn the size, then the tag itself.
+  /// learn the size, then the tag itself. A short second read means a
+  /// truncated file: it throws [FileSystemException] rather than handing back
+  /// a partial tag to parse as though it were whole — every caller already
+  /// turns that into "no tag here".
   static Future<Uint8List> _readHead(File file) async {
     final handle = await file.open();
     try {
@@ -654,7 +687,13 @@ class Id3Reader {
       if (tag == null) return header;
 
       await handle.setPosition(0);
-      return await handle.read(tag.audioOffset);
+      final head = await handle.read(tag.audioOffset);
+      if (head.length < tag.audioOffset) {
+        throw const FileSystemException(
+          'Fichier tronqué : tag ID3 incomplet.',
+        );
+      }
+      return head;
     } finally {
       await handle.close();
     }
