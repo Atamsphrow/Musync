@@ -473,6 +473,7 @@ Future<void> _confirmDelete(
     ),
   );
   if (confirmed == true) {
+    if (!context.mounted) return;
     await ref.read(lyricsSourcesProvider.notifier).remove(source.id);
   }
 }
@@ -487,6 +488,7 @@ Future<void> _openEditor(
     builder: (context) => _SourceDialog(existing: source),
   );
   if (result == null) return;
+  if (!context.mounted) return;
 
   final notifier = ref.read(lyricsSourcesProvider.notifier);
   if (source == null) {
@@ -585,6 +587,15 @@ class _SourceDialogState extends State<_SourceDialog> {
 
 // ── Debug log ──
 
+/// Severity rank of a log level, independent of the declaration order of
+/// [LogLevel]: comparing `index` would silently break if the enum were
+/// reordered or a level added in the middle.
+int _logSeverity(LogLevel level) => switch (level) {
+  LogLevel.error => 2,
+  LogLevel.warning => 1,
+  LogLevel.info => 0,
+};
+
 class _DebugTab extends StatefulWidget {
   const _DebugTab();
 
@@ -613,7 +624,7 @@ class _DebugTabState extends State<_DebugTab> {
         final all = DebugLog.instance.entries;
         final entries = [
           for (final e in all)
-            if (e.level.index >= _floor.index) e,
+            if (_logSeverity(e.level) >= _logSeverity(_floor)) e,
         ];
         final hidden = all.length - entries.length;
 
@@ -726,7 +737,36 @@ class _AudioDiagnostic extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final checks = ref.watch(audioDiagnosticProvider).valueOrNull;
+    final diagnostic = ref.watch(audioDiagnosticProvider);
+    final checks = diagnostic.valueOrNull;
+    if (diagnostic.hasError) {
+      // Loading and error both read as null through valueOrNull: without
+      // this branch a failed diagnostic vanished exactly like "all fine".
+      return Card(
+        margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+        color: scheme.surfaceContainerHighest,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              Icon(Icons.error_outline, color: scheme.error),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Diagnostic audio indisponible : ${diagnostic.error}',
+                  style: textTheme.bodySmall,
+                ),
+              ),
+              IconButton(
+                onPressed: () => ref.invalidate(audioDiagnosticProvider),
+                icon: const Icon(Icons.refresh, size: 18),
+                tooltip: 'Revérifier',
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     if (checks == null) return const SizedBox.shrink();
 
     // Silent when everything is in order: a panel that only ever says "fine"
