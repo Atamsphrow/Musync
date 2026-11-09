@@ -249,6 +249,18 @@ Une note de bas de page
     test('toPlainText flattens to one line per lyric', () {
       expect(sample.toPlainText(), 'Première\nDeuxième\nTroisième');
     });
+
+    test('F33: toPlainText holds only the timed lines', () {
+      // Untimed lines are dropped on the way in, so they never reach the
+      // plain text either — a caller that needs `[Refrain]` must use its
+      // own list, never this method (see the doc on toPlainText).
+      final lyrics = SyncedLyrics([
+        const LyricLine(timestamp: Duration(seconds: 1), text: 'Première'),
+        const LyricLine(timestamp: null, text: '[Refrain]'),
+        const LyricLine(timestamp: Duration(seconds: 5), text: 'Deuxième'),
+      ]);
+      expect(lyrics.toPlainText(), 'Première\nDeuxième');
+    });
   });
 
   group('UnsyncedLyrics', () {
