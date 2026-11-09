@@ -13,6 +13,8 @@ import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/catalogue_provider.dart';
+import 'package:musync/features/lyrics/data/ai_lyrics_finder.dart';
+import 'package:musync/features/lyrics/data/lyrics_provenance.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 import 'package:musync/features/lyrics/providers/tag_change_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -23,7 +25,13 @@ import 'package:musync/features/settings/data/playback_settings.dart';
 import 'package:musync/features/settings/providers/backup_provider.dart';
 import 'package:musync/features/settings/providers/playback_settings_provider.dart';
 
-/// Cherche les paroles du morceau en cours et intègre le meilleur résultat.
+/// Cherche les paroles du morceau en cours et les intègre quand c'est sûr.
+///
+/// Délègue au service partagé [AiLyricsFinder] : le seuil 0,80 protège
+/// l'auto-intégration, pas un dialogue — `requiresConfirmation` reste
+/// faux. En dessous du seuil rien n'est écrit ; entre 0,50 et 0,79 le
+/// top 3 est proposé avec un lien vers l'écran de recherche. Les paroles
+/// existantes de l'utilisateur ne sont jamais remplacées seules.
 class FetchLyricsTool extends AiTool {
   const FetchLyricsTool();
 
@@ -33,7 +41,10 @@ class FetchLyricsTool extends AiTool {
   @override
   String get description =>
       'Récupère les paroles du morceau en cours depuis les sources '
-      'configurées et les intègre au fichier (meilleur résultat).';
+      'configurées et les intègre au fichier quand la confiance atteint '
+      '80 % (seuil automatique). Ne remplace jamais seul des paroles '
+      'existantes : en dessous de 80 %, il propose les meilleurs '
+      'candidats au lieu d\'écrire.';
 
   @override
   Map<String, Object?> get parametersSchema => {
@@ -56,43 +67,201 @@ class FetchLyricsTool extends AiTool {
     if (song == null) {
       return AiToolResult.fail('Aucun morceau en cours.');
     }
-    final repository = ctx.ref.read(lyricsRepositoryProvider);
-    final List<LyricsSearchResult> results;
-    try {
-      results = await repository.searchAll(
-        title: song.title,
-        artist: song.artist,
-        album: song.album,
-        durationMs: song.durationValue.inMilliseconds,
-      );
-    } catch (e) {
-      return AiToolResult.fail('Recherche impossible : $e');
-    }
-    if (results.isEmpty) {
-      return AiToolResult.fail(
-        'Aucune parole trouvée pour ${songLabel(song)}.',
-      );
-    }
-    // The shared pick: synced first, plain when no synced hit exists
-    // (see bestLyricsMatch).
-    final best = bestLyricsMatch(results) ?? results.first;
-    try {
-      await repository.embedLyrics(
-        song.filePath,
-        synced: best.syncedLyrics,
-        unsynced: best.unsyncedLyrics,
-      );
-    } catch (e) {
-      return AiToolResult.fail('Écriture impossible : $e');
-    }
+    final finder = ctx.ref.read(aiLyricsFinderProvider);
+    final result = await finder.findFor(song);
     _invalidateLyricsAfterWrite(ctx.ref);
-    final kind = best.hasSyncedLyrics ? 'synchronisées' : 'simples';
-    return AiToolResult.ok(
-      'Paroles $kind récupérées pour ${songLabel(song)} '
-      '(source : ${best.source}).',
-    );
+    switch (result.verdict) {
+      case LyricsFindVerdict.integrated:
+        return AiToolResult.ok(result.note ?? 'Paroles intégrées.');
+      case LyricsFindVerdict.needsChoice:
+        final note = result.note ?? 'Plusieurs candidats possibles.';
+        return AiToolResult.ok(
+          '$note\n${_topLines(result.top)}',
+          navigateTo: AppRoutes.lyricsSearch,
+          navigateArgs: SongRouteArgs(
+            song: song,
+            initialTitle: result.queriedTitle.isEmpty
+                ? null
+                : result.queriedTitle,
+            initialArtist: result.queriedArtist.isEmpty
+                ? null
+                : result.queriedArtist,
+          ),
+        );
+      case LyricsFindVerdict.notFound:
+      case LyricsFindVerdict.keptExisting:
+        return AiToolResult.fail(
+          result.note ?? 'Aucune parole trouvée pour ${songLabel(song)}.',
+        );
+    }
   }
 }
+
+/// « Vérifie si les paroles du morceau en cours sont bien les siennes :
+/// recherche le morceau, compare avec ce qui est dans le fichier, et dit
+/// si elles semblent fausses. Ne modifie rien. »
+class VerifyCurrentLyricsTool extends AiTool {
+  const VerifyCurrentLyricsTool();
+
+  @override
+  String get name => 'verify_current_lyrics';
+
+  @override
+  String get description =>
+      'Vérifie si les paroles du morceau en cours sont bien les siennes : '
+      'recherche le morceau, compare avec ce qui est dans le fichier, et '
+      'dit si elles semblent fausses. Ne modifie rien.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+    'type': 'object',
+    'properties': const {},
+  };
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async => 'Vérifier les paroles du morceau en cours.';
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final song = ctx.ref.read(audioPlayerServiceProvider).currentSong;
+    if (song == null) {
+      return AiToolResult.fail('Aucun morceau en cours.');
+    }
+    final finder = ctx.ref.read(aiLyricsFinderProvider);
+    final verdict = await finder.verifyFor(song);
+    return AiToolResult.ok(verdict.message);
+  }
+}
+
+/// Remplace les paroles du morceau en cours par le meilleur candidat.
+///
+/// Remplacement explicite : confirmation requise, dialogue avec le
+/// candidat et ce qui sera remplacé. Ne peut pas être automatisé
+/// (`runStoredTool` refuse les outils à confirmation).
+class ReplaceLyricsTool extends AiTool {
+  const ReplaceLyricsTool();
+
+  @override
+  String get name => 'replace_lyrics';
+
+  @override
+  String get description =>
+      'Remplace les paroles du morceau en cours par le meilleur candidat '
+      'trouvé en ligne (confiance 80 % ou plus). Remplacement explicite : '
+      'confirmation requise, avec ce qui sera remplacé.';
+
+  @override
+  Map<String, Object?> get parametersSchema => {
+    'type': 'object',
+    'properties': {
+      'rank':
+          'integer, optionnel — rang du candidat dans le top 3 (défaut 1)',
+    },
+  };
+
+  @override
+  bool get requiresConfirmation => true;
+
+  Future<LyricsFindResult> _dryRun(AiToolContext ctx) async {
+    final song = ctx.ref.read(audioPlayerServiceProvider).currentSong;
+    if (song == null) throw const AiToolArgError('Aucun morceau en cours.');
+    return ctx.ref.read(aiLyricsFinderProvider).findFor(song, dryRun: true);
+  }
+
+  LyricsSearchResult _pick(LyricsFindResult dry, int rank) {
+    if (dry.top.isEmpty) {
+      throw const AiToolArgError('Aucun candidat trouvé.');
+    }
+    if (rank < 1 || rank > dry.top.length) {
+      throw AiToolArgError(
+        'Rang $rank inexistant (${dry.top.length} candidat(s)).',
+      );
+    }
+    final candidate = dry.top[rank - 1];
+    if (candidate.confidence < 0.80) {
+      throw AiToolArgError(
+        'Le candidat n°$rank n\'atteint pas 80 % de confiance '
+        '(${(candidate.confidence * 100).round()} %).',
+      );
+    }
+    return candidate;
+  }
+
+  @override
+  Future<String> describeAction(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final song = ctx.ref.read(audioPlayerServiceProvider).currentSong;
+    if (song == null) {
+      throw const AiToolArgError('Aucun morceau en cours.');
+    }
+    final rank = (optInt(args, 'rank') ?? 1).clamp(1, 3);
+    final dry = await _dryRun(ctx);
+    final candidate = _pick(dry, rank);
+    final pair = await _readPair(ctx, song);
+    final current = pair?.synced != null && pair!.synced!.isNotEmpty
+        ? '${pair.synced!.length} lignes calées'
+        : (pair?.unsynced != null && pair!.unsynced!.text.trim().isNotEmpty
+              ? 'texte seul'
+              : 'aucune parole');
+    final kind = candidate.hasSyncedLyrics ? 'synchronisées' : 'simples';
+    final m4a = song.filePath.toLowerCase().endsWith('.m4a')
+        ? '\nAttention : fichier M4A — l\'annulation repose sur la '
+              'sauvegarde ©lyr.'
+        : '';
+    return 'Remplacer les paroles de ${songLabel(song)} ($current) par '
+        '« ${candidate.title} » — ${candidate.artist} '
+        '(paroles $kind, source ${candidate.source}, '
+        'confiance ${(candidate.confidence * 100).round()} %).$m4a';
+  }
+
+  @override
+  Future<AiToolResult> execute(
+    AiToolContext ctx,
+    Map<String, Object?> args,
+  ) async {
+    final song = ctx.ref.read(audioPlayerServiceProvider).currentSong;
+    if (song == null) {
+      return AiToolResult.fail('Aucun morceau en cours.');
+    }
+    final rank = (optInt(args, 'rank') ?? 1).clamp(1, 3);
+    final dry = await ctx.ref
+        .read(aiLyricsFinderProvider)
+        .findFor(song, dryRun: true);
+    final LyricsSearchResult candidate;
+    try {
+      candidate = _pick(dry, rank);
+    } on AiToolArgError catch (e) {
+      return AiToolResult.fail(e.message);
+    }
+    final finder = ctx.ref.read(aiLyricsFinderProvider);
+    final result = await finder.replaceWith(
+      song,
+      candidate,
+      queriedTitle: dry.queriedTitle,
+      queriedArtist: dry.queriedArtist,
+    );
+    _invalidateLyricsAfterWrite(ctx.ref);
+    return result.verdict == LyricsFindVerdict.integrated
+        ? AiToolResult.ok(result.note ?? 'Paroles remplacées.')
+        : AiToolResult.fail(result.note ?? 'Remplacement impossible.');
+  }
+}
+
+/// Le top 3 en lignes lisibles, pour les réponses de l'assistant.
+String _topLines(List<LyricsSearchResult> top) => [
+  for (var i = 0; i < top.length; i++)
+    '${i + 1}. « ${top[i].title} » — ${top[i].artist} '
+        '(${top[i].source}, confiance ${(top[i].confidence * 100).round()} %)'
+      '${top[i].hasSyncedLyrics ? ', synchronisées' : ', texte seul'}',
+].join('\n');
 
 /// Récupère des paroles simples si besoin, puis ouvre l'éditeur de synchro.
 ///
@@ -163,15 +332,23 @@ class PrepareLyricsForSyncTool extends AiTool {
           'Aucune parole trouvée pour ${songLabel(song)}.',
         );
       }
-      try {
-        await repository.embedLyrics(
-          song.filePath,
-          synced: plain.syncedLyrics,
-          unsynced: plain.unsyncedLyrics,
-        );
-      } catch (e) {
-        return AiToolResult.fail('Écriture impossible : $e');
+      final written = await _writeLyricsUndoable(
+        ctx.ref,
+        song,
+        synced: plain.syncedLyrics,
+        unsynced: plain.unsyncedLyrics,
+      );
+      if (!written) {
+        return AiToolResult.fail('Écriture impossible pour ${songLabel(song)}.');
       }
+      await _recordProvenance(
+        ctx.ref,
+        song,
+        plain,
+        LyricsProvenanceOrigin.autoAi,
+        queryTitle: song.title,
+        queryArtist: song.artist,
+      );
       _invalidateLyricsAfterWrite(ctx.ref);
     }
     return AiToolResult.ok(
@@ -294,12 +471,24 @@ class BatchFetchLyricsTool extends AiTool {
           album: song.album,
           durationMs: song.durationValue.inMilliseconds,
         );
-        if (results.isEmpty) continue;
-        final best = results.first;
-        await repository.embedLyrics(
-          song.filePath,
+        // Même scoreur, même seuil 0,80 que partout ailleurs : en dessous,
+        // le morceau est laissé à la revue du lot, pas écrit à l'aveugle.
+        final best = bestAutoMatch(results);
+        if (best == null) continue;
+        final written = await _writeLyricsUndoable(
+          ctx.ref,
+          song,
           synced: best.syncedLyrics,
           unsynced: best.unsyncedLyrics,
+        );
+        if (!written) continue;
+        await _recordProvenance(
+          ctx.ref,
+          song,
+          best,
+          LyricsProvenanceOrigin.batch,
+          queryTitle: song.title,
+          queryArtist: song.artist,
         );
         done++;
       } catch (_) {
@@ -362,6 +551,35 @@ Future<bool> _writeLyricsUndoable(
   if (canUndo) await backups.markWritten(song.filePath);
   changes.fileChanged(song.filePath);
   return true;
+}
+
+/// Enregistre la provenance d'une écriture faite par un outil IA (lot,
+/// préparation au calage). Le finder enregistre la sienne lui-même.
+Future<void> _recordProvenance(
+  Ref ref,
+  Song song,
+  LyricsSearchResult result,
+  LyricsProvenanceOrigin origin, {
+  required String queryTitle,
+  required String queryArtist,
+}) async {
+  final store = ref.read(lyricsProvenanceStoreProvider);
+  await store.record(
+    song.filePath,
+    LyricsProvenance(
+      source: result.source,
+      trackId: result.trackId,
+      title: result.title,
+      artist: result.artist,
+      confidence: result.confidence,
+      queryTitle: queryTitle,
+      queryArtist: queryArtist,
+      viaFilename: false,
+      origin: origin,
+      embeddedAt: DateTime.now(),
+    ),
+  );
+  await store.save();
 }
 
 /// Validates the `scope` argument shared by the lyrics tools.
