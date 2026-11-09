@@ -174,7 +174,7 @@ class CloseAppTool extends AiTool {
   @override
   String get description =>
       'Ferme l’application Musync (comme le bouton retour système sur '
-      'l’écran d’accueil). Sans argument.';
+      'l’écran d’accueil). Sans argument. (Android uniquement)';
 
   @override
   Map<String, Object?> get parametersSchema => {
@@ -194,6 +194,16 @@ class CloseAppTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
+    if (Platform.isIOS) {
+      // Doc Flutter (SystemNavigator.pop) : sur iOS l'appel est ignoré,
+      // une application ne doit pas se fermer elle-même. Annoncer un
+      // succès ici serait un mensonge — comme pour la bulle, l'échec
+      // explicite est le seul retour honnête.
+      return AiToolResult.fail(
+        'Fermeture non supportée sur iOS : iOS n’autorise pas une '
+        'application à se fermer elle-même.',
+      );
+    }
     // Comme le bouton système : l'activité se termine, le processus suit.
     SystemNavigator.pop();
     return AiToolResult.ok('Application fermée.');
@@ -291,9 +301,18 @@ class ToggleLyricsSourceTool extends AiTool {
   Future<String> describeAction(
     AiToolContext ctx,
     Map<String, Object?> args,
-  ) async =>
-      '${optBool(args, 'enabled') ? 'Activer' : 'Désactiver'} '
-      'la source « ${optString(args, 'source') ?? '?'} ».';
+  ) async {
+    // Même exigence que dans execute : un `enabled` absent ne doit pas
+    // décrire « Désactiver » pour ensuite lever — l'erreur d'argument
+    // explicite appartient à la description, pas à l'exécution.
+    final enabled = args['enabled'] is bool
+        ? args['enabled'] as bool
+        : throw const AiToolArgError(
+            'Précisez enabled : true pour activer, false pour couper.',
+          );
+    return '${enabled ? 'Activer' : 'Désactiver'} '
+        'la source « ${optString(args, 'source') ?? '?'} ».';
+  }
 
   @override
   Future<AiToolResult> execute(
