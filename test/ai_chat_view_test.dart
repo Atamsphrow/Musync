@@ -18,12 +18,19 @@ Widget _wrap(Widget child) => MaterialApp(
 AiChatView _view({
   List<ChatMessage> messages = const [],
   bool thinking = false,
-}) =>
-    AiChatView(
-      messages: messages,
-      thinking: thinking,
-      scrollController: ScrollController(),
-    );
+}) {
+  // Le contrôleur est créé par le test, pas par le widget (AiChatView ne
+  // le dispose pas) : il doit être disposé ici, sinon il fuit à chaque
+  // test — et un ScrollController non disposé attache un listener au
+  // binding.
+  final controller = ScrollController();
+  addTearDown(controller.dispose);
+  return AiChatView(
+    messages: messages,
+    thinking: thinking,
+    scrollController: controller,
+  );
+}
 
 void main() {
   testWidgets('état vide : aide affichée', (tester) async {
