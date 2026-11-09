@@ -91,8 +91,15 @@ abstract final class AudioBackendCheck {
   /// created — because `audio_service` is only ever told to create it when Dart
   /// reports that playback began.
   ///
-  /// Returns true when it had to intervene, so the caller can say so.
-  static bool ensureIntercepted() {
+  /// Returns what happened, so the caller can tell "already fine" apart
+  /// from "could not be fixed": [AudioBackendRestore.alreadyIntercepted]
+  /// when the interception was already in place,
+  /// [AudioBackendRestore.restored] when the wrapper was put back and
+  /// verified, [AudioBackendRestore.noWrapper] when nothing was ever
+  /// captured, [AudioBackendRestore.restoreFailed] when the restore did
+  /// not take. Callers that only care whether the interception is in place
+  /// now can read [isIntercepted] afterwards.
+  static AudioBackendRestore ensureIntercepted() {
     if (isIntercepted) {
       // Reported too, and this matters: silence on the happy path left the log
       // unable to say whether a track had even been started. Once per session,
@@ -104,7 +111,7 @@ abstract final class AudioBackendCheck {
         'Plateforme just_audio au premier chargement : $platformName '
             '(interception en place)',
       );
-      return false;
+      return AudioBackendRestore.alreadyIntercepted;
     }
 
     final wrapper = _wrapper;
@@ -116,11 +123,44 @@ abstract final class AudioBackendCheck {
         'La lecture ne passe pas par le service et rien ne peut le rétablir : '
             'aucune notification média ne peut apparaître.',
       );
-      return false;
+      return AudioBackendRestore.noWrapper;
     }
 
     JustAudioPlatform.instance = wrapper;
+    if (!isIntercepted) {
+      // The assignment did not take — a player that already resolved the
+      // platform before this ran keeps its own reference, so restoring
+      // the static changes nothing for it. Reporting success here would
+      // log "interception en place" for a player that will never
+      // announce anything.
+      DebugLog.instance.error(
+        'Audio',
+        'La restauration de la plateforme just_audio n\'a pas pris '
+            'effet : la lecture ne passe toujours pas par le service.',
+      );
+      return AudioBackendRestore.restoreFailed;
+    }
     report('la restauration juste avant le chargement');
-    return true;
+    return AudioBackendRestore.restored;
   }
+}
+
+/// What [AudioBackendCheck.ensureIntercepted] found — and did.
+///
+/// The old boolean collapsed two opposite outcomes into one `false`:
+/// "already intercepted, nothing to do" and "no wrapper to restore,
+/// unfixable".
+enum AudioBackendRestore {
+  /// The wrapper was already the active platform; nothing had to be done.
+  alreadyIntercepted,
+
+  /// The wrapper was put back and verified in place.
+  restored,
+
+  /// No wrapper was ever captured, so there is nothing to put back.
+  noWrapper,
+
+  /// The wrapper was put back but the platform still does not report the
+  /// interception — the restore did not take.
+  restoreFailed,
 }
