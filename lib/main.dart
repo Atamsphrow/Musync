@@ -276,20 +276,25 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
         );
         final theme = AppTheme.fromScheme(scheme);
 
-        return MaterialApp(
-          title: 'Musync',
-          debugShowCheckedModeBanner: false,
-          // Dark only, per the spec. Both slots get the same theme so the app
-          // can't be flipped light by the system setting — `themeMode` alone
-          // would still let a light theme through if one were ever supplied.
-          theme: theme,
-          darkTheme: theme,
-          themeMode: ThemeMode.dark,
-          initialRoute: AppRoutes.library,
-          onGenerateRoute: AppRouter.generateRoute,
-          navigatorObservers: [appRouteObserver],
-          scaffoldMessengerKey: appMessengerKey,
-          navigatorKey: appNavigatorKey,
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          // The AppBar applies the style on its own screens; the root
+          // region covers the ones without an AppBar (player, library).
+          value: AppTheme.overlayStyleFor(scheme),
+          child: MaterialApp(
+            title: 'Musync',
+            debugShowCheckedModeBanner: false,
+            // Dark only, per the spec. Both slots get the same theme so the app
+            // can't be flipped light by the system setting — `themeMode` alone
+            // would still let a light theme through if one were ever supplied.
+            theme: theme,
+            darkTheme: theme,
+            themeMode: ThemeMode.dark,
+            initialRoute: AppRoutes.library,
+            onGenerateRoute: AppRouter.generateRoute,
+            navigatorObservers: [appRouteObserver],
+            scaffoldMessengerKey: appMessengerKey,
+            navigatorKey: appNavigatorKey,
+          ),
         );
       },
     );
