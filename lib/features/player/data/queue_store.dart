@@ -24,8 +24,17 @@ class QueueStore {
         if (decoded is List) {
           for (final entry in decoded) {
             if (entry is Map<String, dynamic>) {
-              final queue = NamedQueue.fromJson(entry);
-              if (queue.isValid) queues.add(queue);
+              // Per entry, not around the loop: one queue with a
+              // wrong-typed field (`id` as int, `currentIndex` as a
+              // string) throws inside `fromJson`, and a global catch
+              // used to drop every queue with it. A corrupt entry is
+              // dropped; the valid ones survive.
+              try {
+                final queue = NamedQueue.fromJson(entry);
+                if (queue.isValid) queues.add(queue);
+              } catch (_) {
+                // Corrupt entry: dropped, never thrown.
+              }
             }
           }
         }
