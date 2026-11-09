@@ -92,11 +92,22 @@ class SyncEditorState {
   }
 }
 
-class SyncEditorNotifier extends StateNotifier<SyncEditorState> {
-  final Song song;
+/// L113 : `StateNotifier`/`StateNotifierProvider` sont dépréciés dans
+/// Riverpod 3 (déplacés vers `package:riverpod/legacy.dart`) — le notifier
+/// utilise l'API `Notifier` de Riverpod 2, sans montée de version.
+/// (`AutoDisposeFamilyNotifier`, pas `FamilyNotifier` : la variante
+/// `autoDispose` du provider exige sa propre classe de base.)
+class SyncEditorNotifier extends AutoDisposeFamilyNotifier<SyncEditorState, Song> {
+  late final Song song;
 
-  SyncEditorNotifier(this.song) : super(const SyncEditorState()) {
+  bool _disposed = false;
+
+  @override
+  SyncEditorState build(Song song) {
+    this.song = song;
+    ref.onDispose(() => _disposed = true);
     _load();
+    return const SyncEditorState();
   }
 
   /// Reads what is already in the file. The file is the source of truth: the
@@ -104,7 +115,7 @@ class SyncEditorNotifier extends StateNotifier<SyncEditorState> {
   /// already there.
   Future<void> _load() async {
     final pair = await Id3Reader.readLyrics(song.filePath);
-    if (!mounted) return;
+    if (_disposed) return;
 
     final synced = pair.synced;
     if (synced != null && synced.isNotEmpty) {
@@ -467,7 +478,7 @@ class SyncEditorNotifier extends StateNotifier<SyncEditorState> {
 
 /// Keyed by [Song] — which has value equality, so the notifier survives a
 /// rebuild instead of being replaced (and leaked) on every frame.
-final syncEditorProvider = StateNotifierProvider.autoDispose
+final syncEditorProvider = NotifierProvider.autoDispose
     .family<SyncEditorNotifier, SyncEditorState, Song>(
-      (ref, song) => SyncEditorNotifier(song),
+      SyncEditorNotifier.new,
     );
