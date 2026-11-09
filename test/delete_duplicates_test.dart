@@ -194,5 +194,21 @@ void main() {
       expect(await kept.exists(), isTrue);
       expect(await dupe.exists(), isFalse);
     });
+
+    test('J60 — doublon déjà absent : ni supprimé, ni échec', () async {
+      final kept = await makeFile('garde.mp3');
+      final ghost = File('${tmp.path}/fantome.mp3'); // jamais créé
+      final container = makeContainer([
+        _song(1, 'Lean Wit Me', 'Juice WRLD', kept.path),
+        _song(2, 'Lean Wit Me', 'Juice WRLD', ghost.path),
+      ]);
+      final ctx = _ctx(container.read(_refProbe));
+      final tool = buildAiToolRegistry()['delete_duplicates']!;
+      final result = await tool.execute(ctx, {});
+      expect(result.ok, isTrue);
+      expect(result.message, contains('0 fichier en double supprimé'));
+      expect(result.message, isNot(contains('échec')));
+      expect(await kept.exists(), isTrue);
+    });
   });
 }
