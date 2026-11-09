@@ -159,19 +159,25 @@ class LibraryStatsTool extends AiTool {
 }
 
 /// Groupes de doublons : même titre + même artiste (insensible à la casse
-/// et aux accents), fichiers différents. Des tags vides ne forment pas
-/// de « doublon ».
+/// et aux accents), fichiers différents. Un morceau sans titre ne forme pas
+/// de « doublon » sur la seule base de l'artiste.
 Future<List<List<Song>>> _duplicateGroups(Ref ref) async {
   final groups = <String, List<Song>>{};
   for (final s in await librarySongs(ref)) {
-    // Des tags vides ne forment pas un « doublon » : on les ignore.
-    if (s.title.trim().isEmpty && s.artist.trim().isEmpty) continue;
+    // C16 : sans titre, pas de regroupement — deux morceaux différents du
+    // même artiste, tous deux sans titre, ne sont pas des doublons.
+    if (s.title.trim().isEmpty) continue;
     final key = '${foldForSearch(s.title)}|${foldForSearch(s.artist)}';
     groups.putIfAbsent(key, () => []).add(s);
   }
   return groups.values.where((g) => g.length > 1).toList()
     ..sort((a, b) => b.length.compareTo(a.length));
 }
+
+/// Chemins distincts d'un groupe : deux entrées qui partagent le même chemin
+/// désignent le même fichier (C15), pas deux fichiers en double.
+Set<String> _distinctPaths(List<Song> group) =>
+    group.map((s) => s.filePath).toSet();
 
 class FindDuplicatesTool extends AiTool {
   const FindDuplicatesTool();
@@ -237,6 +243,9 @@ class FindDuplicatesTool extends AiTool {
 /// Le gardé est de préférence celui qui a des paroles synchronisées, sinon
 /// le premier du groupe. DÉFINITIF, sans corbeille : la confirmation annonce
 /// le nombre exact de fichiers supprimés.
+///
+/// Un groupe dont les entrées partagent le même chemin ne désigne qu'un seul
+/// fichier : il est ignoré, jamais supprimé (C15).
 class DeleteDuplicatesTool extends AiTool {
   const DeleteDuplicatesTool();
 
@@ -283,10 +292,33 @@ class DeleteDuplicatesTool extends AiTool {
     if (dupes.isEmpty) {
       throw const AiToolArgError('Aucun doublon dans la bibliothèque.');
     }
-    final total = dupes.fold<int>(0, (n, g) => n + g.length);
-    return 'Supprimer DÉFINITIVEMENT ${total - dupes.length} fichiers en '
-        'double (${dupes.length} groupes, 1 gardé par groupe — de préférence '
-        'celui avec des paroles synchronisées).';
+    // C15 : un groupe dont toutes les entrées partagent le même chemin n'a
+    // rien de supprimable — on ne compte que les chemins distincts.
+    var deletable = 0;
+    var skippedGroups = 0;
+    for (final group in dupes) {
+      final paths = _distinctPaths(group);
+      if (paths.length < 2) {
+        skippedGroups++;
+      } else {
+        deletable += paths.length - 1;
+      }
+    }
+    if (deletable == 0) {
+      throw const AiToolArgError(
+        'Aucun doublon supprimable : les groupes trouvés désignent le même '
+        'fichier.',
+      );
+    }
+    final keptGroups = dupes.length - skippedGroups;
+    final skippedNote = skippedGroups > 0
+        ? ' — $skippedGroups groupe${skippedGroups > 1 ? 's' : ''} '
+            'ignoré${skippedGroups > 1 ? 's' : ''} (même fichier listé '
+            'plusieurs fois)'
+        : '';
+    return 'Supprimer DÉFINITIVEMENT $deletable fichier${deletable > 1 ? 's' : ''} en '
+        'double ($keptGroups groupe${keptGroups > 1 ? 's' : ''}, 1 gardé par groupe — de préférence '
+        'celui avec des paroles synchronisées)$skippedNote.';
   }
 
   @override
@@ -301,10 +333,29 @@ class DeleteDuplicatesTool extends AiTool {
     final service = ctx.ref.read(audioPlayerServiceProvider);
     var deleted = 0;
     var failed = 0;
+    var skippedGroups = 0;
+    var cleanedGroups = 0;
     for (final group in dupes) {
-      final keep = await _keepOf(ctx, group);
-      for (final song in group) {
+      // C15 : deux entrées qui partagent un chemin désignent le même
+      // fichier. On réduit le groupe à un morceau par chemin distinct, et
+      // un groupe sans au moins deux chemins distincts est ignoré : rien
+      // à supprimer sans risquer le fichier gardé.
+      final seenPaths = <String>{};
+      final distinct = <Song>[
+        for (final song in group)
+          if (seenPaths.add(song.filePath)) song,
+      ];
+      if (distinct.length < 2) {
+        skippedGroups++;
+        continue;
+      }
+      cleanedGroups++;
+      final keep = await _keepOf(ctx, distinct);
+      for (final song in distinct) {
         if (song.id == keep.id) continue;
+        // Ceinture + bretelles : même si le gardé n'est pas le représentant
+        // retenu pour son chemin, son chemin ne part jamais à la suppression.
+        if (song.filePath == keep.filePath) continue;
         try {
           // Ne jamais supprimer le fichier sous le lecteur.
           if (service.currentSong?.id == song.id) {
@@ -331,7 +382,17 @@ class DeleteDuplicatesTool extends AiTool {
       '$deleted fichier${deleted > 1 ? 's' : ''} en double supprimé${deleted > 1 ? 's' : ''}',
     ];
     if (failed > 0) parts.add('$failed échec(s)');
-    return AiToolResult.ok('${parts.join(', ')} (${dupes.length} groupes nettoyés).');
+    if (skippedGroups > 0) {
+      parts.add(
+        '$skippedGroups groupe${skippedGroups > 1 ? 's' : ''} '
+        'ignoré${skippedGroups > 1 ? 's' : ''} (même fichier listé '
+        'plusieurs fois)',
+      );
+    }
+    return AiToolResult.ok(
+      '${parts.join(', ')} ($cleanedGroups groupe${cleanedGroups > 1 ? 's' : ''} '
+      'nettoyé${cleanedGroups > 1 ? 's' : ''}).',
+    );
   }
 }
 
