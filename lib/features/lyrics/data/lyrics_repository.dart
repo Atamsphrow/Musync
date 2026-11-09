@@ -3,6 +3,7 @@ import 'package:musync/core/id3/id3_writer.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/media_store.dart';
+import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 
@@ -28,6 +29,7 @@ class LyricsRepository {
     required String artist,
     String? album,
     int? durationMs,
+    FilenameGuess? filenameGuess,
   }) async {
     if (title.trim().isEmpty && artist.trim().isEmpty) return const [];
 
@@ -39,6 +41,7 @@ class LyricsRepository {
             artist: artist,
             album: album,
             durationMs: durationMs,
+            filenameGuess: filenameGuess,
           );
         } on LyricsSourceException catch (e) {
           return e;
