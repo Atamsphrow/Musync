@@ -20,6 +20,7 @@
 /// So the app now checks, instead of assuming.
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
 import 'package:musync/core/services/debug_log.dart';
 
@@ -45,15 +46,19 @@ abstract final class AudioBackendCheck {
   /// Printed as well as logged, on purpose. `DebugLog` only echoes to the
   /// console in debug builds, and every build that has ever shown this bug was
   /// a release build — so the one line that identifies the cause has to survive
-  /// into release logcat.
+  /// into release logcat. The `print` runs in release only: in debug,
+  /// `DebugLog.add` already echoes the same line, and printing it too wrote
+  /// it twice in the console.
   static void report(String moment) {
     final line =
         'Plateforme just_audio à $moment : $platformName '
         '(${isIntercepted ? 'interception en place' : 'PAS intercepté — aucune '
                   'notification média ne peut apparaître'})';
 
-    // ignore: avoid_print — has to reach logcat in a release build.
-    print('[Musync/Audio] $line');
+    if (!kDebugMode) {
+      // ignore: avoid_print — has to reach logcat in a release build.
+      print('[Musync/Audio] $line');
+    }
 
     if (isIntercepted) {
       DebugLog.instance.info('Audio', line);
@@ -66,7 +71,10 @@ abstract final class AudioBackendCheck {
   static JustAudioPlatform? _wrapper;
 
   /// Remembers it. Called from `main` straight after
-  /// `JustAudioBackground.init()`.
+  /// `JustAudioBackground.init()` — and re-called whenever the interception
+  /// is observed in place ([ensureIntercepted]): a single capture goes stale
+  /// if the platform instance is replaced afterwards, and a stale capture
+  /// restores nothing.
   static void capture() {
     if (isIntercepted) _wrapper = JustAudioPlatform.instance;
   }
@@ -101,6 +109,9 @@ abstract final class AudioBackendCheck {
   /// now can read [isIntercepted] afterwards.
   static AudioBackendRestore ensureIntercepted() {
     if (isIntercepted) {
+      // Recapture: the platform is provably the wrapper right now, so this
+      // refreshes a capture that a later platform swap would have staled.
+      capture();
       // Reported too, and this matters: silence on the happy path left the log
       // unable to say whether a track had even been started. Once per session,
       // so a hundred plays do not bury everything else.
