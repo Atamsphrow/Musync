@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:musync/features/player/data/audio_player_service.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 
 /// The sleep timer options offered in the now-playing screen's sheet.
@@ -82,6 +83,7 @@ class SleepTimerController extends Notifier<SleepTimerState> {
   Timer? _ticker;
   StreamSubscription<PlayerState>? _completionSub;
   StreamSubscription<Duration>? _positionSub;
+  StreamSubscription<PositionDiscontinuity>? _discontinuitySub;
 
   @override
   SleepTimerState build() {
@@ -103,20 +105,37 @@ class SleepTimerController extends Notifier<SleepTimerState> {
     if (duration != null) {
       _startDurationTimer(option, duration);
     } else {
-      // End of track. NOT `ProcessingState.completed`: the queue is
-      // one ConcatenatingAudioSource, so just_audio only reports
-      // completed at the end of the LAST track (and never under
-      // LoopMode.one) — a timer waiting on it stops several tracks
-      // late, or never. The reliable signal is the position reaching
-      // the current track's end; the completed listener stays as a
-      // backstop for the queue's final track.
+      // End of track.
       //
-      // The cut lands up to ~0.2 s before the real end: position
-      // updates arrive every ~200 ms, so the window must span at least
-      // one tick to be unmissable, and the completed listener catches
-      // the true end when it fires.
+      // G71 : le seuil « fin du morceau » (500 ms, puis 200 ms en K85)
+      // coupait jusqu'à ~0,2 s avant la fin réelle, parce que la position
+      // n'est connue qu'à ~200 ms près (un tick peut tomber juste dans la
+      // fenêtre). Le signal exact existe : just_audio émet une
+      // `PositionDiscontinuity` de raison `autoAdvance` quand la piste
+      // avance d'elle-même — changement d'index sans seek, ou rebouclage
+      // en `LoopMode.one` — et jamais sur un saut manuel. La coupure tombe
+      // donc à la vraie fin de piste.
+      //
+      // Pourquoi pas `ProcessingState.completed` seul : la file est un seul
+      // `ConcatenatingAudioSource`, just_audio ne signale `completed` qu'à
+      // la fin de la DERNIÈRE piste (et jamais en `LoopMode.one`). Il reste
+      // en backstop pour cette dernière piste.
+      //
+      // Reste un cas sans signal exact : une file d'un seul morceau en
+      // boucle (`LoopMode.all`) — l'index ne change jamais (le rebouclage
+      // sur le même index n'émet pas `autoAdvance`, qui exige
+      // `LoopMode.one`), et `completed` ne se déclenche pas. Le seuil de
+      // 200 ms survit là, et là seulement.
       final service = ref.read(audioPlayerServiceProvider);
+      _discontinuitySub = service.positionDiscontinuityStream.listen((
+        discontinuity,
+      ) {
+        if (discontinuity.reason == PositionDiscontinuityReason.autoAdvance) {
+          _onTrackEnded();
+        }
+      });
       _positionSub = service.positionStream.listen((position) {
+        if (!_needsPositionFallback(service)) return;
         final duration = ref.read(durationProvider).valueOrNull;
         if (duration == null || duration <= Duration.zero) return;
         if (position > Duration.zero &&
@@ -209,9 +228,19 @@ class SleepTimerController extends Notifier<SleepTimerState> {
     _ticker?.cancel();
     _completionSub?.cancel();
     _positionSub?.cancel();
+    _discontinuitySub?.cancel();
     _timer = null;
     _ticker = null;
     _completionSub = null;
     _positionSub = null;
+    _discontinuitySub = null;
   }
+
+  /// Le seuil de position ne sert plus que de repli, pour le seul cas sans
+  /// signal exact : une file d'un seul morceau en boucle (`LoopMode.all`) —
+  /// l'index ne change jamais et `completed` ne se déclenche pas. Évalué à
+  /// chaque tick : le mode de boucle comme la file peuvent changer pendant
+  /// que le minuteur est armé.
+  static bool _needsPositionFallback(AudioPlayerService service) =>
+      service.loopMode == LoopMode.all && service.queue.length <= 1;
 }
