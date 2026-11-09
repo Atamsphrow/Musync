@@ -14,6 +14,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 import 'package:musync/core/id3/models/lyrics.dart';
+import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 
 class LyricsOvhSource implements LyricsSource {
@@ -32,6 +33,9 @@ class LyricsOvhSource implements LyricsSource {
     required String artist,
     String? album,
     int? durationMs,
+    // Ignoré : la recherche par segments de chemin n'a rien à scorer.
+    // (Paramètre requis par l'interface partagée ; voir LyricsSource.)
+    FilenameGuess? filenameGuess,
   }) async {
     // The endpoint takes the artist and title as path segments, so there is no
     // fuzzy matching to lean on: an empty artist can only ever 404.
