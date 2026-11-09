@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/features/player/providers/sleep_timer_provider.dart';
@@ -149,7 +151,11 @@ class _SleepTimerSheet extends ConsumerWidget {
         ],
       ),
     );
-    field.dispose();
+    // Disposed only once the dialog's exit animation is over: `showDialog`
+    // completes as soon as the route pops, while its field is still mounted
+    // for the animation — disposing here used to kill the controller
+    // under a live field. 300 ms covers the dialog's reverse transition.
+    unawaited(Future.delayed(const Duration(milliseconds: 300), field.dispose));
     if (minutes == null || minutes <= 0 || minutes > 1440) return;
     if (!context.mounted) return;
     ref.read(sleepTimerProvider.notifier).setCustomMinutes(minutes);
