@@ -48,8 +48,22 @@ int? _validBubbleLines(Object? value) =>
     value is int && value >= 1 && value <= 3 ? value : null;
 
 /// A file path is only useful when it points somewhere.
-String? _validSongPath(Object? value) =>
-    value is String && value.isNotEmpty ? value : null;
+///
+/// Bounded and normalised: an unbounded string from a hand-edited export
+/// would sit in SharedPreferences as-is, and two spellings of the same path
+/// (`//`, a trailing `/`) would never compare equal.
+String? _validSongPath(Object? value) {
+  if (value is! String) return null;
+  var path = value.trim();
+  if (path.isEmpty || path.length > 4096) return null;
+  // Collapse repeated separators, and drop a trailing one: `/a//b/` and
+  // `/a/b` are the same file, and only one spelling should be stored.
+  path = path.replaceAll(RegExp(r'/+'), '/');
+  if (path.length > 1 && path.endsWith('/')) {
+    path = path.substring(0, path.length - 1);
+  }
+  return path;
+}
 
 int? _validSongPosition(Object? value) =>
     value is int && value >= 0 ? value : null;
@@ -171,15 +185,18 @@ class SettingsImporter {
   Future<ImportBundle> parse(File file) async {
     final Object? decoded;
     try {
-      // A trapped JSON of hundreds of MB would OOM the isolate in readAsString
+      // A trapped JSON of hundreds of MB would OOM the isolate in readAsBytes
       // + jsonDecode (UTF-16 string, then a 3-5x object graph). A legitimate
       // export with history tops out at a few MB — refuse early instead.
-      if (await file.length() > 32 * 1024 * 1024) {
+      // Read once and check the bytes actually read: length() then
+      // readAsString() let the file grow past the limit in between.
+      final bytes = await file.readAsBytes();
+      if (bytes.length > 32 * 1024 * 1024) {
         throw const ImportFormatException(
           'Fichier trop volumineux pour être un export Musync.',
         );
       }
-      decoded = jsonDecode(await file.readAsString());
+      decoded = jsonDecode(utf8.decode(bytes));
     } on FileSystemException {
       throw const ImportFormatException('Fichier illisible.');
     } on FormatException {
