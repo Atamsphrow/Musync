@@ -57,6 +57,7 @@ final _refProbe = Provider<Ref>((ref) => ref);
 
 AssistantController _controller() {
   final container = ProviderContainer();
+  addTearDown(container.dispose);
   return AssistantController(container.read(_refProbe));
 }
 
