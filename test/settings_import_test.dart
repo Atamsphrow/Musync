@@ -521,5 +521,64 @@ void main() {
         );
       },
     );
+
+    test(
+      'a failed history import never deletes an index it could not read',
+      () async {
+        // Site frère de G79, dans `_applyTagBackups` : la lecture de
+        // l'index échoue (UTF-8 invalide — readAsString lève, même en
+        // root ; un répertoire ne suffirait pas, `File.exists()` rend
+        // faux pour un répertoire), puis une écriture échoue (la cible
+        // est un répertoire, le rename atomique lève). Avant le
+        // correctif, le rollback confondait la lecture en échec avec
+        // « pas de fichier » et supprimait l'index ; il doit désormais
+        // le laisser intact et le dire.
+        final tagBackups = Directory(
+          '${support.path}${Platform.pathSeparator}tag_backups',
+        );
+        await tagBackups.create();
+        final index = File(
+          '${tagBackups.path}${Platform.pathSeparator}index.json',
+        );
+        await index.writeAsBytes([0xFF, 0xFE, 0x41]);
+        await Directory(
+          '${tagBackups.path}${Platform.pathSeparator}a-1.tag',
+        ).create();
+        final bundle = await importer.parse(
+          await bundleFile(
+            validBundle(files: {})
+              ..['preferences'] = {}
+              ..['tagBackups'] = {
+                'index': [
+                  {
+                    'filePath': '/music/a.mp3',
+                    'writtenAt': '2026-09-30T20:00:00.000',
+                    'tagBytes': 4,
+                    'writtenMtime': 0,
+                    'storedAs': 'a-1.tag',
+                  },
+                ],
+                'files': {'a-1.tag': base64Encode(utf8.encode('tag!'))},
+              },
+          ),
+        );
+        final prefs = await SharedPreferences.getInstance();
+
+        await expectLater(
+          importer.apply(bundle, prefs),
+          throwsA(
+            isA<ImportFormatException>().having(
+              (e) => e.message,
+              'message',
+              contains('pas pu être entièrement restauré'),
+            ),
+          ),
+        );
+
+        expect(await index.exists(), isTrue);
+        // L'index illisible est intact, octet pour octet.
+        expect(await index.readAsBytes(), [0xFF, 0xFE, 0x41]);
+      },
+    );
   });
 }
