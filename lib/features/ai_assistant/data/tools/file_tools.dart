@@ -8,6 +8,7 @@
 /// laissé à moitié écrit.
 library;
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -16,6 +17,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:musync/core/id3/id3_writer.dart';
 import 'package:musync/core/id3/tag_metadata.dart';
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:musync/features/library/data/models/song.dart';
@@ -68,7 +70,12 @@ Future<AiToolResult> _writeTagsSecurely(
     await stage.rename(target.path);
 
     await MediaStore.rescan(target.path);
-  } catch (_) {
+  } catch (e) {
+    DebugLog.instance.warning(
+      'OutilsFichiers',
+      'Écriture des tags impossible pour ${song.filePath}',
+      error: e,
+    );
     return AiToolResult.fail('Écriture impossible — fichier intact.');
   }
 
@@ -241,20 +248,30 @@ class EditTagsTool extends AiTool {
     // Fige la cible confirmée : execute ne re-résoudra pas.
     _freezeTargets(args, name, [(song: target, guess: null)]);
     final lines = <String>[
-      'Modifier les tags de ${songLabel(target)} :',
+      'Modifier les tags de ${_forPreview(songLabel(target))} :',
     ];
     final title = optString(args, 'title');
     final artist = optString(args, 'artist');
     final album = optString(args, 'album');
     final genre = optString(args, 'genre');
     final year = optString(args, 'year');
-    if (title != null) lines.add('  titre : « ${target.title} » → « $title »');
-    if (artist != null) {
-      lines.add('  artiste : « ${target.artist} » → « $artist »');
+    if (title != null) {
+      lines.add(
+        '  titre : « ${_forPreview(target.title)} » → « ${_forPreview(title)} »',
+      );
     }
-    if (album != null) lines.add('  album : « ${target.album} » → « $album »');
-    if (genre != null) lines.add('  genre → « $genre »');
-    if (year != null) lines.add('  année → « $year »');
+    if (artist != null) {
+      lines.add(
+        '  artiste : « ${_forPreview(target.artist)} » → « ${_forPreview(artist)} »',
+      );
+    }
+    if (album != null) {
+      lines.add(
+        '  album : « ${_forPreview(target.album)} » → « ${_forPreview(album)} »',
+      );
+    }
+    if (genre != null) lines.add('  genre → « ${_forPreview(genre)} »');
+    if (year != null) lines.add('  année → « ${_forPreview(year)} »');
     return lines.join('\n');
   }
 
@@ -316,8 +333,8 @@ class DeleteFileTool extends AiTool {
     // Fige la cible confirmée : execute ne re-résoudra pas.
     _freezeTargets(args, name, [(song: target, guess: null)]);
     return 'Supprimer DÉFINITIVEMENT le fichier :\n'
-        '${target.filePath}\n'
-        '${songLabel(target)}';
+        '${_forPreview(target.filePath)}\n'
+        '${_forPreview(songLabel(target))}';
   }
 
   @override
@@ -452,8 +469,8 @@ class FixTagsFromFilenameTool extends AiTool {
     final lines = <String>['Corriger les tags depuis le nom de fichier :'];
     for (final item in planned) {
       lines.add(
-        '  ${songLabel(item.song)}\n'
-        '    → ${item.guess.artist} — ${item.guess.title}',
+        '  ${_forPreview(songLabel(item.song))}\n'
+        '    → ${_forPreview(item.guess.artist)} — ${_forPreview(item.guess.title)}',
       );
     }
     return lines.join('\n');
@@ -503,15 +520,50 @@ class FixTagsFromFilenameTool extends AiTool {
   }
 }
 
+/// Valeur telle qu'elle apparaît dans un aperçu de confirmation.
+///
+/// Les chemins et valeurs viennent des tags ou des arguments du modèle : un
+/// `\n` ou un caractère de contrôle dans un nom de fichier falsifierait
+/// l'aperçu (fausse ligne, fausse cible). Contrôles neutralisés, longueur
+/// bornée — l'aperçu reste lisible sans jamais réécrire le texte.
+String _forPreview(String value) {
+  var out = value.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), ' ').trim();
+  if (out.length > 200) out = '${out.substring(0, 199)}…';
+  return out;
+}
+
 /// Nom de fichier sûr à partir d'un texte : les caractères interdits par les
 /// systèmes de fichiers deviennent des underscores, les espaces sont tassés.
 String _safeFileName(String raw) {
-  var out = raw.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+  // NUL et caractères de contrôle : interdits partout, et un NUL ferait
+  // échouer le rename sans explication.
+  var out = raw.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '_');
+  out = out.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
   out = out.replaceAll(RegExp(r'\s+'), ' ');
   if (out.isEmpty) return '_';
   // Windows refuse les noms qui finissent par un point ou un espace.
   out = out.replaceAll(RegExp(r'[. ]+$'), '');
-  return out.isEmpty ? '_' : out;
+  if (out.isEmpty) return '_';
+  // 255 octets par nom sur ext4 : 200 octets laissent de la marge pour
+  // l'extension ajoutée ensuite, même en multi-octets.
+  while (utf8.encode(out).length > 200) {
+    out = out.substring(0, out.length - 1).replaceAll(RegExp(r'[. ]+$'), '');
+    if (out.isEmpty) return '_';
+  }
+  return out;
+}
+
+/// Motifs de renommage acceptés. Toute autre valeur est rejetée d'emblée :
+/// l'ancien repli silencieux vers « artist-title » affichait « Artiste -
+/// Titre » pour une faute de frappe ou une valeur inventée par le modèle.
+String _validatedPattern(Map<String, Object?> args) {
+  final pattern = optString(args, 'pattern') ?? 'artist-title';
+  if (pattern != 'artist-title' && pattern != 'title-artist') {
+    throw AiToolArgError(
+      'Motif inconnu : « $pattern » (artist-title ou title-artist).',
+    );
+  }
+  return pattern;
 }
 
 /// Renomme les fichiers audio d'après leurs tags.
@@ -579,10 +631,10 @@ class BatchRenameFilesTool extends AiTool {
     _freezeTargets(args, name, [
       for (final song in songs) (song: song, guess: null),
     ]);
-    final pattern = optString(args, 'pattern') ?? 'artist-title';
+    final pattern = _validatedPattern(args);
     final preview = songs.take(3).map((s) {
       final name = _newName(s, pattern);
-      return '  ${p.basename(s.filePath)} → ${name.isEmpty ? '(titre vide, ignoré)' : name}';
+      return '  ${_forPreview(p.basename(s.filePath))} → ${name.isEmpty ? '(titre vide, ignoré)' : _forPreview(name)}';
     }).join('\n');
     return 'Renommer ${songs.length} fichiers '
         '(motif « ${pattern == 'title-artist' ? 'Titre - Artiste' : 'Artiste - Titre'} ») :\n'
@@ -603,7 +655,7 @@ class BatchRenameFilesTool extends AiTool {
     if (songs.isEmpty) {
       return AiToolResult.fail('Aucun morceau correspondant.');
     }
-    final pattern = optString(args, 'pattern') ?? 'artist-title';
+    final pattern = _validatedPattern(args);
     var renamed = 0;
     var skipped = 0;
     for (final song in songs) {
@@ -621,7 +673,12 @@ class BatchRenameFilesTool extends AiTool {
         await File(song.filePath).rename(target);
         await MediaStore.rescan(target);
         renamed++;
-      } catch (_) {
+      } catch (e) {
+        DebugLog.instance.warning(
+          'OutilsFichiers',
+          'Renommage impossible pour ${song.filePath}',
+          error: e,
+        );
         skipped++;
       }
     }
@@ -693,8 +750,8 @@ class ChangeCoverTool extends AiTool {
     // Fige la cible confirmée : execute ne re-résoudra pas.
     _freezeTargets(args, name, [(song: target, guess: null)]);
     final image = reqString(args, 'image');
-    return 'Changer la pochette de ${songLabel(target)} '
-        'avec l’image :\n$image';
+    return 'Changer la pochette de ${_forPreview(songLabel(target))} '
+        'avec l’image :\n${_forPreview(image)}';
   }
 
   @override
@@ -815,9 +872,9 @@ class MoveSongsTool extends AiTool {
       for (final song in songs) (song: song, guess: null),
     ]);
     if (songs.length == 1) {
-      return 'Déplacer ${songLabel(songs.first)} vers :\n$folder';
+      return 'Déplacer ${_forPreview(songLabel(songs.first))} vers :\n${_forPreview(folder)}';
     }
-    return 'Déplacer ${songs.length} morceaux vers :\n$folder';
+    return 'Déplacer ${songs.length} morceaux vers :\n${_forPreview(folder)}';
   }
 
   @override
@@ -826,20 +883,27 @@ class MoveSongsTool extends AiTool {
     Map<String, Object?> args,
   ) async {
     final folder = reqString(args, 'folder');
-    final dir = Directory(folder);
-    try {
-      if (!await dir.exists()) await dir.create(recursive: true);
-    } catch (_) {
-      return AiToolResult.fail('Dossier inaccessible : $folder');
-    }
     // Liste confirmée par describeAction ; sans elle (appel direct),
-    // résolution comme avant.
+    // résolution comme avant — AVANT de créer le dossier : un dossier
+    // (potentiellement toute une arborescence) ne doit pas apparaître quand
+    // aucun morceau n'est visé ou que la requête est ambiguë.
     final confirmed = _confirmedTargets(args, name);
     final songs = confirmed == null
         ? await _targets(ctx, args)
         : [for (final target in confirmed) target.song];
     if (songs.isEmpty) {
       return AiToolResult.fail('Aucun morceau visé.');
+    }
+    final dir = Directory(folder);
+    try {
+      if (!await dir.exists()) await dir.create(recursive: true);
+    } catch (e) {
+      DebugLog.instance.warning(
+        'OutilsFichiers',
+        'Dossier inaccessible : $folder',
+        error: e,
+      );
+      return AiToolResult.fail('Dossier inaccessible : $folder');
     }
     var moved = 0;
     var skipped = 0;
@@ -857,7 +921,12 @@ class MoveSongsTool extends AiTool {
         await File(song.filePath).rename(target);
         await MediaStore.rescan(target);
         moved++;
-      } catch (_) {
+      } catch (e) {
+        DebugLog.instance.warning(
+          'OutilsFichiers',
+          'Déplacement impossible pour ${song.filePath}',
+          error: e,
+        );
         skipped++;
       }
     }
