@@ -72,7 +72,9 @@ void main() {
 
   group('exclude_song', () {
     test('la confirmation nomme le fichier exact, dossier non touché', () async {
-      final container = _container();
+      final container = _container(
+        songs: [_song('Tiko Enao', 'Artiste', '/storage/Music/Clips/tiko.mp3')],
+      );
       const tool = ExcludeSongTool();
       final preview = await tool.describeAction(
         _ctx(container),
@@ -83,7 +85,9 @@ void main() {
     });
 
     test('exécute : le fichier rejoint la liste des exclus', () async {
-      final container = _container();
+      final container = _container(
+        songs: [_song('Tiko Enao', 'Artiste', '/storage/Music/Clips/tiko.mp3')],
+      );
       const tool = ExcludeSongTool();
       final result = await tool.execute(
         _ctx(container),
@@ -93,6 +97,29 @@ void main() {
       expect(
         await container.read(excludedFilesProvider.future),
         ['/storage/Music/Clips/tiko.mp3'],
+      );
+    });
+
+    test('path hors bibliothèque : rejeté (aperçu et exécution)', () async {
+      final container = _container();
+      const tool = ExcludeSongTool();
+      await expectLater(
+        () => tool.describeAction(
+          _ctx(container),
+          {'path': '/storage/Music/Clips/tiko.mp3'},
+        ),
+        throwsA(isA<AiToolArgError>()),
+      );
+      await expectLater(
+        () => tool.execute(
+          _ctx(container),
+          {'path': '/storage/Music/Clips/tiko.mp3'},
+        ),
+        throwsA(isA<AiToolArgError>()),
+      );
+      expect(
+        await container.read(excludedFilesProvider.future),
+        isEmpty,
       );
     });
 
@@ -144,6 +171,20 @@ void main() {
       );
       expect(result.ok, isTrue);
       expect(await container.read(excludedFilesProvider.future), isEmpty);
+    });
+
+    test('path hors bibliothèque : accepté (un fichier exclu n’y est plus)',
+        () async {
+      final container = _container();
+      await container
+          .read(excludedFilesProvider.notifier)
+          .add('/storage/Music/Clips/tiko.mp3');
+      const tool = IncludeSongTool();
+      final preview = await tool.describeAction(
+        _ctx(container),
+        {'path': '/storage/Music/Clips/tiko.mp3'},
+      );
+      expect(preview, contains('/storage/Music/Clips/tiko.mp3'));
     });
   });
 
