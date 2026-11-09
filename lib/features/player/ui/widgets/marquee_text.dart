@@ -49,6 +49,22 @@ class _MarqueeTextState extends State<MarqueeText> {
   /// the controller underneath the new text's loop.
   int _generation = 0;
 
+  /// A post-frame start is scheduled at most once: `build` runs again on
+  /// every rebuild while the text overflows, and each call used to queue
+  /// another callback. The callbacks were individually harmless (`_start`
+  /// returns at once when a loop is already running), but they piled up
+  /// behind every rebuild for nothing.
+  bool _startScheduled = false;
+
+  void _scheduleStart() {
+    if (_startScheduled || _running) return;
+    _startScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _startScheduled = false;
+      _start();
+    });
+  }
+
   @override
   void didUpdateWidget(MarqueeText oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -57,7 +73,7 @@ class _MarqueeTextState extends State<MarqueeText> {
       _generation++;
       _running = false;
       if (_controller.hasClients) _controller.jumpTo(0);
-      WidgetsBinding.instance.addPostFrameCallback((_) => _start());
+      _scheduleStart();
     }
   }
 
@@ -112,10 +128,20 @@ class _MarqueeTextState extends State<MarqueeText> {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
+        // Measured the way `Text` renders it: the ambient default style
+        // (a bare `TextSpan` does not inherit it on its own) and the
+        // system text scaler (a `TextPainter` defaults to no scaling,
+        // while `Text` applies `MediaQuery.textScalerOf`). Without both,
+        // a large system font made the displayed text wider than the
+        // measure, so the scroll started too late or never.
         final painter = TextPainter(
-          text: TextSpan(text: widget.text, style: widget.style),
+          text: TextSpan(
+            text: widget.text,
+            style: DefaultTextStyle.of(context).style.merge(widget.style),
+          ),
           maxLines: 1,
           textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
         )..layout();
         final fits = painter.width <= constraints.maxWidth;
 
@@ -128,7 +154,7 @@ class _MarqueeTextState extends State<MarqueeText> {
           );
         }
 
-        WidgetsBinding.instance.addPostFrameCallback((_) => _start());
+        _scheduleStart();
 
         return SizedBox(
           height: painter.height,
