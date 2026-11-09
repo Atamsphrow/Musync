@@ -18,6 +18,7 @@ import 'package:flutter/foundation.dart';
 import 'package:musync/core/utils/atomic_file.dart';
 import 'package:musync/core/id3/audio_container.dart';
 import 'package:musync/core/id3/id3_tag.dart';
+import 'package:musync/core/id3/m4a_writer.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -255,16 +256,17 @@ class TagBackupStore {
       final bytes = await _readTagHead(file);
       final tag = Id3Tag.parse(bytes);
 
-      // An MP4 has no ID3 tag, so parse answers null — but unlike an
-      // untagged MP3, backing it up as an empty head would be a lie:
-      // restoring that head restores nothing (M4A lyrics live in an
-      // atom, not in front of the audio), while the UI would still
-      // offer « Annuler ». No backup, no undo: the callers already
-      // handle false, and the M4A undo itself is a separate feature
-      // (it takes copying the ©lyr atom, not a head splice).
+      // MP4 (audit P8): no ID3 head to splice back, so the backup is the
+      // current ©lyr text itself, stored as a small UTF-8 blob
+      // (`<key>-<ts>.lyr`). Restoring it rewrites the atom through
+      // M4aWriter — the same temp + verify + atomic rename as a lyrics
+      // write. An empty blob means "no ©lyr": restoring it removes the
+      // atom. Only the lyrics are backed up, not the other metadata
+      // atoms — a lyrics write only touches ©lyr, so for the callers
+      // here (all lyrics writers) the restore is exact.
       if (tag == null &&
           AudioContainerReader.detect(bytes) == AudioContainer.mp4) {
-        return false;
+        return await _captureM4aLyrics(filePath);
       }
 
       // A file with no tag backs up as an empty head, which restores correctly:
@@ -281,13 +283,7 @@ class TagBackupStore {
         '${dir.path}${Platform.pathSeparator}$storedAs',
       ).writeAsBytes(head, flush: true);
 
-      // Stacked on top of the earlier ones for this track, newest first.
-      // A copy: `list()` answers with a const empty list when there is no index
-      // yet, and inserting into that throws — which the catch below would turn
-      // into "no undo" for the very first write.
-      final entries = [...await list()];
-      entries.insert(
-        0,
+      await _recordNewEntry(
         TagBackup(
           filePath: filePath,
           writtenAt: DateTime.now(),
@@ -297,19 +293,6 @@ class TagBackupStore {
           storedAs: storedAs,
         ),
       );
-
-      // Past the per-track depth, the oldest steps of this track go.
-      var seen = 0;
-      final trimmed = <TagBackup>[];
-      for (final entry in entries) {
-        if (entry.filePath == filePath && ++seen > _maxPerFile) {
-          await _deleteStored(entry);
-        } else {
-          trimmed.add(entry);
-        }
-      }
-
-      await _writeIndex(await _prune(trimmed));
       return true;
     } catch (error, stack) {
       // Returning false is correct — the write goes ahead either way, since
@@ -319,6 +302,71 @@ class TagBackupStore {
       DebugLog.instance.error(
         'Sauvegarde',
         'Copie de sécurité impossible : cette écriture ne sera pas annulable',
+        error: error,
+        stackTrace: stack,
+      );
+      return false;
+    }
+  }
+
+  /// Records a fresh backup entry on top of the stack for its track.
+  ///
+  /// Newest first, past the per-track depth the oldest steps of the
+  /// track go, then the global caps. Shared by [capture] (MP3 head
+  /// blobs) and [_captureM4aLyrics] (©lyr blobs) so the two cannot
+  /// drift apart on trimming.
+  Future<void> _recordNewEntry(TagBackup entry) async {
+    // A copy: `list()` answers with a const empty list when there is no index
+    // yet, and inserting into that throws — which the catch below would turn
+    // into "no undo" for the very first write.
+    final entries = [...await list()];
+    entries.insert(0, entry);
+
+    // Past the per-track depth, the oldest steps of this track go.
+    var seen = 0;
+    final trimmed = <TagBackup>[];
+    for (final e in entries) {
+      if (e.filePath == entry.filePath && ++seen > _maxPerFile) {
+        await _deleteStored(e);
+      } else {
+        trimmed.add(e);
+      }
+    }
+
+    await _writeIndex(await _prune(trimmed));
+  }
+
+  /// Saves the current ©lyr text of an M4A file as a `.lyr` blob (P8).
+  ///
+  /// True when the backup was recorded. Never throws: like [capture], a
+  /// failure is reported as false so the caller can refuse a write it
+  /// could not undo. An empty blob means the file had no ©lyr.
+  Future<bool> _captureM4aLyrics(String filePath) async {
+    try {
+      final text = await M4aWriter.readLrc(filePath);
+      final blob = utf8.encode(text ?? '');
+      final dir = await _dir();
+      final storedAs =
+          '${_keyFor(filePath)}-${DateTime.now().microsecondsSinceEpoch}.lyr';
+      await File(
+        '${dir.path}${Platform.pathSeparator}$storedAs',
+      ).writeAsBytes(blob, flush: true);
+
+      await _recordNewEntry(
+        TagBackup(
+          filePath: filePath,
+          writtenAt: DateTime.now(),
+          tagBytes: blob.length,
+          // Filled in by [markWritten] once the write has landed.
+          writtenMtime: 0,
+          storedAs: storedAs,
+        ),
+      );
+      return true;
+    } catch (error, stack) {
+      DebugLog.instance.error(
+        'Sauvegarde',
+        'Copie de sécurité ©lyr impossible : cette écriture ne sera pas annulable',
         error: error,
         stackTrace: stack,
       );
@@ -390,6 +438,14 @@ class TagBackupStore {
       }
     }
 
+    // M4A lyrics backup (P8): the blob holds the previous ©lyr text,
+    // empty when there was none. The atom is rewritten through the
+    // writer — temp + verify + atomic rename — never spliced.
+    if (entry.storedAs.endsWith('.lyr')) {
+      await _restoreM4aLyrics(entry, filePath);
+      return;
+    }
+
     final dir = await _dir();
     final stored = File(
       '${dir.path}${Platform.pathSeparator}${entry.storedAs}',
@@ -433,6 +489,28 @@ class TagBackupStore {
       );
     }
 
+    await _consume(entry, filePath);
+  }
+
+  /// Puts a saved ©lyr text back into an M4A file (P8).
+  ///
+  /// An empty blob removes the atom. A failure to rewrite leaves the
+  /// entry in place, so the user can still try again.
+  Future<void> _restoreM4aLyrics(TagBackup entry, String filePath) async {
+    final dir = await _dir();
+    final stored = File(
+      '${dir.path}${Platform.pathSeparator}${entry.storedAs}',
+    );
+    if (!await stored.exists()) {
+      throw const TagRestoreException('La sauvegarde est introuvable.');
+    }
+    final blob = await stored.readAsBytes();
+    final text = blob.isEmpty ? null : utf8.decode(blob);
+    try {
+      await M4aWriter.writeLrc(filePath, text);
+    } on M4aWriteException catch (e) {
+      throw TagRestoreException('Restauration impossible : ${e.message}');
+    }
     await _consume(entry, filePath);
   }
 
