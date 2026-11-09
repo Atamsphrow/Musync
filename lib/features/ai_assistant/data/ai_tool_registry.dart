@@ -65,6 +65,8 @@ AiToolRegistry buildAiToolRegistry() => AiToolRegistry([
       const CreateNamedQueueTool(),
       // Paroles
       const FetchLyricsTool(),
+      const VerifyCurrentLyricsTool(),
+      const ReplaceLyricsTool(),
       const PrepareLyricsForSyncTool(),
       const AdjustLyricsOffsetTool(),
       const BatchFetchLyricsTool(),
