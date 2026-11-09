@@ -109,7 +109,11 @@ class PlayArtistShuffledTool extends AiTool {
       );
     }
     final service = ctx.ref.read(audioPlayerServiceProvider);
-    await service.playSong(matches.first, queue: matches, index: 0);
+    // Mélanger d'abord : activer le shuffle après `playSong` garde le
+    // morceau en cours, donc le premier morceau était toujours
+    // `matches.first` — pas vraiment aléatoire.
+    final shuffled = List.of(matches)..shuffle();
+    await service.playSong(shuffled.first, queue: shuffled, index: 0);
     if (!service.isShuffleEnabled) await service.toggleShuffle();
     final word = matches.length > 1 ? 'morceaux' : 'morceau';
     return AiToolResult.ok(
@@ -162,22 +166,19 @@ class LibraryStatsTool extends AiTool {
 /// et aux accents), fichiers différents. Un morceau sans titre ne forme pas
 /// de « doublon » sur la seule base de l'artiste.
 Future<List<List<Song>>> _duplicateGroups(Ref ref) async {
-  final groups = <String, List<Song>>{};
+  final groups = <(String, String), List<Song>>{};
   for (final s in await librarySongs(ref)) {
     // C16 : sans titre, pas de regroupement — deux morceaux différents du
     // même artiste, tous deux sans titre, ne sont pas des doublons.
     if (s.title.trim().isEmpty) continue;
-    final key = '${foldForSearch(s.title)}|${foldForSearch(s.artist)}';
+    // Clé record, pas une chaîne concaténée : `|` dans un titre faisait
+    // collisionner deux paires distinctes (`A|B`+`C` vs `A`+`B|C`).
+    final key = (foldForSearch(s.title), foldForSearch(s.artist));
     groups.putIfAbsent(key, () => []).add(s);
   }
   return groups.values.where((g) => g.length > 1).toList()
     ..sort((a, b) => b.length.compareTo(a.length));
 }
-
-/// Chemins distincts d'un groupe : deux entrées qui partagent le même chemin
-/// désignent le même fichier (C15), pas deux fichiers en double.
-Set<String> _distinctPaths(List<Song> group) =>
-    group.map((s) => s.filePath).toSet();
 
 class FindDuplicatesTool extends AiTool {
   const FindDuplicatesTool();
@@ -238,6 +239,46 @@ class FindDuplicatesTool extends AiTool {
   }
 }
 
+/// Plan de suppression figé par [DeleteDuplicatesTool.describeAction] :
+/// le morceau gardé et ceux à supprimer, par groupe.
+typedef _DuplicatePlan = List<({Song keep, List<Song> delete})>;
+
+/// Clé interne du plan — jamais un argument du modèle, ajoutée par
+/// [describeAction] après la validation stricte des arguments.
+const _planKey = '__musync_duplicate_plan';
+
+/// Dernier plan connu, quand [args] refuse l'écriture : le contrôleur passe
+/// `const {}` quand le modèle omet « args », et écrire dans une Map
+/// constante lèverait. [execute] y puise alors, au lieu de re-calculer.
+/// Écrasé à chaque [describeAction], un seul dialogue de confirmation ne
+/// pouvant être ouvert à la fois.
+_DuplicatePlan? _fallbackPlan;
+
+void _freezePlan(Map<String, Object?> args, _DuplicatePlan plan) {
+  final frozen = List<({Song keep, List<Song> delete})>.unmodifiable(plan);
+  try {
+    args[_planKey] = frozen;
+    // Un plan précédent en repli ne doit pas survivre : il daterait d'une
+    // confirmation annulée.
+    _fallbackPlan = null;
+  } on UnsupportedError {
+    _fallbackPlan = frozen;
+  }
+}
+
+/// Le plan confirmé, ou null si [describeAction] n'a pas tourné avant
+/// (appel direct d'[execute], sans confirmation : on re-calcule alors
+/// comme avant, faute de plan confirmé à honorer).
+_DuplicatePlan? _confirmedPlan(Map<String, Object?> args) {
+  final raw = args[_planKey];
+  if (raw is _DuplicatePlan) return List.of(raw);
+  // Repli consommé d'un coup : un plan ne sert qu'à l'exécution qui suit
+  // sa confirmation, jamais à un appel ultérieur sans describe.
+  final fallback = _fallbackPlan;
+  _fallbackPlan = null;
+  return fallback == null ? null : List.of(fallback);
+}
+
 /// Supprime les doublons en gardant un fichier par groupe.
 ///
 /// Le gardé est de préférence celui qui a des paroles synchronisées, sinon
@@ -267,6 +308,31 @@ class DeleteDuplicatesTool extends AiTool {
   @override
   bool get requiresConfirmation => true;
 
+  /// Pour chaque groupe de doublons : le morceau à garder et ceux à
+  /// supprimer. Applique d'abord la réduction C15 (un morceau par chemin
+  /// distinct) ; un groupe sans au moins deux chemins distincts n'a rien de
+  /// supprimable.
+  Future<_DuplicatePlan> _deletionPlan(
+    AiToolContext ctx,
+    List<List<Song>> dupes,
+  ) async {
+    final plan = <({Song keep, List<Song> delete})>[];
+    for (final group in dupes) {
+      final seenPaths = <String>{};
+      final distinct = <Song>[
+        for (final song in group)
+          if (seenPaths.add(song.filePath)) song,
+      ];
+      if (distinct.length < 2) continue;
+      final keep = await _keepOf(ctx, distinct);
+      plan.add((
+        keep: keep,
+        delete: [for (final s in distinct) if (s.id != keep.id) s],
+      ));
+    }
+    return plan;
+  }
+
   /// Le fichier à garder : celui qui a des paroles synchronisées si l'un
   /// d'eux en a, sinon le premier.
   Future<Song> _keepOf(AiToolContext ctx, List<Song> group) async {
@@ -292,25 +358,24 @@ class DeleteDuplicatesTool extends AiTool {
     if (dupes.isEmpty) {
       throw const AiToolArgError('Aucun doublon dans la bibliothèque.');
     }
+    // Fige le plan : execute ne re-calcule pas les groupes (TOCTOU) — ce
+    // qui est supprimé est exactement ce qui a été confirmé.
+    final plan = await _deletionPlan(ctx, dupes);
+    _freezePlan(args, plan);
     // C15 : un groupe dont toutes les entrées partagent le même chemin n'a
     // rien de supprimable — on ne compte que les chemins distincts.
     var deletable = 0;
-    var skippedGroups = 0;
-    for (final group in dupes) {
-      final paths = _distinctPaths(group);
-      if (paths.length < 2) {
-        skippedGroups++;
-      } else {
-        deletable += paths.length - 1;
-      }
+    for (final entry in plan) {
+      deletable += entry.delete.length;
     }
+    final skippedGroups = dupes.length - plan.length;
     if (deletable == 0) {
       throw const AiToolArgError(
         'Aucun doublon supprimable : les groupes trouvés désignent le même '
         'fichier.',
       );
     }
-    final keptGroups = dupes.length - skippedGroups;
+    final keptGroups = plan.length;
     final skippedNote = skippedGroups > 0
         ? ' — $skippedGroups groupe${skippedGroups > 1 ? 's' : ''} '
             'ignoré${skippedGroups > 1 ? 's' : ''} (même fichier listé '
@@ -326,32 +391,34 @@ class DeleteDuplicatesTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
-    final dupes = await _duplicateGroups(ctx.ref);
-    if (dupes.isEmpty) {
+    // Plan confirmé par describeAction ; sans lui (appel direct), calcul
+    // comme avant.
+    final frozen = _confirmedPlan(args);
+    final dupes = frozen == null
+        ? await _duplicateGroups(ctx.ref)
+        : const <List<Song>>[];
+    final plan = frozen ?? await _deletionPlan(ctx, dupes);
+    final skippedGroups = frozen == null ? dupes.length - plan.length : 0;
+    // Pas de retour anticipé sur un plan vide : quand des groupes existent
+    // mais qu'aucun n'est supprimable (C15), le message doit quand même
+    // dire « 0 fichier… (N groupe(s) ignoré(s)) », pas « Aucun doublon ».
+    if (frozen == null && dupes.isEmpty) {
       return AiToolResult.ok('Aucun doublon : rien à supprimer.');
     }
     final service = ctx.ref.read(audioPlayerServiceProvider);
     var deleted = 0;
     var failed = 0;
-    var skippedGroups = 0;
     var cleanedGroups = 0;
-    for (final group in dupes) {
-      // C15 : deux entrées qui partagent un chemin désignent le même
-      // fichier. On réduit le groupe à un morceau par chemin distinct, et
-      // un groupe sans au moins deux chemins distincts est ignoré : rien
-      // à supprimer sans risquer le fichier gardé.
-      final seenPaths = <String>{};
-      final distinct = <Song>[
-        for (final song in group)
-          if (seenPaths.add(song.filePath)) song,
-      ];
-      if (distinct.length < 2) {
-        skippedGroups++;
-        continue;
-      }
+    // Photo de la bibliothèque au moment de l'exécution : un morceau du
+    // plan qui n'y est plus (parti entre la confirmation et l'exécution)
+    // est ignoré, pas supprimé à l'aveugle.
+    final byId = {for (final s in await librarySongs(ctx.ref)) s.id: s};
+    for (final entry in plan) {
+      final keep = entry.keep;
       cleanedGroups++;
-      final keep = await _keepOf(ctx, distinct);
-      for (final song in distinct) {
+      for (final planned in entry.delete) {
+        final song = byId[planned.id];
+        if (song == null) continue; // Déjà parti entre-temps.
         if (song.id == keep.id) continue;
         // Ceinture + bretelles : même si le gardé n'est pas le représentant
         // retenu pour son chemin, son chemin ne part jamais à la suppression.
@@ -464,7 +531,11 @@ class CreateNamedQueueTool extends AiTool {
     final word = songs.length > 1 ? 'morceaux' : 'morceau';
     if (optBool(args, 'shuffled')) {
       final service = ctx.ref.read(audioPlayerServiceProvider);
-      await service.playSong(songs.first, queue: songs, index: 0);
+      // Mélanger d'abord : voir PlayArtistShuffledTool — sinon le premier
+      // morceau est toujours `songs.first`. La file nommée, elle, garde
+      // son ordre d'origine (`songs` n'est pas modifié).
+      final shuffled = List.of(songs)..shuffle();
+      await service.playSong(shuffled.first, queue: shuffled, index: 0);
       if (!service.isShuffleEnabled) await service.toggleShuffle();
       return AiToolResult.ok(
         'File « $name » créée (${songs.length} $word), lecture en aléatoire.',
