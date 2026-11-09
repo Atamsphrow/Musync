@@ -38,6 +38,35 @@ void main() {
       final at = DateTime.fromMillisecondsSinceEpoch(fire);
       expect(at.day, 9);
     });
+
+    test('heure passée le 31 déc. → 1er janv. (jour calendaire)', () {
+      final from = DateTime(2026, 12, 31, 23, 0);
+      final fire = ScheduledAction.nextDailyFire(22, 0, from);
+      final at = DateTime.fromMillisecondsSinceEpoch(fire);
+      expect((at.year, at.month, at.day, at.hour, at.minute),
+          (2027, 1, 1, 22, 0));
+    });
+
+    test('heure passée le 28 févr. (2026 non bissextile) → 1er mars', () {
+      final from = DateTime(2026, 2, 28, 23, 0);
+      final fire = ScheduledAction.nextDailyFire(22, 0, from);
+      final at = DateTime.fromMillisecondsSinceEpoch(fire);
+      expect((at.month, at.day, at.hour, at.minute), (3, 1, 22, 0));
+    });
+
+    test(
+        'retour à l’heure d’hiver : le lendemain garde l’heure murale '
+        '(pas 24 h absolues)', () {
+      // 2026-11-01, fuseau America/New_York : 02:00 → 01:00, journée de
+      // 25 h. +24 h absolues donnerait 01:30, le jour calendaire 02:30.
+      // Ne discrimine que sous un fuseau à DST — lancer avec
+      // TZ=America/New_York pour l'exercer ; sous UTC le test passe
+      // trivialement (02:30 dans les deux cas).
+      final from = DateTime(2026, 10, 31, 3, 0);
+      final fire = ScheduledAction.nextDailyFire(2, 30, from);
+      final at = DateTime.fromMillisecondsSinceEpoch(fire);
+      expect((at.month, at.day, at.hour, at.minute), (11, 1, 2, 30));
+    });
   });
 
   group('describeSchedule', () {
