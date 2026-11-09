@@ -21,6 +21,7 @@ import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/data/music_scanner.dart';
 import 'package:musync/core/utils/text_search.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
+import 'package:musync/features/lyrics/data/lyrics_confidence.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 import 'package:musync/features/lyrics/providers/search_provider.dart';
@@ -74,7 +75,12 @@ class BatchCandidate {
   /// it is often right — but it is offered *unticked*, because the cost of a
   /// wrong tag written unattended across a library is far higher than the cost
   /// of ticking a few boxes by hand.
-  static const double autoSelectConfidence = 0.8;
+  ///
+  /// The same bar as every automatic path (DESIGN.md §3) : the provider
+  /// already scores with the shared scorer, so this only names the
+  /// threshold once.
+  static const double autoSelectConfidence =
+      LyricsConfidence.autoIntegrateConfidence;
 
   BatchCandidate copyWith({
     LyricsSearchResult? match,
@@ -373,13 +379,15 @@ class BatchNotifier extends Notifier<BatchState> {
       // A share: the file name is read before anything else. Only a guess with
       // both an artist and a title is worth a query; a bare title is what the
       // tags fallback below already asks better.
+      final filenameGuess = FilenameParser.parse(song.filePath);
       if (filenameFirst) {
-        final first = FilenameParser.parse(song.filePath);
+        final first = filenameGuess;
         if (first.title.isNotEmpty && first.artist.isNotEmpty) {
           final guessed = await repository.searchAll(
             title: first.title,
             artist: first.artist,
             durationMs: song.duration,
+            filenameGuess: first,
           );
           if (guessed.isNotEmpty) {
             return _fromResults(
@@ -399,8 +407,33 @@ class BatchNotifier extends Notifier<BatchState> {
         artist: taggedArtist,
         album: taggedAlbum,
         durationMs: song.duration,
+        filenameGuess: _nonEmptyGuess(filenameGuess),
       );
       if (tagged.isNotEmpty) {
+        // Tags answered — but when the file name disagrees, the tags may
+        // have answered wrong (DESIGN.md §4 : deux requêtes, meilleur
+        // score gardé). One extra lookup, only on disagreement.
+        if (_worthRetrying(filenameGuess, song.title, taggedArtist)) {
+          await _awaitSlot();
+          try {
+            final guessed = await repository.searchAll(
+              title: filenameGuess.title,
+              artist: filenameGuess.artist,
+              durationMs: song.duration,
+              filenameGuess: _nonEmptyGuess(filenameGuess),
+            );
+            if (guessed.isNotEmpty) {
+              return _fromResults(
+                song,
+                _merge(tagged, guessed),
+                title: song.title,
+                artist: taggedArtist,
+              );
+            }
+          } catch (_) {
+            // La seconde requête a échoué : les résultats tags restent.
+          }
+        }
         return _fromResults(
           song,
           tagged,
@@ -419,13 +452,14 @@ class BatchNotifier extends Notifier<BatchState> {
       // was the one place searching the tags and stopping there.
       //
       // Costs one extra lookup, and only on a miss.
-      final guess = FilenameParser.parse(song.filePath);
+      final guess = filenameGuess;
       if (_worthRetrying(guess, song.title, taggedArtist)) {
         await _awaitSlot();
         final guessed = await repository.searchAll(
           title: guess.title,
           artist: guess.artist,
           durationMs: song.duration,
+          filenameGuess: _nonEmptyGuess(guess),
         );
         if (guessed.isNotEmpty) {
           return _fromResults(
@@ -452,6 +486,37 @@ class BatchNotifier extends Notifier<BatchState> {
       return BatchCandidate(song: song, error: '$e');
     }
   }
+
+  /// Merges two ranked lists (tags + file name) : one entry per
+  /// recording, keeping the higher confidence, best first.
+  ///
+  /// Both lists already carry the shared scorer's confidence (the
+  /// provider scores against its own query), so merging is a max, not
+  /// a rescore.
+  static List<LyricsSearchResult> _merge(
+    List<LyricsSearchResult> a,
+    List<LyricsSearchResult> b,
+  ) {
+    final byKey = <String, LyricsSearchResult>{};
+    String key(LyricsSearchResult r) => r.trackId != null
+        ? 'id:${r.trackId}'
+        : 'n:${r.source}|${foldForSearch(r.title)}|'
+            '${foldForSearch(r.artist)}';
+    for (final result in [...a, ...b]) {
+      final existing = byKey[key(result)];
+      if (existing == null || result.confidence > existing.confidence) {
+        byKey[key(result)] = result;
+      }
+    }
+    final merged = byKey.values.toList()
+      ..sort((x, y) => y.confidence.compareTo(x.confidence));
+    return merged;
+  }
+
+  static FilenameGuess? _nonEmptyGuess(FilenameGuess guess) =>
+      guess.title.trim().isEmpty && guess.artist.trim().isEmpty
+          ? null
+          : guess;
 
   /// Whether the file name is worth a second query.
   ///
