@@ -112,7 +112,9 @@ abstract final class MediaStore {
   static Future<int?> sdkInt() async {
     if (!Platform.isAndroid) return null;
     try {
-      return await _channel.invokeMethod<int>('sdkInt');
+      return await _channel.invokeMethod<int>('sdkInt').timeout(_timeout);
+    } on TimeoutException {
+      return null;
     } on MissingPluginException {
       return null;
     } on PlatformException {
@@ -120,16 +122,6 @@ abstract final class MediaStore {
     }
   }
 
-  /// Collects audio handed to Musync through the share sheet or "open with",
-  /// and empties the platform-side queue.
-  ///
-  /// Paths only. A stream Android cannot expose as a real file never reaches
-  /// here: Musync rewrites tags in place, so a copy in the cache would produce
-  /// a tagged duplicate nobody asked for, and saying so is better than
-  /// pretending it worked.
-  ///
-  /// Draining is the point — a share is a one-shot event, and re-serving it
-  /// would reopen the same track on every resume.
   /// Opens the system share sheet for a track, by its MediaStore id.
   ///
   /// The point is checking one's own work: write lyrics here, send the track
@@ -237,6 +229,14 @@ abstract final class MediaStore {
   ///
   /// Returns the resolved file paths and how many shared URIs could not be
   /// resolved to files (e.g. content:// from a third-party app).
+  ///
+  /// Paths only. A stream Android cannot expose as a real file never reaches
+  /// here: Musync rewrites tags in place, so a copy in the cache would produce
+  /// a tagged duplicate nobody asked for, and saying so is better than
+  /// pretending it worked.
+  ///
+  /// Draining is the point — a share is a one-shot event, and re-serving it
+  /// would reopen the same track on every resume.
   static Future<({List<String> paths, int dropped})> takeSharedAudio() async {
     if (!Platform.isAndroid) return (paths: const <String>[], dropped: 0);
 
