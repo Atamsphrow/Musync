@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:musync/core/id3/lrc_parser.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
+import 'package:musync/features/lyrics/data/filename_guess.dart';
+import 'package:musync/features/lyrics/data/lyrics_confidence.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 
 /// LRCLIB (https://lrclib.net) — free, no API key, built for FOSS players.
@@ -28,10 +30,6 @@ class LrclibSource extends LyricsSource {
   /// Pause before the single retry on a transient failure. One dropped request
   /// on a mobile network is routine; waiting a beat lets it go through.
   static const Duration _retryDelay = Duration(seconds: 1);
-
-  /// `/get` matches on duration within a couple of seconds; anything past this
-  /// is a different recording, however well the title matches.
-  static const int _durationToleranceMs = 3000;
 
   final http.Client _client;
 
@@ -68,6 +66,7 @@ class LrclibSource extends LyricsSource {
     required String artist,
     String? album,
     int? durationMs,
+    FilenameGuess? filenameGuess,
   }) async {
     // Keyed by LRCLIB track id so the same recording found by both endpoints
     // appears once, keeping whichever hit scored higher.
@@ -123,7 +122,32 @@ class LrclibSource extends LyricsSource {
     if (exact is LyricsSourceException) {
       exactFailure = exact;
     } else if (exact is Map<String, dynamic>) {
-      collect(exact, 1.0);
+      // `/get` is exact on title+artist+duration — but only as exact as
+      // the tags are. A 1.0 for a track tagged « 09 » by « <unknown> »
+      // used to be a certainty; now it is 1.0 only when the folded
+      // title and artist agree too, and it is capped at 0.80 when the
+      // filename guess contradicts the query (DESIGN.md §3).
+      final exactTitle = exact['trackName'];
+      final exactArtist = exact['artistName'];
+      final agrees =
+          exactTitle is String &&
+          exactArtist is String &&
+          normalizeForConfidence(exactTitle) ==
+              normalizeForConfidence(title) &&
+          normalizeForConfidence(exactArtist) ==
+              normalizeForConfidence(artist);
+      var exactConfidence = agrees
+          ? 1.0
+          : _score(exact, title, artist, album, durationMs,
+              filenameGuess: filenameGuess);
+      if (filenameGuessContradictsQuery(
+        filenameGuess,
+        queryTitle: title,
+        queryArtist: artist,
+      )) {
+        exactConfidence = exactConfidence.clamp(0.0, 0.80);
+      }
+      collect(exact, exactConfidence);
     } else if (exact != null) {
       exactFailure =
           LyricsSourceException(name, 'LRCLIB ne répond pas.', exact);
@@ -149,7 +173,11 @@ class LrclibSource extends LyricsSource {
     if (found is List) {
       for (final item in found) {
         if (item is! Map<String, dynamic>) continue;
-        collect(item, _score(item, title, artist, album, durationMs));
+        collect(
+          item,
+          _score(item, title, artist, album, durationMs,
+              filenameGuess: filenameGuess),
+        );
       }
     }
 
@@ -219,36 +247,40 @@ class LrclibSource extends LyricsSource {
     }
   }
 
-  /// Ranks a `/search` hit. Exact title and artist carry most of the weight;
-  /// the duration breaks ties between covers, live versions and remasters.
+  /// Ranks a `/search` hit with the shared scorer (DESIGN.md §3).
+  ///
+  /// No floor: a hit that matches nothing scores 0, plus the synced
+  /// bonus alone — the old 0.30 floor crowned false hits at 0.35.
+  /// Accents are folded, so « Beyoncé » matches « Beyonce ».
   double _score(
     Map<String, dynamic> item,
     String title,
     String artist,
     String? album,
-    int? durationMs,
-  ) {
-    var score = 0.3;
-
-    if (_looseEquals(item['trackName'], title)) score += 0.3;
-    if (_looseEquals(item['artistName'], artist)) score += 0.2;
-    if (album != null && _looseEquals(item['albumName'], album)) score += 0.05;
-
+    int? durationMs, {
+    FilenameGuess? filenameGuess,
+  }) {
     final itemDuration = item['duration'];
-    if (durationMs != null && durationMs > 0 && itemDuration is num) {
-      final deltaMs = (itemDuration * 1000 - durationMs).abs();
-      if (deltaMs <= _durationToleranceMs) score += 0.15;
-    }
-
-    // A synced hit outranks a plain one — it is the whole point of the app.
-    final synced = item['syncedLyrics'];
-    if (synced is String && synced.trim().isNotEmpty) score += 0.05;
-
-    return score.clamp(0.0, 0.99);
+    return scoreLyricsCandidate(
+      candidateTitle: item['trackName'] is String
+          ? item['trackName'] as String
+          : '',
+      candidateArtist: item['artistName'] is String
+          ? item['artistName'] as String
+          : '',
+      candidateAlbum: item['albumName'] as String?,
+      candidateDurationMs:
+          itemDuration is num ? (itemDuration * 1000).round() : null,
+      candidateHasSynced:
+          item['syncedLyrics'] is String &&
+          (item['syncedLyrics'] as String).trim().isNotEmpty,
+      queryTitle: title,
+      queryArtist: artist,
+      queryAlbum: album,
+      queryDurationMs: durationMs,
+      filenameGuess: filenameGuess,
+    ).total;
   }
-
-  static bool _looseEquals(Object? a, String b) =>
-      a is String && a.trim().toLowerCase() == b.trim().toLowerCase();
 
   /// Builds a result, or null when the entry carries no usable lyrics —
   /// LRCLIB returns instrumental tracks with both fields empty.
@@ -268,6 +300,7 @@ class LrclibSource extends LyricsSource {
 
     if (synced == null && unsynced == null) return null;
 
+    final duration = json['duration'];
     return LyricsSearchResult(
       source: name,
       title: json['trackName'] as String? ?? 'Titre inconnu',
@@ -276,6 +309,8 @@ class LrclibSource extends LyricsSource {
       syncedLyrics: synced,
       unsyncedLyrics: unsynced,
       confidence: confidence,
+      trackId: json['id'] is int ? json['id'] as int : null,
+      durationMs: duration is num ? (duration * 1000).round() : null,
     );
   }
 }
