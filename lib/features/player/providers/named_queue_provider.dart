@@ -107,32 +107,50 @@ class NamedQueuesController extends Notifier<NamedQueuesState> {
       _sameSongs(queue.songs, ref.read(audioPlayerServiceProvider).queue);
 
   /// Same songs, any order. Empty never matches: an activated-but-empty
-  /// queue has nothing playing.
+  /// queue has nothing playing. Multiplicities count: `[1, 1, 2]` is not
+  /// the same queue as `[1, 2, 3]`, even though every id of the first
+  /// appears in the second.
   static bool _sameSongs(List<Song> a, List<Song> b) {
     if (a.isEmpty || a.length != b.length) return false;
-    final ids = <int>{for (final s in b) s.id};
-    return ids.length == b.length && a.every((s) => ids.contains(s.id));
+    final countsA = <int, int>{};
+    for (final s in a) {
+      countsA[s.id] = (countsA[s.id] ?? 0) + 1;
+    }
+    final countsB = <int, int>{};
+    for (final s in b) {
+      countsB[s.id] = (countsB[s.id] ?? 0) + 1;
+    }
+    if (countsA.length != countsB.length) return false;
+    for (final entry in countsA.entries) {
+      if (countsB[entry.key] != entry.value) return false;
+    }
+    return true;
   }
 
   Future<void> _load() async {
     final stored = await _store.load();
     var queues = stored.queues;
+    // Only persist when the load actually changed something: an
+    // unconditional write rewrote the file at every startup.
+    var changed = false;
     if (!queues.any((q) => q.id == kDefaultQueueId)) {
       queues = [
         const NamedQueue(id: kDefaultQueueId, name: kDefaultQueueName),
         ...queues,
       ];
+      changed = true;
     }
     var activeId = stored.activeId;
     if (activeId == null || !queues.any((q) => q.id == activeId)) {
       activeId = kDefaultQueueId;
+      changed = true;
     }
     state = NamedQueuesState(
       queues: List.unmodifiable(queues),
       activeId: activeId,
       loaded: true,
     );
-    await _persist();
+    if (changed) await _persist();
   }
 
   Future<void> _persist() =>
@@ -224,7 +242,9 @@ class NamedQueuesController extends Notifier<NamedQueuesState> {
   /// load and playback is left untouched. A non-empty queue starts its
   /// resume track through the existing `playSong` path, so artwork warmup,
   /// the media notification and the current-song stream all behave exactly
-  /// like a normal play.
+  /// like a normal play. Re-activating the queue that is already active
+  /// is a no-op: it used to return the target and restart the current
+  /// track from its resume index.
   Future<void> activate(String id) async {
     final queue = await _serialized(() async {
       final current = state;
@@ -235,7 +255,7 @@ class NamedQueuesController extends Notifier<NamedQueuesState> {
           break;
         }
       }
-      if (target == null || target.id == current.activeId) return target;
+      if (target == null || target.id == current.activeId) return null;
       state = current.copyWith(activeId: target.id);
       await _persist();
       return target;
