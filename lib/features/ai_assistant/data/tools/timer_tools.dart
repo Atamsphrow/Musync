@@ -74,8 +74,10 @@ class SleepTimerTool extends AiTool {
 /// Planifie l'exécution d'un autre outil dans X minutes.
 ///
 /// Les minuteurs vivent dans un registre statique : ils tiennent tant que
-/// l'app tourne, et meurent avec elle. Une action planifiée s'exécute comme
-/// si elle venait d'être confirmée.
+/// l'app tourne, et meurent avec elle. Seules les actions sans confirmation
+/// peuvent être planifiées : un outil [CONFIRMATION REQUISE] est refusé ici
+/// comme dans les automatisations — personne ne sera là pour confirmer
+/// quand le minuteur sonnera.
 class ScheduleActionTool extends AiTool {
   static final List<Timer> _scheduled = [];
 
@@ -125,17 +127,29 @@ class ScheduleActionTool extends AiTool {
     if (!ctx.hasTool(action)) {
       throw AiToolArgError('Action inconnue : « $action ».');
     }
+    // Un outil à confirmation ne peut pas être planifié : personne ne sera
+    // là pour confirmer quand le minuteur sonnera. La phase 2
+    // (automatisations) l'interdit déjà ; `schedule_action` était la seule
+    // voie de contournement.
+    if (ctx.requiresConfirmation(action)) {
+      throw AiToolArgError(
+        '« $action » exige une confirmation et ne peut pas être planifié.',
+      );
+    }
     final actionArgs = optMap(args, 'args');
-    _scheduled.add(
-      Timer(Duration(minutes: minutes), () async {
-        try {
-          await ctx.runTool(action, actionArgs);
-        } catch (_) {
-          // Une action planifiée qui échoue le fait en silence : l'utilisateur
-          // n'est plus devant l'écran pour lire l'erreur.
-        }
-      }),
-    );
+    late final Timer timer;
+    timer = Timer(Duration(minutes: minutes), () async {
+      // Le minuteur a sonné : il sort du registre, sinon la liste
+      // grandissait d'un Timer mort à chaque planification.
+      _scheduled.remove(timer);
+      try {
+        await ctx.runTool(action, actionArgs);
+      } catch (_) {
+        // Une action planifiée qui échoue le fait en silence : l'utilisateur
+        // n'est plus devant l'écran pour lire l'erreur.
+      }
+    });
+    _scheduled.add(timer);
     return AiToolResult.ok(
       '« $action » sera exécuté dans $minutes min '
       '(l’app doit rester ouverte).',
