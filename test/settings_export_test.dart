@@ -123,4 +123,48 @@ void main() {
     expect(a.path, isNot(b.path));
     expect(out.listSync(), hasLength(2));
   });
+
+  group('tag backups', () {
+    test('a symlinked backup is not followed out of its directory', () async {
+      // The backup index is the app's own file, but a planted symlink
+      // inside tag_backups/ would otherwise be read and base64-encoded
+      // into the export, wherever it points.
+      final dir = Directory('${support.path}/tag_backups')..createSync();
+      final target = File('${root.path}/outside.bin')
+        ..writeAsStringSync('secret-bytes');
+      final link = Link('${dir.path}/backup1.bin');
+      await link.create(target.path);
+
+      const entry = {
+        'filePath': '/music/song.mp3',
+        'writtenAt': '2026-09-30T08:00:00.000',
+        'tagBytes': 11,
+        'writtenMtime': 1,
+        'storedAs': 'backup1.bin',
+      };
+      await put(dir, 'index.json', jsonEncode([entry]));
+
+      final bundle = await exporter.build();
+      final backups = bundle['tagBackups'] as Map;
+
+      expect((backups['files'] as Map).containsKey('backup1.bin'), isFalse);
+      expect(backups['unreadable'], contains('backup1.bin'));
+      expect(jsonEncode(bundle), isNot(contains('secret-bytes')));
+    });
+  });
+
+  test('exportTo fails loudly on a value JSON cannot encode', () async {
+    // Preferences travel as-is into the bundle: an unencodable value must
+    // fail here with a message that says so, not as a bare
+    // JsonUnsupportedObjectError from inside the encoder.
+    await expectLater(
+      exporter.exportTo(
+        Directory('${root.path}/out'),
+        preferences: {'when': DateTime(2026, 1, 1)},
+      ),
+      throwsA(
+        isA<StateError>().having((e) => e.message, 'message', contains('JSON')),
+      ),
+    );
+  });
 }
