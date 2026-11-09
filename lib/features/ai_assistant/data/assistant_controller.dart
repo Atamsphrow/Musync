@@ -87,6 +87,13 @@ class AssistantController {
   final AiToolRegistry _registry;
   final AssistantHistory _history = AssistantHistory();
 
+  /// File des commandes : `handleCommand` lit l'historique, attend le
+  /// modèle, puis y ajoute la paire — deux commandes rapprochées
+  /// entrelaçaient leurs paires sans ça. Les appels s'exécutent l'un après
+  /// l'autre, dans l'ordre reçu ; une commande en échec ne bloque pas la
+  /// file (l'erreur est portée par l'appel, pas par la file).
+  Future<void> _queue = Future.value();
+
   AssistantController(this._ref, {AiToolRegistry? registry})
       : _registry = registry ?? buildAiToolRegistry();
 
@@ -186,15 +193,20 @@ class AssistantController {
         'Arguments incompréhensibles pour « $name ».',
       );
     }
-    // Pas d'arguments hallucinés : chaque clé doit figurer au schéma.
+    // Pas d'arguments hallucinés : chaque clé doit figurer au schéma. Un
+    // outil sans `properties` (ou non-Map) ne valide rien : erreur explicite
+    // plutôt qu'une acceptation silencieuse de toutes les clés.
     final props = tool.parametersSchema['properties'];
-    if (props is Map) {
-      for (final key in args.keys) {
-        if (!props.containsKey(key)) {
-          throw AssistantParseError(
-            'Argument inconnu pour « $name » : « $key ».',
-          );
-        }
+    if (props is! Map) {
+      throw AssistantParseError(
+        'Schéma de l’outil « $name » incomplet : « properties » manquant.',
+      );
+    }
+    for (final key in args.keys) {
+      if (!props.containsKey(key)) {
+        throw AssistantParseError(
+          'Argument inconnu pour « $name » : « $key ».',
+        );
       }
     }
     return AssistantToolCall(tool.name, args);
@@ -202,7 +214,16 @@ class AssistantController {
 
   /// Traite une commande en langage naturel : appel modèle, validation,
   /// exécution ou demande de confirmation.
-  Future<AssistantOutcome> handleCommand(String text) async {
+  ///
+  /// Sérialisée ([_queue]) : l'historique partagé interdit deux commandes
+  /// concurrentes.
+  Future<AssistantOutcome> handleCommand(String text) {
+    final run = _queue.then((_) => _handleCommand(text));
+    _queue = run.then((_) {}, onError: (_) {});
+    return run;
+  }
+
+  Future<AssistantOutcome> _handleCommand(String text) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return const AssistantFailed('Commande vide.');
 
@@ -238,7 +259,9 @@ class AssistantController {
         );
       } on AiReaderException catch (e) {
         return AssistantFailed(e.message);
-      } catch (_) {
+      } on Exception {
+        // `Exception` seulement : une `Error` (bug de programmation) doit se
+        // propager au lieu d'être déguisée en « modèle muet ».
         return const AssistantFailed(
           'Le modèle ne répond pas. Réessayez.',
         );
@@ -343,6 +366,7 @@ class AssistantController {
     final messages = <String>[];
     String? navigateTo;
     Object? navigateArgs;
+    var failed = false;
     for (final step in steps) {
       final result = await _executeTool(step.tool, step.args);
       messages.add(result.message);
@@ -350,8 +374,12 @@ class AssistantController {
         navigateTo = result.navigateTo;
         navigateArgs = result.navigateArgs;
       }
-      if (!result.ok) break;
+      if (!result.ok) {
+        failed = true;
+        break;
+      }
     }
+    if (failed) return AssistantFailed(messages.join('\n'));
     return AssistantDone(
       messages.join('\n'),
       navigateTo: navigateTo,
@@ -364,6 +392,7 @@ class AssistantController {
     Map<String, Object?> args,
   ) async {
     final result = await _executeTool(tool.name, args);
+    if (!result.ok) return AssistantFailed(result.message);
     return AssistantDone(
       result.message,
       navigateTo: result.navigateTo,
@@ -381,7 +410,10 @@ class AssistantController {
       return await tool.execute(_context(), args);
     } on AiToolArgError catch (e) {
       return AiToolResult.fail(e.message);
-    } catch (e) {
+    } on Exception catch (e) {
+      // `Exception` seulement : une `Error` (null-check, assertion, type)
+      // est un bug, pas un échec d'outil — elle doit se propager au lieu
+      // d'être convertie en message utilisateur.
       return AiToolResult.fail('Échec : $e');
     }
   }
