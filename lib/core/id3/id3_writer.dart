@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:musync/core/id3/audio_container.dart';
@@ -7,6 +8,7 @@ import 'package:musync/core/id3/m4a_writer.dart';
 import 'package:musync/core/id3/lrc_parser.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/id3/tag_metadata.dart';
+import 'package:synchronized/synchronized.dart';
 
 /// Raised when lyrics can't be written. Carries a message meant to be shown to
 /// the user, since every cause here is something only they can act on: a file
@@ -36,11 +38,33 @@ class Id3Writer {
   /// grow into the existing tag instead of moving the audio again.
   static const int _padding = 4096;
 
+  /// One lock per target path. Writes to different files never wait on each
+  /// other; writes to the same file queue. Two concurrent writes on one track
+  /// used to interleave on the fast path and read torn bytes on the slow one
+  /// — Dart is single-threaded, but every await in the read-compute-write
+  /// cycle is a point where the other write can slip in. Same per-path
+  /// pattern as the status cache's AtomicFile.
+  static final Map<String, Lock> _locks = <String, Lock>{};
+
+  static Lock _lockFor(String path) => _locks.putIfAbsent(path, Lock.new);
+
   /// Replaces the lyrics frames of [filePath].
   ///
   /// Passing null (or empty) for both removes any lyrics already there.
   /// Throws [Id3WriteException] if the file can't be written.
   static Future<void> writeLyrics(
+    String filePath, {
+    SyncedLyrics? synced,
+    UnsyncedLyrics? unsynced,
+  }) =>
+      // Serialised per path: without this, two concurrent writes on the
+      // same track interleave — the fast path overwrites the head twice
+      // and the slow path renames over a half-read original.
+      _lockFor(filePath).synchronized(
+        () => _writeLyrics(filePath, synced: synced, unsynced: unsynced),
+      );
+
+  static Future<void> _writeLyrics(
     String filePath, {
     SyncedLyrics? synced,
     UnsyncedLyrics? unsynced,
@@ -201,9 +225,18 @@ class Id3Writer {
   /// of the original file directly when the new tag is no larger than the
   /// old one. That path is only taken after the new head has been fully
   /// validated in memory, and its write is a single sequential pass, but it
-  /// is not copy-then-rename: document the exception, don't pretend it
-  /// doesn't exist.
+  /// is not copy-then-rename: the head is re-read and compared afterwards,
+  /// and a mismatch is reported as a failed write instead of silent success.
   static Future<void> writeMetadata(
+    String filePath,
+    TrackMetadata metadata,
+  ) =>
+      // Serialised per path, like [writeLyrics].
+      _lockFor(filePath).synchronized(
+        () => _writeMetadata(filePath, metadata),
+      );
+
+  static Future<void> _writeMetadata(
     String filePath,
     TrackMetadata metadata,
   ) async {
@@ -431,8 +464,10 @@ class Id3Writer {
     );
   }
 
-  /// MIME from the magic bytes. PNG is detected; anything else is served as
-  /// JPEG, which is what the overwhelming majority of embedded covers are.
+  /// MIME from the magic bytes. PNG, JPEG, GIF, WebP and BMP are detected;
+  /// anything unrecognised falls back to JPEG, which is what the overwhelming
+  /// majority of embedded covers are — but a real GIF or WebP no longer goes
+  /// out labelled `image/jpeg`.
   static String _imageMime(Uint8List image) {
     if (image.length >= 4 &&
         image[0] == 0x89 &&
@@ -441,9 +476,40 @@ class Id3Writer {
         image[3] == 0x47) {
       return 'image/png';
     }
+    if (image.length >= 3 &&
+        image[0] == 0xFF &&
+        image[1] == 0xD8 &&
+        image[2] == 0xFF) {
+      return 'image/jpeg';
+    }
+    if (image.length >= 4 &&
+        image[0] == 0x47 &&
+        image[1] == 0x49 &&
+        image[2] == 0x46 &&
+        image[3] == 0x38) {
+      return 'image/gif';
+    }
+    if (image.length >= 12 &&
+        image[0] == 0x52 &&
+        image[1] == 0x49 &&
+        image[2] == 0x46 &&
+        image[3] == 0x46 &&
+        image[8] == 0x57 &&
+        image[9] == 0x45 &&
+        image[10] == 0x42 &&
+        image[11] == 0x50) {
+      return 'image/webp';
+    }
+    if (image.length >= 2 && image[0] == 0x42 && image[1] == 0x4D) {
+      return 'image/bmp';
+    }
     return 'image/jpeg';
   }
-  /// Overwrites the tag region without touching the audio behind it.
+  /// Overwrites the tag region without touching the audio behind it, then
+  /// verifies the write by re-reading the head and comparing it byte for
+  /// byte. The fast path has no copy to fall back on, so a short or torn
+  /// write must surface as a failure here, not as a success the caller
+  /// believes.
   static Future<void> _overwriteHead(File file, Uint8List newTag) async {
     // FileMode.append is the only writable mode that doesn't truncate.
     final handle = await file.open(mode: FileMode.append);
@@ -454,19 +520,44 @@ class Id3Writer {
     } finally {
       await handle.close();
     }
+    final check = await file.open(mode: FileMode.read);
+    try {
+      await check.setPosition(0);
+      final written = await check.read(newTag.length);
+      if (!_bytesEqual(written, newTag)) {
+        throw const Id3WriteException(
+          'Vérification après écriture impossible : la tête du tag relue ne '
+          'correspond pas à ce qui a été écrit.',
+        );
+      }
+    } finally {
+      await check.close();
+    }
+  }
+
+  static bool _bytesEqual(Uint8List a, Uint8List b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   /// Writes tag + audio to a sibling temp file, then swaps it in.
   ///
   /// Going via a temp file means an interrupted write leaves the original
-  /// intact rather than a half-written track.
+  /// intact rather than a half-written track. The temp name carries a
+  /// timestamp and a random suffix: a fixed name meant two concurrent writes
+  /// on the same track opened and truncated the same temp, and the second
+  /// rename found its source gone.
   static Future<void> _rewriteFile(
     File file,
     Uint8List newTag,
     Uint8List original,
     int audioOffset,
   ) async {
-    final temp = File('${file.path}.musync.tmp');
+    await _deleteStaleTemps(file);
+    final temp = File(_uniqueTempPath(file));
     try {
       final handle = await temp.open(mode: FileMode.write);
       try {
@@ -486,6 +577,44 @@ class Id3Writer {
         }
       }
       rethrow;
+    }
+  }
+
+  /// A temp name no other write can share: the path plus a timestamp and
+  /// a random suffix, ending in `.musync.tmp`.
+  static String _uniqueTempPath(File file) {
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    final rand = Random().nextInt(1 << 32).toRadixString(16).padLeft(8, '0');
+    return '${file.path}.$stamp-$rand.musync.tmp';
+  }
+
+  /// Deletes temp files of earlier writes on this track that a kill or crash
+  /// left behind. Only files older than ten minutes are touched — a live
+  /// write never takes that long, and the per-path lock already serialises
+  /// writes from this process. Best effort: a leftover temp is harmless, and
+  /// a cleanup failure must not fail the write itself. The fixed
+  /// `<path>.musync.tmp` name of older versions matches the same pattern and
+  /// is cleaned up too.
+  static Future<void> _deleteStaleTemps(File file) async {
+    try {
+      final parent = file.parent;
+      if (!await parent.exists()) return;
+      final prefix = '${file.path}.';
+      const suffix = '.musync.tmp';
+      final cutoff = DateTime.now().subtract(const Duration(minutes: 10));
+      await for (final entity in parent.list()) {
+        final path = entity.path;
+        if (!path.startsWith(prefix) || !path.endsWith(suffix)) continue;
+        try {
+          if ((await entity.stat()).modified.isBefore(cutoff)) {
+            await entity.delete();
+          }
+        } on FileSystemException {
+          // Best effort — one orphan more or less changes nothing.
+        }
+      }
+    } catch (_) {
+      // Best effort — the write goes ahead regardless.
     }
   }
 
