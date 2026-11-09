@@ -44,7 +44,7 @@ enum SleepTimerOption {
 class SleepTimerState {
   final SleepTimerOption option;
 
-  /// Wall-clock time left, rounded up to the minute. Null when the timer is
+  /// Time left, rounded up to the minute. Null when the timer is
   /// disabled or waits for the end of the track.
   final Duration? remaining;
 
@@ -74,9 +74,9 @@ final sleepTimerProvider =
 /// Owns the sleep timer's [Timer] so it survives widget rebuilds.
 ///
 /// Setting an option replaces the previous timer; [SleepTimerOption.disabled]
-/// cancels it. The timer is wall-clock based and fires even while paused —
-/// pausing the player does not postpone bedtime. Expiry pauses playback
-/// through [AudioPlayerService.pause].
+/// cancels it. The timer is monotone (a `Stopwatch` + `Timer`) and fires
+/// even while paused — pausing the player does not postpone bedtime. Expiry
+/// pauses playback through [AudioPlayerService.pause].
 class SleepTimerController extends Notifier<SleepTimerState> {
   Timer? _timer;
   Timer? _ticker;
@@ -111,15 +111,16 @@ class SleepTimerController extends Notifier<SleepTimerState> {
       // the current track's end; the completed listener stays as a
       // backstop for the queue's final track.
       //
-      // The cut lands up to ~0.5 s before the real end: position
-      // updates arrive every ~200 ms, so the window must span at
-      // least two ticks to be unmissable.
+      // The cut lands up to ~0.2 s before the real end: position
+      // updates arrive every ~200 ms, so the window must span at least
+      // one tick to be unmissable, and the completed listener catches
+      // the true end when it fires.
       final service = ref.read(audioPlayerServiceProvider);
       _positionSub = service.positionStream.listen((position) {
         final duration = ref.read(durationProvider).valueOrNull;
         if (duration == null || duration <= Duration.zero) return;
         if (position > Duration.zero &&
-            duration - position <= const Duration(milliseconds: 500)) {
+            duration - position <= const Duration(milliseconds: 200)) {
           _onTrackEnded();
         }
       });
@@ -133,8 +134,12 @@ class SleepTimerController extends Notifier<SleepTimerState> {
   }
 
   /// Starts a wall-clock timer for an arbitrary [minutes] count.
+  ///
+  /// A runtime check, not an assert: asserts are stripped in release, and
+  /// `setCustomMinutes(0)` used to start an immediate `Timer(Duration.zero)`
+  /// that paused playback at once, silently.
   void setCustomMinutes(int minutes) {
-    assert(minutes > 0);
+    if (minutes <= 0 || minutes > 1440) return;
     _cancelAll();
     _startDurationTimer(
       SleepTimerOption.custom,
@@ -148,10 +153,15 @@ class SleepTimerController extends Notifier<SleepTimerState> {
     Duration duration, {
     int? customMinutes,
   }) {
-    final deadline = DateTime.now().add(duration);
+    // Monotone, not wall-clock: `DateTime.now()` moves with a manual clock
+    // change, an NTP correction or a time-zone hop, which used to
+    // desynchronise the displayed countdown from the `Timer` that actually
+    // fires (itself monotone). A `Stopwatch` measures the same elapsed time
+    // the `Timer` does.
+    final elapsed = Stopwatch()..start();
     _timer = Timer(duration, _onExpired);
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      final left = deadline.difference(DateTime.now());
+      final left = duration - elapsed.elapsed;
       if (left <= Duration.zero) return; // [_onExpired] owns the landing.
       // Rounded up to the minute, and only published when the minute
       // changes so listeners don't rebuild every second.
