@@ -81,6 +81,12 @@ class LyricsSourceConfig {
     final baseUrl = raw['baseUrl'];
     if (id is! String || name is! String || baseUrl is! String) return null;
     if (id.isEmpty || baseUrl.isEmpty) return null;
+    // Same bar as the settings screen's validateBaseUrl: the file/import
+    // path skips that UI check, so a forged entry must not smuggle a
+    // scheme the network layer would then feed to Uri.parse('$baseUrl/get').
+    final uri = Uri.tryParse(baseUrl);
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) return null;
+    if (uri.scheme != 'http' && uri.scheme != 'https') return null;
 
     return LyricsSourceConfig(
       id: id,
@@ -120,9 +126,7 @@ const LyricsSourceConfig lrclibDefault = LyricsSourceConfig(
 );
 
 /// Every bundled entry, in the order they are shown.
-const List<LyricsSourceConfig> builtInSources = [
-  lrclibDefault,
-];
+const List<LyricsSourceConfig> builtInSources = [lrclibDefault];
 
 /// Reads and writes the sources list as JSON in the app's documents directory.
 ///
@@ -193,8 +197,7 @@ class LyricsSourceStore {
   @visibleForTesting
   static List<LyricsSourceConfig> withBuiltInForTest(
     List<LyricsSourceConfig> configs,
-  ) =>
-      _withBuiltIn(configs);
+  ) => _withBuiltIn(configs);
 
   /// Puts the bundled entries back at the head of the list, keeping whatever
   /// enabled flag the user had set on each.
@@ -209,13 +212,16 @@ class LyricsSourceStore {
     List<LyricsSourceConfig> configs,
   ) {
     final builtInIds = builtInSources.map((c) => c.id).toSet();
-    final withoutLegacyOvh =
-        configs.where((c) => c.id != 'lyrics-ovh').toList();
+    final withoutLegacyOvh = configs
+        .where((c) => c.id != 'lyrics-ovh')
+        .toList();
 
     return [
       for (final bundled in builtInSources)
         () {
-          final stored = withoutLegacyOvh.where((c) => c.id == bundled.id).firstOrNull;
+          final stored = withoutLegacyOvh
+              .where((c) => c.id == bundled.id)
+              .firstOrNull;
           // Only the flag is the user's to keep: name, URL and kind are fixed
           // for a bundled entry, so a corrupted file cannot repoint it.
           return stored == null
@@ -227,7 +233,11 @@ class LyricsSourceStore {
   }
 }
 
-extension FirstOrNull<T> on Iterable<T> {
+// Private: the SDK already provides `Iterable.firstOrNull` (Dart 3.13),
+// and a public extension with the same name collides with
+// `package:collection`'s the moment a file imports both. The two uses in
+// this file resolve to the SDK member.
+extension _FirstOrNull<T> on Iterable<T> {
   T? get firstOrNull {
     final it = iterator;
     return it.moveNext() ? it.current : null;
