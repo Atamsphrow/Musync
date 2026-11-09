@@ -34,9 +34,26 @@ const String _evidence = r'D:\musync-diag\evidence';
 
 /// Offset of the first MPEG frame, found by its sync word rather than by
 /// trusting the tag — the point is to catch a tag that lies about its size.
+///
+/// A sync word alone is not a header: eleven bits of sync appear often
+/// enough in arbitrary data to fake one, so the version, layer, bitrate
+/// and sample-rate fields are validated too. A reserved or illegal value
+/// means this is not a frame, and the scan moves on.
 int _audioStart(Uint8List data, int from) {
-  for (var i = from < 0 ? 0 : from; i < data.length - 1; i++) {
-    if (data[i] == 0xFF && (data[i + 1] & 0xE0) == 0xE0) return i;
+  for (var i = from < 0 ? 0 : from; i + 2 < data.length; i++) {
+    if (data[i] != 0xFF || (data[i + 1] & 0xE0) != 0xE0) continue;
+    final second = data[i + 1];
+    final third = data[i + 2];
+    // MPEG version, bits 4-3 of the second byte: 01 is reserved.
+    if ((second >> 3 & 0x03) == 0x01) continue;
+    // Layer, bits 2-1: 00 is reserved.
+    if ((second >> 1 & 0x03) == 0x00) continue;
+    // Bitrate index, bits 7-4 of the third byte: 0 (free) and 15 (bad).
+    final bitrateIndex = third >> 4 & 0x0F;
+    if (bitrateIndex == 0 || bitrateIndex == 0x0F) continue;
+    // Sample-rate index, bits 3-2: 3 is reserved.
+    if ((third >> 2 & 0x03) == 0x03) continue;
+    return i;
   }
   return -1;
 }
@@ -66,6 +83,13 @@ Future<void> _probe(String name, SyncedLyrics lyrics) async {
     final beforeTag = Id3Tag.parse(before)!;
     final beforeFrames = _frameSizes(before);
     final beforeAudioAt = _audioStart(before, beforeTag.audioOffset - 4);
+    // A tag lying about its size can leave no valid sync after it:
+    // fail here with a message instead of a `sublist(-1)` RangeError.
+    expect(
+      beforeAudioAt,
+      greaterThanOrEqualTo(0),
+      reason: 'aucun sync MPEG valide avant l\'audio de $name',
+    );
     final beforeAudio = before.sublist(beforeAudioAt);
 
     await Id3Writer.writeLyrics(
@@ -78,6 +102,11 @@ Future<void> _probe(String name, SyncedLyrics lyrics) async {
     final afterTag = Id3Tag.parse(after)!;
     final afterFrames = _frameSizes(after);
     final afterAudioAt = _audioStart(after, afterTag.audioOffset - 4);
+    expect(
+      afterAudioAt,
+      greaterThanOrEqualTo(0),
+      reason: 'aucun sync MPEG valide avant l\'audio de $name après écriture',
+    );
     final afterAudio = after.sublist(afterAudioAt);
 
     print('\n--- $name ---');
@@ -179,6 +208,38 @@ Future<void> _probe(String name, SyncedLyrics lyrics) async {
 }
 
 void main() {
+  group('_audioStart valide le header MPEG, pas juste le sync', () {
+    test('un vrai header MPEG Layer III est trouve', () {
+      // 0xFF 0xFB: MPEG-1, Layer III; 0x90: bitrate 128k, 44,1 kHz.
+      final data = Uint8List.fromList([0x00, 0x11, 0xFF, 0xFB, 0x90, 0x00]);
+      expect(_audioStart(data, 0), 2);
+    });
+
+    test('un sync avec version reservee est ignore', () {
+      // 0xFF 0xE9: sync + version 01 (reservee) -> pas un frame.
+      // Le vrai header suit a l'offset 4.
+      final data = Uint8List.fromList([
+        0xFF, 0xE9, 0x90, 0x00,
+        0xFF, 0xFB, 0x90, 0x00,
+      ]);
+      expect(_audioStart(data, 0), 4);
+    });
+
+    test('un sync avec bitrate interdit est ignore', () {
+      // 0xFF 0xFB 0xF0: bitrate index 15 (bad) -> pas un frame.
+      final data = Uint8List.fromList([
+        0xFF, 0xFB, 0xF0, 0x00,
+        0xFF, 0xFB, 0x90, 0x00,
+      ]);
+      expect(_audioStart(data, 0), 4);
+    });
+
+    test('aucun header valide retourne -1, pas une fausse position', () {
+      final data = Uint8List.fromList([0xFF, 0xE0, 0x00, 0xFF, 0xFB, 0xF0]);
+      expect(_audioStart(data, 0), -1);
+    });
+  });
+
   _gaplessProbe();
   final lyrics = SyncedLyrics([
     const LyricLine(
