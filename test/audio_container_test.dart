@@ -11,6 +11,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:musync/core/id3/audio_container.dart';
+import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/id3/id3_writer.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 
@@ -212,11 +213,25 @@ void main() {
 
     test('a tagless MP3 still writes', () async {
       final file = await fixture('bare.mp3', _mp3Bare());
+      final original = _mp3Bare();
 
       await Id3Writer.writeLyrics(file.path, synced: lyrics);
 
       final after = await file.readAsBytes();
       expect(AudioContainerReader.detect(after), AudioContainer.mp3);
+      // That assertion alone was already true before the write: it proved
+      // only that `writeLyrics` did not throw. The write itself is proven
+      // by the file growing and the lyrics reading back.
+      expect(after.length, greaterThan(original.length));
+      final reread = await Id3Reader.readLyrics(file.path);
+      expect(
+        reread.synced?.lines.map((l) => l.text).toList(),
+        ['Une'],
+      );
+      expect(
+        reread.synced?.lines.map((l) => l.timestamp).toList(),
+        [const Duration(seconds: 1)],
+      );
     });
   });
 }
