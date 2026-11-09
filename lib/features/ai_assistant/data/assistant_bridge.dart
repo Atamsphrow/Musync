@@ -213,7 +213,17 @@ ${_iosNote()}- Résolution des morceaux : « query » accepte titre + artiste da
         noAnswer: true,
       );
     }
-    return '${(choices.first as Map?)?['message']?['content'] ?? ''}';
+    try {
+      return '${(choices.first as Map?)?['message']?['content'] ?? ''}';
+    } catch (_) {
+      // Une réponse mal formée (choix non-objet, message non-objet) levait
+      // TypeError/NoSuchMethodError au lieu de l'AiReaderException promise
+      // par le contrat de `complete`.
+      throw const AiReaderException(
+        'Réponse illisible du modèle.',
+        noAnswer: true,
+      );
+    }
   }
 
   Future<String> _askGemini(
@@ -265,14 +275,27 @@ ${_iosNote()}- Résolution des morceaux : « query » accepte titre + artiste da
         noAnswer: true,
       );
     }
-    final parts = (candidates.first as Map?)?['content']?['parts'];
-    if (parts is! List || parts.isEmpty) {
+    final String text;
+    try {
+      final parts = (candidates.first as Map?)?['content']?['parts'];
+      if (parts is! List || parts.isEmpty) {
+        throw const AiReaderException(
+          'Réponse vide du modèle.',
+          noAnswer: true,
+        );
+      }
+      text = '${(parts.first as Map?)?['text'] ?? ''}';
+    } on AiReaderException {
+      rethrow;
+    } catch (_) {
+      // Même contrat que `_askOpenAi` : une réponse mal formée devient une
+      // `AiReaderException`, pas une `TypeError`/`NoSuchMethodError`.
       throw const AiReaderException(
-        'Réponse vide du modèle.',
+        'Réponse illisible du modèle.',
         noAnswer: true,
       );
     }
-    return '${(parts.first as Map?)?['text'] ?? ''}';
+    return text;
   }
 
   /// POST JSON avec les erreurs traduites en français. Même contrat que le
@@ -296,6 +319,16 @@ ${_iosNote()}- Résolution des morceaux : « query » accepte titre + artiste da
   }) async {
     // Encodé hors du try : un payload non encodable est une erreur de
     // programmation, pas un provider injoignable.
+    //
+    // La clé part en en-tête à chaque appel : refuser le http:// non local —
+    // une URL de base en saisie libre pointerait sinon vers un relais qui
+    // lirait la clé en clair. Les presets locaux (LM Studio, Ollama)
+    // restent autorisés, eux, en clair sur loopback.
+    if (uri.scheme == 'http' && !_isLoopback(uri)) {
+      throw const AiReaderException(
+        'URL de base non sécurisée : utilisez https:// (ou un serveur local).',
+      );
+    }
     final body = jsonEncode(payload);
     final http.Response response;
     try {
@@ -374,6 +407,16 @@ ${_iosNote()}- Résolution des morceaux : « query » accepte titre + artiste da
       'Réponse illisible de ${provider.name}.',
       noAnswer: true,
     );
+  }
+
+  /// Loopback : `localhost`, `127.0.0.1`, `::1` (l'hôte est sans crochets
+  /// dans `Uri.host`, mais la forme entre crochets est gardée par prudence).
+  static bool _isLoopback(Uri uri) {
+    final host = uri.host.toLowerCase();
+    return host == 'localhost' ||
+        host == '127.0.0.1' ||
+        host == '::1' ||
+        host == '[::1]';
   }
 
   static String _trimSlash(String s) =>
