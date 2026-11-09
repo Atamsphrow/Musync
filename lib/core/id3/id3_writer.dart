@@ -20,7 +20,8 @@ class Id3WriteException implements Exception {
   const Id3WriteException(this.message, [this.cause]);
 
   @override
-  String toString() => 'Id3WriteException: $message';
+  String toString() =>
+      'Id3WriteException: $message${cause == null ? '' : ' (cause : $cause)'}';
 }
 
 /// Writes USLT (plain) and SYLT (synchronised) lyrics into an MP3's ID3 tag.
@@ -70,7 +71,13 @@ class Id3Writer {
     UnsyncedLyrics? unsynced,
   }) async {
     final file = File(filePath);
-    if (!await file.exists()) {
+    bool exists;
+    try {
+      exists = await file.exists();
+    } on FileSystemException catch (e) {
+      throw Id3WriteException('Fichier introuvable : $filePath', e);
+    }
+    if (!exists) {
       throw Id3WriteException('Fichier introuvable : $filePath');
     }
 
@@ -101,6 +108,14 @@ class Id3Writer {
         await M4aWriter.writeLrc(filePath, plain?.text);
       } on M4aWriteException catch (e) {
         throw Id3WriteException(e.message, e.cause);
+      } on FileSystemException catch (e) {
+        // `M4aWriter.writeLrc` ne convertit pas ses propres accès fichier
+        // (`exists()` préliminaire) : sans ça, un `FileSystemException` brut
+        // échapperait au contrat « Throws Id3WriteException ».
+        throw Id3WriteException(
+          'Lecture impossible : ${e.osError?.message ?? e.message}',
+          e,
+        );
       }
       return;
     }
@@ -241,7 +256,13 @@ class Id3Writer {
     TrackMetadata metadata,
   ) async {
     final file = File(filePath);
-    if (!await file.exists()) {
+    bool exists;
+    try {
+      exists = await file.exists();
+    } on FileSystemException catch (e) {
+      throw Id3WriteException('Fichier introuvable : $filePath', e);
+    }
+    if (!exists) {
       throw Id3WriteException('Fichier introuvable : $filePath');
     }
 
@@ -263,6 +284,13 @@ class Id3Writer {
         await M4aWriter.writeMetadata(filePath, metadata);
       } on M4aWriteException catch (e) {
         throw Id3WriteException(e.message, e.cause);
+      } on FileSystemException catch (e) {
+        // Voir _writeLyrics : les accès fichier de M4aWriter ne sont pas
+        // convertis en M4aWriteException, ils doivent l'être ici.
+        throw Id3WriteException(
+          'Lecture impossible : ${e.osError?.message ?? e.message}',
+          e,
+        );
       }
       return;
     }
@@ -411,6 +439,12 @@ class Id3Writer {
   /// caller didn't set falls back to the existing frame's value, a negative
   /// part drops that part, and when neither part survives the frame is
   /// removed (empty string).
+  ///
+  /// Note (J31, reporté) : un total sans numéro s'écrit "/N" (ex. "/12") —
+  /// malformé au sens strict, mais c'est le seul format qui conserve le
+  /// total, et `tag_editor_test` épingle ce comportement (« supprimer le
+  /// numéro, garder le total »). Supprimer la frame perdrait le total :
+  /// à trancher avec l'utilisateur avant de changer.
   static String? _composeNumberPair(
     int? number,
     int? total,
@@ -699,6 +733,15 @@ class Id3Writer {
       ..add(terminator); // empty content descriptor
 
     for (final line in lyrics.lines) {
+      // Invariant : SyncedLyrics ne contient que des lignes calées (les
+      // non-calées sont écartées dans son constructeur, et `lines` est
+      // non modifiable) — c'est ce qui rend le `!` sur `timestamp` sûr ici.
+      // L'assert protège le site d'appel si un futur chemin construisait
+      // des lignes autrement ; en release, le comportement est inchangé.
+      assert(
+        line.timestamp != null,
+        'SyncedLyrics ne doit contenir que des lignes calées',
+      );
       body
         // The leading newline is what marks a syllable as starting a new line.
         // SYLT carries no other notion of line breaks, so without it a player
