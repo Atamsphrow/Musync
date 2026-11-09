@@ -181,15 +181,17 @@ class LyricLineTile extends StatelessWidget {
 }
 
 class _TimestampChip extends StatelessWidget {
-  /// Three states, and they must not be confused with each other:
+  /// Two states, and they must not be confused with each other:
   ///
-  ///  * a real time — the line is placed;
-  ///  * `Duration.zero` — not stamped *yet*; the line is waiting its turn;
-  ///  * `null` — deliberately stripped, a structural marker like `[Refrain]`
-  ///    that will be left out of SYLT.
-  ///
-  /// The middle one used to stand in for both, which meant a marker the user
-  /// had cleared looked identical to a line they still had to time.
+  ///  * a real time — the line is placed, including `Duration.zero`: a line
+  ///    stamped at the very first instant is placed, not pending. Zero used
+  ///    to stand in for "not stamped yet", so a `[00:00.00]` line showed
+  ///    `--:--.--` and counted as unplaced (while still exporting to SYLT).
+  ///  * `null` — no time. That covers both a line not stamped yet and a
+  ///    structural marker (`[Refrain]`) the user stripped on purpose: the
+  ///    model carries no third value to tell them apart, so the chip shows
+  ///    the same "no time" face for both and the marker's own text is what
+  ///    identifies it.
   final Duration? timestamp;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
@@ -201,12 +203,11 @@ class _TimestampChip extends StatelessWidget {
   });
 
   bool get _isCleared => timestamp == null;
-  bool get _isPending => timestamp == Duration.zero;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final isPlaced = !_isCleared && !_isPending;
+    final isPlaced = !_isCleared;
 
     return Tooltip(
       message: 'Toucher pour saisir l\'heure, appui long pour caler',
@@ -224,7 +225,6 @@ class _TimestampChip extends StatelessWidget {
             child: Text(
               switch (timestamp) {
                 null => '—  —',
-                Duration.zero => '--:--.--',
                 final t => LrcParser.formatTimestamp(t),
               },
               style: TextStyle(
