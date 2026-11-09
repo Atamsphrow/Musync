@@ -228,12 +228,6 @@ class SettingsImporter {
       }
       files[name] = entry.value;
     }
-    if (files.isEmpty) {
-      throw const ImportFormatException(
-        'Cet export ne contient aucun réglage connu.',
-      );
-    }
-
     final preferences = <String, Object>{};
     final rawPrefs = bundle['preferences'];
     if (rawPrefs is Map) {
@@ -245,6 +239,20 @@ class SettingsImporter {
       if (position != null) preferences['last_song_position_ms'] = position;
     }
 
+    final tagBackups = _parseTagBackups(bundle['tagBackups']);
+
+    // Only now can the bundle be judged: a bundle with no settings file
+    // but valid preferences or a valid tag-backup history is a usable
+    // bundle, not an empty one. The check used to run before both parses
+    // and rejected prefs/history-only bundles.
+    if (files.isEmpty &&
+        preferences.isEmpty &&
+        (tagBackups == null || tagBackups.isEmpty)) {
+      throw const ImportFormatException(
+        'Cet export ne contient aucun réglage connu.',
+      );
+    }
+
     return ImportBundle(
       files: files,
       preferences: preferences,
@@ -252,7 +260,7 @@ class SettingsImporter {
       version: '${bundle['version'] ?? ''}',
       includesSecrets: bundle['includesSecrets'] == true,
       ignoredFiles: ignored,
-      tagBackups: _parseTagBackups(bundle['tagBackups']),
+      tagBackups: tagBackups,
     );
   }
 
@@ -282,17 +290,31 @@ class SettingsImporter {
       );
     }
 
-    // File data first: every key must be a safe name with decodable bytes.
-    // Anything else is corruption, not history.
-    final files = <String, Uint8List>{};
-    for (final entry in rawFiles.entries) {
-      final name = '${entry.key}';
-      if (!isSafeBackupName(name)) {
+    // The index first: every row must parse and name a safe file. Only the
+    // entries a valid index row references are decoded — decoding the whole
+    // bundle first would allocate every backup before a corrupt row at the
+    // end of the index rejects it (bounded by the 32 Mo file cap, but still
+    // ~24 Mo decoded for nothing). Entries the index never references are
+    // ignored, not decoded.
+    final parsed = <TagBackup>[];
+    for (final rawEntry in rawIndex) {
+      final backup = TagBackup.fromJson(rawEntry);
+      if (backup == null || !isSafeBackupName(backup.storedAs)) {
         throw const ImportFormatException(
           "L'historique des sauvegardes est illisible.",
         );
       }
-      final encoded = entry.value;
+      parsed.add(backup);
+    }
+
+    // Then only the referenced bytes: a missing entry is a skipped row, a
+    // present-but-corrupt one fails the import.
+    final files = <String, Uint8List>{};
+    for (final backup in parsed) {
+      final name = backup.storedAs;
+      if (files.containsKey(name)) continue;
+      final encoded = rawFiles[name];
+      if (encoded == null) continue;
       if (encoded is! String) {
         throw ImportFormatException(
           'Sauvegarde « $name » corrompue dans le fichier.',
@@ -307,16 +329,9 @@ class SettingsImporter {
       }
     }
 
-    // Then the index: every row must parse and name a safe file.
     final entries = <TagBackup>[];
     final skipped = <String>[];
-    for (final rawEntry in rawIndex) {
-      final backup = TagBackup.fromJson(rawEntry);
-      if (backup == null || !isSafeBackupName(backup.storedAs)) {
-        throw const ImportFormatException(
-          "L'historique des sauvegardes est illisible.",
-        );
-      }
+    for (final backup in parsed) {
       if (files.containsKey(backup.storedAs)) {
         entries.add(backup);
       } else {
@@ -361,13 +376,18 @@ class SettingsImporter {
     }
 
     // Back up what is there now, so a failed write can be rolled back.
+    // `null` means "no file" — a read failure is tracked separately in
+    // [unreadableBackups]: confusing the two would let the rollback below
+    // delete a file whose contents could not be read back.
     final backups = <File, String?>{};
+    final unreadableBackups = <File>{};
     for (final p in pending) {
       try {
         backups[p.file] =
             await p.file.exists() ? await p.file.readAsString() : null;
       } catch (_) {
         backups[p.file] = null;
+        unreadableBackups.add(p.file);
       }
     }
 
@@ -386,17 +406,35 @@ class SettingsImporter {
       }
     } catch (e) {
       // Roll back: restore every file to what it was before the import.
+      // A file whose backup could not be read is left strictly alone: its
+      // contents are unknown, so deleting it (the `previous == null` path)
+      // would destroy data instead of restoring it. The rollback is then
+      // incomplete, and the error below says so explicitly instead of
+      // claiming a restore that did not happen.
+      var rollbackIncomplete = false;
       for (final entry in backups.entries) {
         try {
           final previous = entry.value;
           if (previous == null) {
+            if (unreadableBackups.contains(entry.key)) {
+              rollbackIncomplete = true;
+              continue;
+            }
             if (await entry.key.exists()) await entry.key.delete();
           } else {
             await AtomicFile.writeString(entry.key, previous);
           }
         } catch (_) {
-          // Best effort — the original error is the one that matters.
+          // Best effort — the original error is the one that matters,
+          // unless the rollback itself could not complete (flagged above).
+          rollbackIncomplete = true;
         }
+      }
+      if (rollbackIncomplete) {
+        throw const ImportFormatException(
+          "L'import a échoué et un réglage n'a pas pu être restauré "
+          '(sauvegarde illisible) : vérifiez vos réglages.',
+        );
       }
       // _applyTagBackups throws ImportFormatException with its own specific
       // message (and has already rolled the history back); keep it as-is.
