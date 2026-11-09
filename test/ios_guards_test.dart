@@ -23,9 +23,11 @@ void main() {
     });
 
     test('valeur connue (déterminisme inter-lancements)', () {
-      // FNV-1a 32 bits : si l'algorithme change, ce test casse et c'est
-      // voulu — les ids doivent rester stables d'un lancement à l'autre.
-      expect(MusicScanner.stableIdForPath('/docs/a.mp3'), 0x445f4041);
+      // FNV-1a 64 bits (masqué à 63 bits, M121) : si l'algorithme change,
+      // ce test casse et c'est voulu — les ids doivent rester stables
+      // d'un lancement à l'autre.
+      expect(MusicScanner.stableIdForPath('/docs/a.mp3'), 0x3fd92ccf9ae7e81);
+      expect(MusicScanner.stableIdForPath('/docs/a.mp3'), greaterThan(0));
     });
   });
 
