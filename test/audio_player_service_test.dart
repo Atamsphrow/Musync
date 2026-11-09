@@ -139,9 +139,14 @@ void main() {
 
     test('ignores a mid-track backward jump', () {
       // A backward seek mid-song is not a loop: previous position far
-      // from the end.
+      // from the end. L'événement doit être AVANT le précédent (1:00 →
+      // 0:30) : avec l'événement par défaut (1:00), prev == event et il
+      // n'y avait aucun saut à ignorer — le test ne testait rien.
       expect(
-        check(prev: const Duration(minutes: 1)),
+        check(
+          prev: const Duration(minutes: 1),
+          event: const Duration(seconds: 30),
+        ),
         isFalse,
       );
     });
