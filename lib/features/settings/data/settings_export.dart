@@ -159,6 +159,14 @@ class SettingsExporter {
       final storedAs = entry.storedAs;
       if (!isSafeBackupName(storedAs)) continue;
       final file = File('${dir.path}${Platform.pathSeparator}$storedAs');
+      // A symlink inside the backup directory would be followed by
+      // readAsBytes: refuse it rather than exporting whatever it points at.
+      // The name check above stops path traversal; this stops the link.
+      if (await FileSystemEntity.type(file.path, followLinks: false) ==
+          FileSystemEntityType.link) {
+        unreadable.add(storedAs);
+        continue;
+      }
       if (!await file.exists()) {
         missing.add(storedAs);
         continue;
@@ -199,10 +207,19 @@ class SettingsExporter {
       '${targetDir.path}${Platform.pathSeparator}'
       'musync-export-${_stamp(moment)}.json',
     );
-    await AtomicFile.writeString(
-      file,
-      const JsonEncoder.withIndent('  ').convert(bundle),
-    );
+    // The bundle carries caller-provided preferences as-is: an unencodable
+    // value must fail here with a message that says so, not as a bare
+    // JsonUnsupportedObjectError from inside the encoder.
+    final String encoded;
+    try {
+      encoded = const JsonEncoder.withIndent('  ').convert(bundle);
+    } on JsonUnsupportedObjectError catch (error) {
+      throw StateError(
+        'Export impossible : une valeur des réglages ne peut pas être '
+        'encodée en JSON (${error.unsupportedObject}).',
+      );
+    }
+    await AtomicFile.writeString(file, encoded);
     return file;
   }
 
