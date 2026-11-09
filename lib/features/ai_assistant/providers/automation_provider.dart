@@ -71,7 +71,14 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
 
   /// Sauvegarde + miroir natif. Le natif ne jette jamais (voir
   /// [SchedulerBridge]) : une alarme non armée est loggée, pas crashée.
+  ///
+  /// En cas d'échec de `save()`, l'état affiché est restauré à sa valeur
+  /// précédente et `syncAlarms` n'est PAS appelé : armer le natif avec un
+  /// document absent du disque laisserait une automatisation active en
+  /// mémoire + native qui disparaît au redémarrage — et une suppression
+  /// non persistée « ressusciterait » au boot.
   Future<void> _commit(AutomationsDoc next) async {
+    final previous = state.valueOrNull;
     state = AsyncValue.data(next);
     try {
       await ref.read(automationStoreProvider).save(next);
@@ -82,6 +89,10 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
         error: error,
         stackTrace: stack,
       );
+      // `_commit` n'est appelé que depuis un travail sérialisé, après
+      // `_ready()` : un état précédent existe toujours ici.
+      if (previous != null) state = AsyncValue.data(previous);
+      return;
     }
     final armed = await SchedulerBridge.syncAlarms(next.actions);
     // L'état ne peut qu'être confirmé ou infirmé par un armement réel : un
@@ -95,6 +106,10 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
   }
 
   /// « demain à 7h, joue ma file Nuit ». [at] en heure locale, dans le futur.
+  ///
+  /// Un [at] passé est rejeté ici, pas seulement par l'outil appelant : le
+  /// contrat documenté (« dans le futur ») vaut pour le provider, et une
+  /// alarme dans le passé sonnerait immédiatement au `syncAlarms`.
   Future<ScheduledAction> scheduleOnce({
     required DateTime at,
     required String tool,
@@ -103,6 +118,13 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
   }) =>
       _serialized(() async {
         await _ready();
+        if (!at.isAfter(DateTime.now())) {
+          throw ArgumentError.value(
+            at,
+            'at',
+            'La date doit être dans le futur.',
+          );
+        }
         final action = ScheduledAction(
           id: 'sched-${DateTime.now().microsecondsSinceEpoch}',
           daily: false,
@@ -198,19 +220,33 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
         var changed = false;
         final next = <ScheduledAction>[];
         for (final a in current.actions) {
-          if (a.id == except || a.fireAtMillis > now.millisecondsSinceEpoch) {
+          if (a.id == except) {
+            next.add(a);
+            continue;
+          }
+          if (a.daily) {
+            // Recalculée même quand `fireAtMillis` est futur : une
+            // quotidienne dont l'heure ne correspond plus à hour/minute
+            // (ex. calculée sous un ancien fuseau horaire) sonnerait à
+            // la mauvaise heure, puis seulement serait réalignée par
+            // `advanceAfterFire`. La référence est la prochaine
+            // occurrence calendaire — stable tant qu'elle n'est pas
+            // passée, donc pas de réécriture à chaque lancement.
+            final expected =
+                ScheduledAction.nextDailyFire(a.hour, a.minute, now);
+            if (a.fireAtMillis != expected) {
+              changed = true;
+              next.add(a.copyWith(fireAtMillis: expected));
+            } else {
+              next.add(a);
+            }
+            continue;
+          }
+          if (a.fireAtMillis > now.millisecondsSinceEpoch) {
             next.add(a);
             continue;
           }
           changed = true;
-          if (a.daily) {
-            next.add(
-              a.copyWith(
-                fireAtMillis:
-                    ScheduledAction.nextDailyFire(a.hour, a.minute, now),
-              ),
-            );
-          }
           // A stale one-shot is simply not carried over.
         }
         if (!changed) return;
