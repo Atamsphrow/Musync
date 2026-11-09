@@ -139,5 +139,39 @@ void main() {
       expect(idsOf(builtInSources), ['lrclib']);
     });
 
+    test('every fallback returns a fresh, mutable copy — not the const',
+        () async {
+      // Avant le correctif, load() renvoyait la const partagée builtInSources
+      // sur les replis (pas de fichier, JSON non-liste, fichier illisible) :
+      // un appelant qui mutait le résultat obtenait UnsupportedError, alors
+      // que le chemin nominal renvoie une liste fraîche modifiable.
+      for (final setup in <Future<void> Function()>[
+        () async {},
+        () async {
+          final file = File(
+            '${tempDir.path}${Platform.pathSeparator}lyrics_sources.json',
+          );
+          await file.writeAsString(jsonEncode({'oops': 'not a list'}));
+        },
+        () async {
+          final file = File(
+            '${tempDir.path}${Platform.pathSeparator}lyrics_sources.json',
+          );
+          await file.writeAsString('ceci n\u2019est pas du json {{{');
+        },
+      ]) {
+        await setup();
+        final loaded = await storeFor('lyrics_sources.json').load();
+        expect(identical(loaded, builtInSources), isFalse);
+        expect(
+          () => loaded.add(lrclibDefault.copyWith(enabled: false)),
+          returnsNormally,
+        );
+        expect(builtInSources, hasLength(1));
+        await File(
+          '${tempDir.path}${Platform.pathSeparator}lyrics_sources.json',
+        ).writeAsString('');
+      }
+    });
   });
 }
