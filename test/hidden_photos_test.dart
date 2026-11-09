@@ -142,6 +142,25 @@ void main() {
       expect(await PhotoCursorStore(root: dir).read(), 0);
     });
 
+    test('concurrent advances hand out each picture once, in order', () async {
+      // Two advances racing the same read-modify-write used to hand out the
+      // same picture twice and leave the stored cursor behind the in-memory
+      // one. Six concurrent calls over three pictures must cycle cleanly.
+      final results = await Future.wait([
+        for (var i = 0; i < 6; i++) HiddenPhotos.advanceThrough(photos),
+      ]);
+
+      expect(results, [
+        photos[0],
+        photos[1],
+        photos[2],
+        photos[0],
+        photos[1],
+        photos[2],
+      ]);
+      expect(await PhotoCursorStore(root: dir).read(), 0);
+    });
+
     test('the file keeps anything else it holds', () async {
       // It is named for interface state in general, so a sibling key is the
       // expected case, not a hypothetical one.
@@ -157,6 +176,18 @@ void main() {
       final nested = Directory('${dir.path}${Platform.pathSeparator}gone');
       await PhotoCursorStore(root: nested).write(1);
       expect(await PhotoCursorStore(root: nested).read(), 1);
+    });
+
+    test('a corrupt file heals on the next write', () async {
+      // A corrupt file used to abort every write (the read threw inside
+      // the write's single try/catch), so the cursor was never saved
+      // again. The write must now replace the corrupt file.
+      final file = File('${dir.path}${Platform.pathSeparator}ui_state.json');
+      await file.writeAsString('{ this is not json');
+      await PhotoCursorStore(root: dir).write(2);
+      expect(await PhotoCursorStore(root: dir).read(), 2);
+      await PhotoCursorStore(root: dir).write(3);
+      expect(await PhotoCursorStore(root: dir).read(), 3);
     });
   });
 }
