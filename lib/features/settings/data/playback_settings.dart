@@ -51,12 +51,14 @@ class PlaybackSettings {
   static PlaybackSettings fromJson(Object? raw) {
     if (raw is! Map) return const PlaybackSettings();
     final offset = raw['lyricsOffsetMs'];
-    if (offset is! int) return const PlaybackSettings();
+    // A JSON number: jsonDecode yields a double for `250.0`, and rejecting
+    // it as "not an int" silently dropped the user's offset. Any num reads.
+    if (offset is! num) return const PlaybackSettings();
     // Les anciennes clés (alarmFadeIn, autoResumeAfterCall…) sont
     // ignorées : le fondu de réveil et la reprise auto sont intégrés,
     // sans réglage, depuis le 2026-10-21.
     return PlaybackSettings(
-      lyricsOffsetMs: offset.clamp(-maxOffsetMs, maxOffsetMs),
+      lyricsOffsetMs: offset.toInt().clamp(-maxOffsetMs, maxOffsetMs),
     );
   }
 
