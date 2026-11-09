@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/id3/id3_tag.dart';
 import 'package:musync/core/id3/id3_writer.dart';
+import 'package:musync/core/id3/tag_metadata.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 
 class _Frame {
@@ -1017,6 +1018,164 @@ void main() {
       // And the body is de-unsynchronised exactly once: the stuffed $00 is gone
       // and the $FE behind it survives.
       expect(frame.decodedBody.last, 0xFE);
+    });
+  });
+
+  group('lot F (scan DeepSeek): MIME, temp unique, verification, serialisation', () {
+    TrackMetadata withArtwork(Uint8List art) => (
+      title: null,
+      artist: null,
+      album: null,
+      albumArtist: null,
+      genre: null,
+      year: null,
+      trackNumber: null,
+      trackTotal: null,
+      discNumber: null,
+      discTotal: null,
+      composer: null,
+      comment: null,
+      artwork: art,
+    );
+
+    /// The MIME out of an APIC body: encoding byte, MIME, NUL, type, NUL,
+    /// image.
+    String apicMime(Id3Frame frame) {
+      final body = frame.decodedBody;
+      final end = body.indexOf(0, 1);
+      return ascii.decode(body.sublist(1, end));
+    }
+
+    test('F28: APIC MIME matches the image bytes, not always image/jpeg',
+        () async {
+      final cases = <(List<int>, String)>[
+        ([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], 'image/png'),
+        ([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10], 'image/jpeg'),
+        ([0x47, 0x49, 0x46, 0x38, 0x39, 0x61], 'image/gif'),
+        (
+          [0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00,
+           0x57, 0x45, 0x42, 0x50],
+          'image/webp',
+        ),
+        ([0x42, 0x4D, 0x36, 0x00, 0x00, 0x00], 'image/bmp'),
+        ([0x01, 0x02, 0x03, 0x04], 'image/jpeg'), // unknown: fallback kept
+      ];
+      for (var i = 0; i < cases.length; i++) {
+        final (magic, mime) = cases[i];
+        final file = await writeFixture('mime$i.mp3', [
+          ..._tagBytes(major: 4, frames: [const _Frame('TIT2', [0, 65])]),
+          ..._audio(),
+        ]);
+        final art = Uint8List.fromList([
+          ...magic,
+          ...List<int>.filled(64, 0xAB),
+        ]);
+        await Id3Writer.writeMetadata(file.path, withArtwork(art));
+        final tag = Id3Tag.parse(await file.readAsBytes())!;
+        expect(apicMime(tag.frameById('APIC')!), mime);
+      }
+    });
+
+    test('F29: a stale temp of an earlier write is removed by the next write',
+        () async {
+      final file = await writeFixture('orphan.mp3', [
+        ..._tagBytes(major: 4, frames: [_artworkFrame()]),
+        ..._audio(),
+      ]);
+      // Orphans of a crashed earlier write: the fixed name of older versions
+      // and a unique-style name, both left over an hour ago.
+      final oldFixed = File('${file.path}.musync.tmp');
+      await oldFixed.writeAsBytes([1, 2, 3]);
+      await oldFixed.setLastModified(
+        DateTime.now().subtract(const Duration(hours: 1)),
+      );
+      final oldUnique = File('${file.path}.1234567890-abcdef01.musync.tmp');
+      await oldUnique.writeAsBytes([4, 5, 6]);
+      await oldUnique.setLastModified(
+        DateTime.now().subtract(const Duration(hours: 1)),
+      );
+      // A fresh temp must survive: it could belong to a live write.
+      final fresh = File('${file.path}.9999999999-abcdef02.musync.tmp');
+      await fresh.writeAsBytes([7, 8, 9]);
+
+      // Lyrics far too big for the tag: the slow path (rewrite) runs.
+      await Id3Writer.writeLyrics(
+        file.path,
+        unsynced: UnsyncedLyrics('x' * 5000),
+      );
+
+      expect(await oldFixed.exists(), isFalse);
+      expect(await oldUnique.exists(), isFalse);
+      expect(await fresh.exists(), isTrue);
+      expect(
+        tempDir
+            .listSync()
+            .where((e) => e.path.endsWith('.musync.tmp'))
+            .map((e) => e.path)
+            .toList(),
+        [fresh.path],
+        reason: 'the write itself leaves no temp behind',
+      );
+    });
+
+    test('F30: fast-path write re-reads the head it just wrote', () async {
+      // Padding makes the new tag fit in place: the write goes through
+      // _overwriteHead, which now re-reads the head and compares it.
+      final file = await writeFixture('fastpath.mp3', [
+        ..._tagBytes(major: 4, frames: [_artworkFrame()], padding: 4096),
+        ..._audio(),
+      ]);
+      final before = await file.readAsBytes();
+      final tagBefore = Id3Tag.parse(before)!;
+      final audio = before.sublist(tagBefore.audioOffset);
+
+      await Id3Writer.writeLyrics(
+        file.path,
+        synced: SyncedLyrics([
+          const LyricLine(timestamp: Duration(seconds: 1), text: 'Une ligne'),
+        ]),
+      );
+
+      final after = await file.readAsBytes();
+      final tagAfter = Id3Tag.parse(after)!;
+      expect(tagAfter.audioOffset, tagBefore.audioOffset);
+      expect(after.sublist(tagAfter.audioOffset), audio);
+      expect(
+        Id3Reader.readLyricsFromBytes(after).synced!.lines.single.text,
+        'Une ligne',
+      );
+    });
+
+    test('F31: concurrent writes on the same track both succeed, tag stays '
+        'valid', () async {
+      for (var round = 0; round < 5; round++) {
+        final file = await writeFixture('race$round.mp3', [
+          ..._tagBytes(major: 4, frames: [_artworkFrame()], padding: 4096),
+          ..._audio(),
+        ]);
+        final a = SyncedLyrics([
+          const LyricLine(timestamp: Duration(seconds: 1), text: 'texte A'),
+        ]);
+        final b = SyncedLyrics([
+          const LyricLine(timestamp: Duration(seconds: 2), text: 'texte B'),
+        ]);
+        await Future.wait([
+          Id3Writer.writeLyrics(file.path, synced: a),
+          Id3Writer.writeLyrics(file.path, synced: b),
+        ]);
+        final read = Id3Reader.readLyricsFromBytes(await file.readAsBytes());
+        expect(read.synced, isNotNull, reason: 'round $round: tag unreadable');
+        expect(read.synced!.lines, hasLength(1));
+        expect(
+          read.synced!.lines.single.text,
+          anyOf('texte A', 'texte B'),
+          reason: 'round $round: mixed or torn tag',
+        );
+        expect(
+          tempDir.listSync().where((e) => e.path.endsWith('.musync.tmp')),
+          isEmpty,
+        );
+      }
     });
   });
 }
