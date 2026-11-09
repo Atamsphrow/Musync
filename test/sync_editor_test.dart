@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:musync/core/id3/id3_writer.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
@@ -16,12 +17,20 @@ import 'package:musync/features/sync_editor/providers/sync_editor_provider.dart'
 
 void main() {
   late Directory tempDir;
+  late ProviderContainer container;
+  final subscriptions = <ProviderSubscription<SyncEditorState>>[];
 
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('musync_editor_');
+    container = ProviderContainer();
   });
 
   tearDown(() async {
+    for (final sub in subscriptions) {
+      sub.close();
+    }
+    subscriptions.clear();
+    container.dispose();
     if (await tempDir.exists()) await tempDir.delete(recursive: true);
   });
 
@@ -52,10 +61,18 @@ void main() {
   }
 
   /// Builds the notifier and waits for its initial read to land.
+  ///
+  /// L113 : le notifier ne se construit plus directement — il passe par le
+  /// provider (`FamilyNotifier`, argument dans `build`). Le conteneur vit
+  /// tant que le test vit, et l'abonnement est tenu : un provider
+  /// autoDispose sans écouteur est disposé avant la fin de la lecture
+  /// async du fichier, et `_load()` s'arrête alors sur `_disposed` sans
+  /// jamais mettre à jour l'état.
   Future<SyncEditorNotifier> openEditor(Song song) async {
-    final notifier = SyncEditorNotifier(song);
-    // The constructor kicks off an async file read; one microtask drain is not
-    // enough because the read itself hits the event loop.
+    subscriptions.add(container.listen(syncEditorProvider(song), (_, _) {}));
+    final notifier = container.read(syncEditorProvider(song).notifier);
+    // `build` lance une lecture de fichier async ; un drain de microtask ne
+    // suffit pas, la lecture elle-même passe par la boucle d'événements.
     while (notifier.state.isLoading) {
       await Future<void>.delayed(Duration.zero);
     }
