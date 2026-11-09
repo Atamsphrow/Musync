@@ -39,13 +39,16 @@ Future<void> importSettings(BuildContext context) async {
   if (path == null || !context.mounted) return;
 
   final messenger = ScaffoldMessenger.of(context);
-  final importer = SettingsImporter(
-    supportDir: await getApplicationSupportDirectory(),
-    documentsDir: await getApplicationDocumentsDirectory(),
-  );
-
+  // The directory lookups sit inside the try too: on a broken install
+  // they can throw (MissingPluginException, PlatformException), and
+  // this is called fire-and-forget from the AppBar.
+  late final SettingsImporter importer;
   final ImportBundle bundle;
   try {
+    importer = SettingsImporter(
+      supportDir: await getApplicationSupportDirectory(),
+      documentsDir: await getApplicationDocumentsDirectory(),
+    );
     bundle = await importer.parse(File(path));
   } on ImportFormatException catch (error) {
     messenger.showOnly(SnackBar(content: Text(error.message)));
@@ -154,45 +157,47 @@ class _ImportConfirmDialog extends StatelessWidget {
     ];
     return AlertDialog(
       title: const Text('Importer les paramètres'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            fileName,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-          ),
-          if (bundle.exportedAt.isNotEmpty)
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
             Text(
-              'Exporté le ${_formatDate(bundle.exportedAt)}'
-              '${bundle.version.isNotEmpty ? ' · v${bundle.version}' : ''}',
-              style: Theme.of(context).textTheme.bodySmall,
+              fileName,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
             ),
-          const SizedBox(height: 8),
-          Text('Contenu : ${contents.join(', ')}.'),
-          if (bundle.ignoredFiles.isNotEmpty) ...[
+            if (bundle.exportedAt.isNotEmpty)
+              Text(
+                'Exporté le ${_formatDate(bundle.exportedAt)}'
+                '${bundle.version.isNotEmpty ? ' · v${bundle.version}' : ''}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            const SizedBox(height: 8),
+            Text('Contenu : ${contents.join(', ')}.'),
+            if (bundle.ignoredFiles.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Ignoré (non reconnu) : ${bundle.ignoredFiles.join(', ')}.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             const SizedBox(height: 8),
             Text(
-              'Ignoré (non reconnu) : ${bundle.ignoredFiles.join(', ')}.',
-              style: Theme.of(context).textTheme.bodySmall,
+              bundle.includesSecrets
+                  ? 'Le fichier contient des clés API : elles seront appliquées.'
+                  : 'Le fichier ne contient pas de clés API : celles déjà '
+                      'configurées sont conservées.',
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              "Les réglages actuels seront remplacés ; l'historique des "
+              'sauvegardes aussi, quand le fichier en contient un.',
+              style: TextStyle(fontWeight: FontWeight.bold),
             ),
           ],
-          const SizedBox(height: 8),
-          Text(
-            bundle.includesSecrets
-                ? 'Le fichier contient des clés API : elles seront appliquées.'
-                : 'Le fichier ne contient pas de clés API : celles déjà '
-                    'configurées sont conservées.',
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            "Les réglages actuels seront remplacés ; l'historique des "
-            'sauvegardes aussi, quand le fichier en contient un.',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-        ],
+        ),
       ),
       actions: [
         TextButton(
