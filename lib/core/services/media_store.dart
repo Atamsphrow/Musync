@@ -48,9 +48,16 @@ abstract final class MediaStore {
     if (!Platform.isAndroid) return true;
 
     try {
-      await _channel
+      final uri = await _channel
           .invokeMethod<String>('rescan', <String, String>{'path': filePath})
           .timeout(_timeout);
+      if (uri == null || uri.isEmpty) {
+        // Le natif rend null quand le fichier n'a pas été indexé (chemin
+        // hors MediaStore, fichier disparu entre-temps) : rapporter true
+        // serait un mensonge — le contrat dit « le scan a abouti ».
+        _reportRescanFailure(filePath, 'fichier non indexé par MediaStore');
+        return false;
+      }
       return true;
     } on TimeoutException {
       // Every branch here means the same thing to the user: the file was
