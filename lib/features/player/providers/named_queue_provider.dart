@@ -64,7 +64,10 @@ class NamedQueuesController extends Notifier<NamedQueuesState> {
 
   @override
   NamedQueuesState build() {
-    unawaited(_load());
+    // Through the gate: a mutation queued during the initial load used to
+    // be overwritten by `_load` when it landed, then persisted — a silent
+    // loss. Mutations now run after the load.
+    unawaited(_serialized(_load));
     // Keep the active queue's stored index honest while it plays. The
     // player's index is authoritative: the stored one is only a resume
     // position for later activations.
