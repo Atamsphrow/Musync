@@ -30,7 +30,7 @@ void main() {
     );
   });
 
-  tearDown(container.dispose);
+  tearDown(() => container.dispose());
 
   Future<String> addGemini() async {
     final notifier = container.read(aiSettingsProvider.notifier);
