@@ -58,16 +58,30 @@ class PhotoCursorStore {
   /// the next small piece of interface state, and clobbering a sibling key would
   /// be a trap laid for later.
   Future<void> write(int cursor) async {
+    File? file;
     try {
-      final file = await _file();
-
-      var state = <String, Object?>{};
+      file = await _file();
+    } catch (_) {
+      // No file to write to: losing the position costs one repeat of the
+      // first picture.
+      return;
+    }
+    // The read is its own try/catch: a corrupt file used to abort the
+    // whole write, and every later write re-read the same corrupt file --
+    // the cursor was never saved again. A corrupt file now reads as an
+    // empty state, so the write below replaces it and heals the file.
+    var state = <String, Object?>{};
+    try {
       if (await file.exists()) {
         final decoded = jsonDecode(await file.readAsString());
         if (decoded is Map) state = Map<String, Object?>.from(decoded);
       }
-      state[_key] = cursor;
+    } catch (_) {
+      state = <String, Object?>{};
+    }
+    state[_key] = cursor;
 
+    try {
       await AtomicFile.writeString(file, jsonEncode(state));
     } catch (_) {
       // Losing the position costs one repeat of the first picture. Not worth a
@@ -90,6 +104,12 @@ abstract final class HiddenPhotos {
 
   /// Where the cycle stands, or null before it has been read from disk.
   static int? _next;
+
+  /// Serialises the read-modify-write in [advanceThrough]: without it, two
+  /// concurrent advances could both read the same position and write their
+  /// next positions out of order, handing out the same picture twice and
+  /// leaving the stored cursor behind the in-memory one.
+  static Future<void> _advanceChain = Future.value();
 
   /// Replaceable for tests.
   @visibleForTesting
@@ -132,15 +152,21 @@ abstract final class HiddenPhotos {
   static Future<String?> advanceThrough(List<String> photos) async {
     if (photos.isEmpty) return null;
 
-    // Modulo the count *now*: a stored position can outlive the list it was
-    // recorded against, and adding or removing a picture must not leave the
-    // cycle pointing past the end.
-    final at = (_next ??= await store.read()) % photos.length;
-    final photo = photos[at];
+    final task = _advanceChain.then((_) async {
+      // Modulo the count *now*: a stored position can outlive the list it was
+      // recorded against, and adding or removing a picture must not leave the
+      // cycle pointing past the end.
+      final at = (_next ??= await store.read()) % photos.length;
+      final photo = photos[at];
 
-    _next = (at + 1) % photos.length;
-    await store.write(_next!);
-    return photo;
+      _next = (at + 1) % photos.length;
+      await store.write(_next!);
+      return photo;
+    });
+    // The chain itself never fails: a failed advance must not wedge every
+    // later one behind it.
+    _advanceChain = task.then((_) {}, onError: (_) {});
+    return task;
   }
 
   /// Forgets the in-memory position, so the next call re-reads it.
@@ -148,6 +174,7 @@ abstract final class HiddenPhotos {
   static void resetForTest() {
     _cached = null;
     _next = null;
+    _advanceChain = Future.value();
   }
 
   /// Orders `tatiana2` before `tatiana10`.
