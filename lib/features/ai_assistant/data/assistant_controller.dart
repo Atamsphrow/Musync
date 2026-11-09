@@ -328,7 +328,10 @@ class AssistantController {
     String name,
     Map<String, Object?> args,
   ) async {
-    final tool = _registry[name]!;
+    final tool = _registry[name];
+    if (tool == null) {
+      return AssistantFailed('Outil inconnu : « $name ».');
+    }
     if (tool.requiresConfirmation) {
       final String preview;
       try {
