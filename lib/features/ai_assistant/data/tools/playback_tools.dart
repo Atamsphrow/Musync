@@ -4,6 +4,7 @@
 /// l'app appellent — l'assistant ne fait rien que l'UI ne sache déjà faire.
 library;
 
+import 'package:just_audio/just_audio.dart';
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:musync/features/player/data/volume_fade.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
@@ -26,6 +27,9 @@ class PlayTool extends AiTool {
         'properties': {
           'query':
               'string, optionnel — titre ou artiste à chercher et jouer',
+          'fadeIn':
+              'booléen, optionnel — fondu d’ouverture (posé par les alarmes '
+              'via AutomationRunner, pas par le modèle)',
         },
       };
 
@@ -47,7 +51,10 @@ class PlayTool extends AiTool {
     final q = optString(args, 'query');
     // Posé par AutomationRunner.runFired : les alarmes démarrent
     // toujours en fondu (réveil en douceur) — intégré, sans réglage.
-    final fadeIn = args['fadeIn'] == true ? VolumeFade.alarmDuration : null;
+    // Validé comme les autres arguments : une valeur non booléenne lève
+    // au lieu d'être silencieusement ignorée.
+    final fadeIn =
+        optBool(args, 'fadeIn') ? VolumeFade.alarmDuration : null;
     if (q == null) {
       if (service.currentSong == null) {
         return AiToolResult.fail('Rien en cours de lecture.');
@@ -235,10 +242,10 @@ class CycleRepeatTool extends AiTool {
   ) async {
     final service = ctx.ref.read(audioPlayerServiceProvider);
     await service.cycleRepeatMode();
-    final label = switch (service.loopMode.name) {
-      'all' => 'répéter toute la file',
-      'one' => 'répéter le morceau',
-      _ => 'répétition désactivée',
+    final label = switch (service.loopMode) {
+      LoopMode.all => 'répéter toute la file',
+      LoopMode.one => 'répéter le morceau',
+      LoopMode.off => 'répétition désactivée',
     };
     return AiToolResult.ok('Répétition : $label.');
   }
