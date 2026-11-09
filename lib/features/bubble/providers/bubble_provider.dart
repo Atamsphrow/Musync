@@ -93,6 +93,14 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   StreamSubscription<dynamic>? _fromOverlay;
   String? _lastSent;
 
+  /// Serialises overlay sends. `_push` fires at ~60 Hz from the line-index
+  /// feed and several listeners: two concurrent `shareData` calls could
+  /// finish out of order, leaving `_lastSent` on the older payload and the
+  /// overlay showing stale lyrics. Chaining keeps the sends — and the
+  /// `_lastSent` marks inside [_send] — in push order. `_send` never throws
+  /// (it catches everything), so the chain cannot break.
+  Future<void> _sendQueue = Future<void>.value();
+
   /// Subscription to the 60 Hz line index, alive only while playing. In pause
   /// the bubble is hidden (product rule) and the position is frozen, so
   /// listening would wake the main isolate 60x/s for nothing and keep the
@@ -719,7 +727,8 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     // and the stream ticks often.
     if (data == _lastSent) return;
 
-    unawaited(_send(data));
+    // Queued, not fired: see [_sendQueue].
+    _sendQueue = _sendQueue.then((_) => _send(data));
   }
 
   /// Width of the screen in dp. The overlay is sized in the same unit.
