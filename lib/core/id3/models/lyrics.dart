@@ -142,7 +142,14 @@ class SyncedLyrics {
 
   static Duration _floorAtZero(Duration d) => d.isNegative ? Duration.zero : d;
 
-  /// Flattens to plain text, for writing the USLT frame alongside SYLT.
+  /// Flattens the timed lines this instance holds to plain text, one per
+  /// line.
+  ///
+  /// Only the lines that survived construction: untimed lines (`[Refrain]`,
+  /// `[Couplet 2]`, …) were dropped on the way in (see the class doc), so
+  /// they do NOT appear here. This is not the full lyric text — a caller
+  /// that needs the untimed lines too, e.g. for the USLT frame, must use
+  /// its own list or the caller's text, never this method.
   String toPlainText() => lines.map((l) => l.text).join('\n');
 
   bool get isEmpty => lines.isEmpty;
