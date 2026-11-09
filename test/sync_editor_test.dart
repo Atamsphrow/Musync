@@ -524,6 +524,33 @@ void main() {
       expect(editor.state.cursor, 1);
     });
 
+    test('removeLine above the cursor moves the cursor with its line', () {
+      // The cursor names a line, not a slot: deleting line 0 must not leave
+      // it pointing at what used to be line 2 — the next "Caler" would
+      // stamp the wrong line.
+      editor.setCursor(1);
+      editor.removeLine(0);
+
+      expect(editor.state.lines.map((l) => l.text), ['Deux']);
+      expect(editor.state.cursor, 0);
+    });
+
+    test('removeLine below the cursor leaves the cursor alone', () {
+      editor.setCursor(0);
+      editor.removeLine(1);
+
+      expect(editor.state.lines.map((l) => l.text), ['Une']);
+      expect(editor.state.cursor, 0);
+    });
+
+    test("removeLine on the cursor's own line keeps it on the next line", () {
+      editor.setCursor(0);
+      editor.removeLine(0);
+
+      expect(editor.state.lines.map((l) => l.text), ['Deux']);
+      expect(editor.state.cursor, 0);
+    });
+
     test('out-of-range edits are ignored rather than throwing', () {
       editor.updateLineText(99, 'nulle part');
       editor.removeLine(-1);
