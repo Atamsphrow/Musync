@@ -9,7 +9,6 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/utils/atomic_file.dart';
 import 'package:musync/features/ai_assistant/data/automation.dart';
@@ -80,13 +79,25 @@ class AutomationStore {
   }
 
   /// Écriture atomique, sérialisée par fichier — voir [AtomicFile].
+  ///
+  /// L'échec est journalisé ici ET propagé : l'appelant (`_commit`) restaure
+  /// l'état affiché et n'arme pas le natif quand le document n'est pas sur
+  /// disque — avaler l'erreur laisserait une automatisation active en
+  /// mémoire qui disparaît au redémarrage.
   Future<void> save(AutomationsDoc doc) async {
-    await AtomicFile.writeString(
-      await _file(),
-      jsonEncode(doc.toJson()),
-    );
+    try {
+      await AtomicFile.writeString(
+        await _file(),
+        jsonEncode(doc.toJson()),
+      );
+    } catch (error, stack) {
+      DebugLog.instance.error(
+        'Automatisations',
+        'Écriture des automatisations impossible',
+        error: error,
+        stackTrace: stack,
+      );
+      rethrow;
+    }
   }
-
-  @visibleForTesting
-  static AutomationsDoc docForTest(AutomationsDoc doc) => doc;
 }
