@@ -517,7 +517,10 @@ class Id3Reader {
     if (descriptionEnd == -1) return null;
     final start = descriptionEnd + Id3Encoding.terminatorLength(encoding);
     if (start >= body.length) return null;
-    return Uint8List.sublistView(body, start);
+    // Copie, pas une vue : `body` est une vue sur le corps du tag, lui-même
+    // une vue sur le buffer entier lu ; `sublistView` aurait fait retenir
+    // tout le tag en mémoire par la pochette stockée dans TrackMetadata.
+    return body.sublist(start);
   }
 
   /// Reads the decoded text of [wanted] text frames, walking the tag without
