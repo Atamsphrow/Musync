@@ -82,6 +82,12 @@ class Mp3GaplessInfo {
       gapless = "pas d'en-tête Xing";
     } else if (encoderDelay == null) {
       gapless = "en-tête Xing sans champ LAME";
+    } else if (sampleRate <= 0) {
+      // `encoderDelayDuration` rend null dans ce cas : le `!` de la branche
+      // suivante n'est sûr que quand les deux sont garantis.
+      gapless =
+          "delay $encoderDelay éch. (durée inconnue), "
+          "padding $encoderPadding éch.";
     } else {
       gapless =
           "delay $encoderDelay éch. "
