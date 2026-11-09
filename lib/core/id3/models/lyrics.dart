@@ -130,6 +130,14 @@ class SyncedLyrics {
     ]);
   }
 
+  /// Shifts the line at [index] by [offset], floored at zero.
+  ///
+  /// [index] is into [lines] — the timed-only, timestamp-sorted list this
+  /// class holds — NOT into a mixed list that still carries untimed lines.
+  /// The sync editor keeps its own such list (structural markers like
+  /// `[Refrain]` included), so an index taken from the editor's list
+  /// addresses the wrong line here whenever an untimed line sits before
+  /// it. Out of range returns `this` unchanged.
   SyncedLyrics offsetLine(int index, Duration offset) {
     if (index < 0 || index >= lines.length) return this;
 
