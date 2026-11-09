@@ -17,7 +17,19 @@ import 'package:musync/features/lyrics/ui/embed_lyrics_action.dart';
 class LyricsSearchScreen extends ConsumerStatefulWidget {
   final Song song;
 
-  const LyricsSearchScreen({super.key, required this.song});
+  /// Requête pré-remplie (venue du vérificateur ou de l'assistant IA) :
+  /// elle prime sur les tags du morceau.
+  final String? initialTitle;
+
+  /// Voir [initialTitle].
+  final String? initialArtist;
+
+  const LyricsSearchScreen({
+    super.key,
+    required this.song,
+    this.initialTitle,
+    this.initialArtist,
+  });
 
   @override
   ConsumerState<LyricsSearchScreen> createState() => _LyricsSearchScreenState();
@@ -25,10 +37,10 @@ class LyricsSearchScreen extends ConsumerStatefulWidget {
 
 class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
   late final TextEditingController _titleController = TextEditingController(
-    text: widget.song.title,
+    text: widget.initialTitle ?? widget.song.title,
   );
   late final TextEditingController _artistController = TextEditingController(
-    text: widget.song.artist,
+    text: widget.initialArtist ?? widget.song.artist,
   );
 
   /// True while a model is being asked. It can take a few seconds, and a
@@ -315,7 +327,8 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
               overflow: TextOverflow.ellipsis,
             ),
             subtitle: Text(
-              '${result.artist} • ${result.source}',
+              '${result.artist} • ${result.source} • '
+              'confiance ${(result.confidence * 100).round()} %',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
