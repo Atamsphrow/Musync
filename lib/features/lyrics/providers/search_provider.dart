@@ -3,7 +3,6 @@ import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/shared_http_client.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
-import 'package:musync/features/lyrics/data/providers/lyrics_ovh_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 import 'package:musync/features/settings/data/lyrics_source_config.dart';
 import 'package:musync/features/settings/providers/settings_provider.dart';
@@ -23,7 +22,6 @@ final lyricsRepositoryProvider = Provider<LyricsRepository>((ref) {
     sources: [
       for (final config in configs.where((c) => c.enabled))
         switch (config.kind) {
-          LyricsSourceKind.lyricsOvh => LyricsOvhSource(client: client),
           LyricsSourceKind.lrclib =>
             config.isBuiltIn
                 ? LrclibSource(client: client)
