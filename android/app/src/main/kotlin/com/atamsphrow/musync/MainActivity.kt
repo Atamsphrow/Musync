@@ -784,8 +784,21 @@ class MainActivity : AudioServiceActivity() {
         schedulerChannel?.invokeMethod("scheduledActionFired", null)
     }
 
+    /// Seule l'alarme posée par Musync porte cette action (`alarmIntent`
+    /// et `BootReceiver`). L'activité est exportée (launcher) : sans ce
+    /// test, n'importe quelle app pouvait déclencher une automatisation
+    /// existante et activée en envoyant un intent explicite avec l'extra
+    /// — la recherche d'id côté Dart (`runFired`) ne bloque que les ids
+    /// inconnus ou désactivés, pas un déclenchement hors horaire.
+    ///
+    /// Pas de vérification d'émetteur possible ici : un intent d'activité
+    /// ne porte pas d'identité d'appelant fiable (`callingActivity` n'est
+    /// renseigné que pour `startActivityForResult`, pas pour une alarme
+    /// `AlarmManager`). Un jeton partagé exigerait de toucher
+    /// `BootReceiver`, qui reconstruit l'intent d'alarme au boot.
     private fun handleScheduledActionIntent(intent: Intent?) {
-        val id = intent?.getStringExtra(EXTRA_SCHEDULED_ACTION_ID) ?: return
+        if (intent?.action != SCHEDULED_ACTION) return
+        val id = intent.getStringExtra(EXTRA_SCHEDULED_ACTION_ID) ?: return
         intent.removeExtra(EXTRA_SCHEDULED_ACTION_ID)
         queueScheduledAction(id)
     }
