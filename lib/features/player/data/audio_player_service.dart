@@ -87,7 +87,7 @@ class AudioPlayerService {
         DebugLog.instance.info(
           'Perf',
           'persist (changement de morceau) : '
-          '${persistSw.elapsedMilliseconds}ms',
+              '${persistSw.elapsedMilliseconds}ms',
         );
       } else if (index != null) {
         // Never silent: a dropped index means _queue and just_audio disagree,
@@ -96,8 +96,8 @@ class AudioPlayerService {
         DebugLog.instance.error(
           'Player',
           'index $index ignoré: file=${_queue.length} — '
-          'désync file/audio, l\u2019écran va rester figé sur '
-          '${_currentSong?.title ?? 'rien'}',
+              'désync file/audio, l\u2019écran va rester figé sur '
+              '${_currentSong?.title ?? 'rien'}',
         );
       }
     });
@@ -136,8 +136,9 @@ class AudioPlayerService {
       // the music kept playing over phone calls. Pause when the interruption
       // begins; resume when it ends if the track was playing before —
       // comportement intégré, sans réglage.
-      _interruptionSubscription =
-          session.interruptionEventStream.listen((event) {
+      _interruptionSubscription = session.interruptionEventStream.listen((
+        event,
+      ) {
         if (event.begin && _player.playing) {
           _wasPlayingBeforeInterruption = true;
           unawaited(pause());
@@ -151,7 +152,11 @@ class AudioPlayerService {
     } catch (e) {
       // Best-effort: playback works without it, but say so — otherwise the
       // unplug protection is silently absent.
-      DebugLog.instance.warning('Player', 'Écoute du débranchement casque impossible', error: e);
+      DebugLog.instance.warning(
+        'Player',
+        'Écoute du débranchement casque impossible',
+        error: e,
+      );
     }
   }
 
@@ -231,11 +236,7 @@ class AudioPlayerService {
   }) {
     final current = _currentSong;
     if (current == null) return;
-    _currentSong = current.copyWith(
-      title: title,
-      artist: artist,
-      album: album,
-    );
+    _currentSong = current.copyWith(title: title, artist: artist, album: album);
     if (!_currentSongController.isClosed) {
       _currentSongController.add(_currentSong);
     }
@@ -282,8 +283,12 @@ class AudioPlayerService {
   /// [fadeIn], when non-null, démarre un fondu de volume progressif
   /// ([VolumeFade]) dès la lecture : utilisé par les alarmes (réveil en
   /// douceur). Tout nouveau playSong annule le fondu précédent.
-  Future<void> playSong(Song song,
-      {List<Song>? queue, int? index, Duration? fadeIn}) {
+  Future<void> playSong(
+    Song song, {
+    List<Song>? queue,
+    int? index,
+    Duration? fadeIn,
+  }) {
     _cancelVolumeFade();
     final previous = _playSongGate;
     // The gate serializes the expensive, stateful part: building the audio
@@ -293,8 +298,9 @@ class AudioPlayerService {
     // holding the gate that long would wedge every later tap on a song
     // behind the current one. The caller's future still reports play()
     // errors.
-    final setup = (previous ?? Future.value())
-        .then((_) => _playSong(song, queue: queue, index: index));
+    final setup = (previous ?? Future.value()).then(
+      (_) => _playSong(song, queue: queue, index: index),
+    );
     _playSongGate = setup.then<void>((_) {}, onError: (_) {});
     return setup.then((_) {
       // Volume baissé AVANT la première note : sinon le réveil hurle à plein
@@ -390,7 +396,7 @@ class AudioPlayerService {
     DebugLog.instance.info(
       'Perf',
       'playSong : ${_queue.length} sources — construction ${tBuild}ms, '
-      'setAudioSource ${sourceSw.elapsedMilliseconds}ms',
+          'setAudioSource ${sourceSw.elapsedMilliseconds}ms',
     );
     // The queue actually changed: the next launch restores all of it.
     final persistSw = Stopwatch()..start();
@@ -496,7 +502,17 @@ class AudioPlayerService {
     unawaited(_player.setVolume(_fadeTargetVolume));
   }
 
-  Future<void> play() => _player.play();
+  /// Reprend la lecture.
+  ///
+  /// [fadeIn], when non-null, starts a progressive volume fade
+  /// ([VolumeFade]) once playback has resumed: the alarm path
+  /// (`PlayTool` without query) resumes this way so the wake-up is
+  /// gentle, like [playSong] does for a fresh track. A null fade means
+  /// an immediate resume at the current volume, as before.
+  Future<void> play({Duration? fadeIn}) async {
+    await _player.play();
+    if (fadeIn != null) _startVolumeFade(fadeIn);
+  }
 
   /// Persists the current track and position right now, outside the 15s
   /// periodic checkpoint (which only runs while playing). Used on pause and
@@ -554,8 +570,8 @@ class AudioPlayerService {
     DebugLog.instance.info(
       'Player',
       'restauration: persistés=${state.queuePaths.length} '
-      'retrouvés=${queue.length} biblio=${library.length} '
-      'index=${state.index} shuffle=${state.shuffle} repeat=${state.repeat}',
+          'retrouvés=${queue.length} biblio=${library.length} '
+          'index=${state.index} shuffle=${state.shuffle} repeat=${state.repeat}',
     );
     if (queue.isEmpty) {
       // No persisted queue (first launch on this version, or an unreadable
@@ -612,7 +628,9 @@ class AudioPlayerService {
       // The saved position belongs to the saved track: when the queue fell
       // back to a different track (saved file gone), seeking the new track
       // to the old one's position would start it mid-way for no reason.
-      var target = match.filePath == saved.path ? saved.position : Duration.zero;
+      var target = match.filePath == saved.path
+          ? saved.position
+          : Duration.zero;
       if (target.isNegative) target = Duration.zero;
       final duration = _player.duration;
       if (duration != null && target >= duration) target = Duration.zero;
@@ -629,7 +647,7 @@ class AudioPlayerService {
       DebugLog.instance.info(
         'Player',
         'restauration OK: file=${queue.length} index=$index '
-        'morceau=${match.title}',
+            'morceau=${match.title}',
       );
       return true;
     } catch (_) {
@@ -638,6 +656,7 @@ class AudioPlayerService {
       return false;
     }
   }
+
   Future<void> seekTo(Duration position) => _seekWithRecord(position);
 
   /// Every seek this service asks for, recorded so [_onPlaybackEvent] can
@@ -703,9 +722,9 @@ class AudioPlayerService {
   /// Mirrors just_audio's position getter for the previous event: extrapolate
   /// with the wall clock while playing and ready, else the frozen position.
   Duration _extrapolatedPosition(PlaybackEvent event, DateTime now) {
-    if (_player.playing &&
-        _player.processingState == ProcessingState.ready) {
-      final result = event.updatePosition +
+    if (_player.playing && _player.processingState == ProcessingState.ready) {
+      final result =
+          event.updatePosition +
           now.difference(event.updateTime) * _player.speed;
       final duration = event.duration ?? _player.duration;
       if (duration == null || result <= duration) return result;
@@ -737,8 +756,8 @@ class AudioPlayerService {
       eventUpdatePosition: event.updatePosition,
       prevIndex: prev.currentIndex,
       eventIndex: event.currentIndex,
-      loopEnabled: _player.loopMode == LoopMode.one ||
-          _player.loopMode == LoopMode.all,
+      loopEnabled:
+          _player.loopMode == LoopMode.one || _player.loopMode == LoopMode.all,
       duration: duration,
       playing: _player.playing,
       lastServiceSeekAt: _lastServiceSeekAt,
@@ -747,14 +766,13 @@ class AudioPlayerService {
       DebugLog.instance.info(
         'Player',
         'Boucle détectée (ancre périmée '
-        '${event.updatePosition.inMilliseconds}ms) — recalage seek(0)',
+            '${event.updatePosition.inMilliseconds}ms) — recalage seek(0)',
       );
       unawaited(_seekWithRecord(Duration.zero));
     }
   }
 
-  Future<void> togglePlayPause() =>
-      _player.playing ? pause() : _player.play();
+  Future<void> togglePlayPause() => _player.playing ? pause() : _player.play();
 
   /// How far short of the track end a forward seek is allowed to land.
   ///
