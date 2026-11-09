@@ -37,7 +37,15 @@ class TagMtimeStore {
           // Old cache stored int mtimes; new format is "mtime:size".
           // An int entry never matches a "mtime:size" key, so it naturally
           // forces a re-read — exactly what we want after the format change.
-          out[entry.key as String] = '${entry.value}';
+          // Anything else (null, list, object from a corrupt file) is not a
+          // mtime at all: ignored, so the file is re-read and the entry
+          // overwritten with the real key on the next save.
+          final value = entry.value;
+          if (value is String) {
+            out[entry.key as String] = value;
+          } else if (value is int) {
+            out[entry.key as String] = '$value';
+          }
         }
       }
       return out;
