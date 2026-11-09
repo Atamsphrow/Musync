@@ -43,13 +43,27 @@ class ExcludedDirsStore {
   }
 
   /// Persists [dirs] after normalising each entry.
+  ///
+  /// L'échec est journalisé ici ET propagé, comme `load()` journalise le
+  /// sien : l'appelant (`_commit`) le rattrape et l'écrit dans le journal —
+  /// avaler l'erreur laisserait l'état affiché diverger du disque sans trace.
   Future<void> save(List<String> dirs) async {
-    final clean = <String>{};
-    for (final entry in dirs) {
-      final dir = normalise(entry);
-      if (dir.isNotEmpty) clean.add(dir);
+    try {
+      final clean = <String>{};
+      for (final entry in dirs) {
+        final dir = normalise(entry);
+        if (dir.isNotEmpty) clean.add(dir);
+      }
+      await (await _prefs()).setStringList(prefsKey, clean.toList()..sort());
+    } catch (error, stack) {
+      DebugLog.instance.error(
+        'Bibliothèque',
+        'Enregistrement des dossiers exclus impossible',
+        error: error,
+        stackTrace: stack,
+      );
+      rethrow;
     }
-    await (await _prefs()).setStringList(prefsKey, clean.toList()..sort());
   }
 
   /// Trims whitespace and every trailing separator, keeping the root itself.
@@ -76,6 +90,9 @@ class ExcludedDirsStore {
     for (final dir in excluded) {
       final prefix = dir.toLowerCase();
       if (prefix.isEmpty) continue;
+      // La racine exclut tout : `'$prefix/'` vaut `'//'` pour prefix `/`,
+      // et aucun chemin ne commence par `//`.
+      if (prefix == '/') return true;
       if (path == prefix || path.startsWith('$prefix/')) return true;
     }
     return false;
