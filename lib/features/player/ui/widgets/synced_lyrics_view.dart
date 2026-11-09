@@ -57,6 +57,9 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
 
   final ScrollController _scrollController = ScrollController();
   int? _lastCenteredIndex;
+  // A build schedules at most one post-frame centering: without the flag,
+  // every rebuild re-scheduled one while the previous was still pending.
+  bool _centerScheduled = false;
 
   @override
   void dispose() {
@@ -116,9 +119,13 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     return LayoutBuilder(
       builder: (context, constraints) {
         if (currentIndex != null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) _centerLine(currentIndex, constraints.maxHeight);
-          });
+          if (!_centerScheduled) {
+            _centerScheduled = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _centerScheduled = false;
+              if (mounted) _centerLine(currentIndex, constraints.maxHeight);
+            });
+          }
         }
 
         return ListView.builder(
@@ -160,7 +167,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                     // Short on purpose, and it is the other half of T22: the
                     // detection is now exact to the frame, but a quarter-second
                     // cross-fade on the colour and the weight still reads as
-                    // lag. The scroll below keeps its 500 ms — that one is
+                    // lag. The scroll below keeps its 250 ms — that one is
                     // motion, and motion is allowed to be smooth.
                     duration: const Duration(milliseconds: 120),
                     style: _lyricsTextStyle(textTheme.bodyLarge, appearance)
