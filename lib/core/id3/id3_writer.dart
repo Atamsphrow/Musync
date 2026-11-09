@@ -437,14 +437,14 @@ class Id3Writer {
   ///
   /// Both null means "leave the frame alone" (null). Otherwise the part the
   /// caller didn't set falls back to the existing frame's value, a negative
-  /// part drops that part, and when neither part survives the frame is
-  /// removed (empty string).
-  ///
-  /// Note (J31, reporté) : un total sans numéro s'écrit "/N" (ex. "/12") —
-  /// malformé au sens strict, mais c'est le seul format qui conserve le
-  /// total, et `tag_editor_test` épingle ce comportement (« supprimer le
-  /// numéro, garder le total »). Supprimer la frame perdrait le total :
-  /// à trancher avec l'utilisateur avant de changer.
+  /// part drops that part, and when the number doesn't survive the frame is
+  /// removed (empty string): a total without a number is never written.
+  /// TRCK's number is the mandatory part, the total only an optional
+  /// extension ("4/9"), so "/N" would be off-grammar and strict parsers
+  /// may reject it (décision J31, 2026-11-09, sur avis Claude : supprimer
+  /// la frame plutôt que d'écrire "/N" ; le total seul n'a pas de valeur
+  /// d'usage). The reader still tolerates "/12" on read, for files tagged
+  /// elsewhere.
   static String? _composeNumberPair(
     int? number,
     int? total,
@@ -453,8 +453,8 @@ class Id3Writer {
     if (number == null && total == null) return null;
     final n = number == null ? existing.$1 : (number < 0 ? null : number);
     final t = total == null ? existing.$2 : (total < 0 ? null : total);
-    if (n == null && t == null) return '';
-    return '${n?.toString() ?? ''}${t != null ? '/$t' : ''}';
+    if (n == null) return '';
+    return t != null ? '$n/$t' : '$n';
   }
 
   /// A plain text frame: one encoding byte, then the text.
