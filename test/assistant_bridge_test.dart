@@ -4,6 +4,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -292,7 +293,7 @@ void main() {
     });
 
     test('réseau coupé : injoignable, sans fuite', () async {
-      final fake = _FakeClient((_) => throw const SocketExceptionFake());
+      final fake = _FakeClient((_) => throw const SocketException('réseau coupé'));
       await expectLater(
         AssistantBridge(client: fake).complete(
           provider: _provider(),
@@ -328,8 +329,3 @@ void main() {
   });
 }
 
-/// SocketException ne se construit pas avec un const simple en test pur ;
-/// un leurre qui joue le même rôle (exception synchrone du client).
-class SocketExceptionFake implements Exception {
-  const SocketExceptionFake();
-}
