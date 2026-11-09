@@ -75,6 +75,15 @@ class _FakePlayer extends AudioPlayerService {
     required String album,
   }) {}
 
+  /// Chemins signalés par `updateSongPath` (E19) : le lecteur suit les
+  /// renommages/déplacements au lieu de garder l'ancien chemin.
+  final pathUpdates = <(String, String)>[];
+
+  @override
+  void updateSongPath(String oldPath, String newPath) {
+    pathUpdates.add((oldPath, newPath));
+  }
+
   @override
   Future<void> forgetArtwork(Song song) async {}
 }
@@ -82,10 +91,18 @@ class _FakePlayer extends AudioPlayerService {
 /// Bibliothèque modifiable entre `describeAction` et `execute`.
 class _MutableSongList extends SongListNotifier {
   List<Song> songs;
+
+  /// Nombre de constructions : chaque invalidation de `songListProvider`
+  /// en déclenche une (E25).
+  var builds = 0;
+
   _MutableSongList(this.songs);
 
   @override
-  Future<List<Song>> build() async => songs;
+  Future<List<Song>> build() async {
+    builds++;
+    return songs;
+  }
 }
 
 class _FakeSettingsStore extends AiSettingsStore {
@@ -489,6 +506,172 @@ void main() {
       expect(result.ok, isTrue);
       expect(await File(pathA).exists(), isFalse, reason: 'A supprimé');
       expect(await File(pathB).exists(), isTrue, reason: 'B intact');
+    });
+  });
+
+  group('revalidation B7/E19/E21/E22/E23/E24/E25', () {
+    test('batch_rename_files signale le nouveau chemin au lecteur (E19)',
+        () async {
+      final pathA = await makeTrack('a.mp3');
+      final songA = song(1, 'Titre A', 'Artiste A', pathA);
+      library.songs = [songA];
+      player.current = songA;
+      player.queueList = [songA];
+      final ctx = _ctx(container().read(_refProbe));
+
+      const tool = BatchRenameFilesTool();
+      final result = await tool.execute(ctx, {'query': 'Titre A'});
+      expect(result.ok, isTrue, reason: result.message);
+      final renamed =
+          '${tempDir.path}${Platform.pathSeparator}Artiste A - Titre A.mp3';
+      expect(await File(renamed).exists(), isTrue);
+      expect(player.pathUpdates, [(pathA, renamed)]);
+    });
+
+    test('move_songs signale le nouveau chemin au lecteur (E19)', () async {
+      final pathA = await makeTrack('a.mp3');
+      final songA = song(1, 'Titre A', 'Artiste A', pathA);
+      library.songs = [songA];
+      player.current = songA;
+      player.queueList = [songA];
+      final dest = Directory('${tempDir.path}${Platform.pathSeparator}dest');
+      final ctx = _ctx(container().read(_refProbe));
+
+      const tool = MoveSongsTool();
+      final result = await tool.execute(
+        ctx,
+        {'folder': dest.path, 'query': 'Titre A'},
+      );
+      expect(result.ok, isTrue, reason: result.message);
+      final moved = '${dest.path}${Platform.pathSeparator}a.mp3';
+      expect(await File(moved).exists(), isTrue);
+      expect(player.pathUpdates, [(pathA, moved)]);
+    });
+
+    test('change_cover refuse un RIFF qui n’est pas WebP (E21)', () async {
+      final pathA = await makeTrack('a.mp3');
+      final songA = song(1, 'Titre A', 'Artiste A', pathA);
+      library.songs = [songA];
+      player.current = songA;
+      // WAV : RIFF + taille + « WAVE » — pas une image.
+      final wav = File('${tempDir.path}${Platform.pathSeparator}son.wav');
+      await wav.writeAsBytes(Uint8List.fromList([
+        ...'RIFF'.codeUnits,
+        0, 0, 0, 0,
+        ...'WAVE'.codeUnits,
+        ...List<int>.generate(64, (i) => i),
+      ]));
+      final ctx = _ctx(container().read(_refProbe));
+
+      const tool = ChangeCoverTool();
+      final result = await tool.execute(ctx, {'image': wav.path});
+      expect(result.ok, isFalse);
+      expect(result.message, contains('pas une image reconnue'));
+    });
+
+    test('change_cover accepte un vrai WebP (E21)', () async {
+      final pathA = await makeTrack('a.mp3');
+      final songA = song(1, 'Titre A', 'Artiste A', pathA);
+      library.songs = [songA];
+      player.current = songA;
+      final webp = File('${tempDir.path}${Platform.pathSeparator}pochette.webp');
+      await webp.writeAsBytes(Uint8List.fromList([
+        ...'RIFF'.codeUnits,
+        0, 0, 0, 0,
+        ...'WEBP'.codeUnits,
+        ...'VP8 '.codeUnits,
+        ...List<int>.generate(32, (i) => i),
+      ]));
+      final ctx = _ctx(container().read(_refProbe));
+
+      const tool = ChangeCoverTool();
+      final result = await tool.execute(ctx, {'image': webp.path});
+      expect(result.ok, isTrue, reason: result.message);
+    });
+
+    test('change_cover refuse une image de plus de 20 Mo (E22)', () async {
+      final pathA = await makeTrack('a.mp3');
+      final songA = song(1, 'Titre A', 'Artiste A', pathA);
+      library.songs = [songA];
+      player.current = songA;
+      final big = File('${tempDir.path}${Platform.pathSeparator}grosse.jpg');
+      await big.writeAsBytes(Uint8List(20 * 1024 * 1024 + 1));
+      final ctx = _ctx(container().read(_refProbe));
+
+      const tool = ChangeCoverTool();
+      final result = await tool.execute(ctx, {'image': big.path});
+      expect(result.ok, isFalse);
+      expect(result.message, contains('trop volumineuse'));
+    });
+
+    test('edit_tags invalide la liste après écriture (E25)', () async {
+      final pathA = await makeTrack('a.mp3');
+      final songA = song(1, 'Titre A', 'Artiste A', pathA);
+      library.songs = [songA];
+      player.current = songA;
+      final testContainer = container();
+      final ctx = _ctx(testContainer.read(_refProbe));
+
+      // Première lecture : construit la liste une fois.
+      expect(await testContainer.read(songListProvider.future), [songA]);
+      expect(library.builds, 1);
+
+      const tool = EditTagsTool();
+      final result = await tool.execute(ctx, {'title': 'Nouveau Titre'});
+      expect(result.ok, isTrue, reason: result.message);
+
+      // La liste est reconstruite à la lecture suivante : l'invalidation a
+      // eu lieu, le titre affiché ne reste pas l'ancien.
+      await testContainer.read(songListProvider.future);
+      expect(library.builds, 2);
+    });
+
+    test('aucun .tmp orphelin après succès ou échec d’écriture (E23/E24)',
+        () async {
+      final pathA = await makeTrack('a.mp3');
+      final songA = song(1, 'Titre A', 'Artiste A', pathA);
+      library.songs = [songA];
+      player.current = songA;
+      final ctx = _ctx(container().read(_refProbe));
+
+      const tool = EditTagsTool();
+      // Succès.
+      var result = await tool.execute(ctx, {'title': 'Nouveau Titre'});
+      expect(result.ok, isTrue, reason: result.message);
+      // Échec : fichier disparu entre la confirmation et l'écriture.
+      await File(pathA).delete();
+      result = await tool.execute(ctx, {'title': 'Autre Titre'});
+      expect(result.ok, isFalse);
+
+      final leftovers = await tempDir
+          .list()
+          .where((e) => e.path.endsWith('.tmp'))
+          .toList();
+      expect(leftovers, isEmpty);
+    });
+
+    test(
+        'deux écritures concurrentes sur le même morceau ne se marchent '
+        'pas dessus (E23)', () async {
+      final pathA = await makeTrack('a.mp3');
+      final songA = song(1, 'Titre A', 'Artiste A', pathA);
+      library.songs = [songA];
+      player.current = songA;
+      final ctx = _ctx(container().read(_refProbe));
+
+      const tool = EditTagsTool();
+      final results = await Future.wait([
+        tool.execute(ctx, {'title': 'Titre Un'}),
+        tool.execute(ctx, {'title': 'Titre Deux'}),
+      ]);
+      for (final result in results) {
+        expect(result.ok, isTrue, reason: result.message);
+      }
+      final leftovers = await tempDir
+          .list()
+          .where((e) => e.path.endsWith('.tmp'))
+          .toList();
+      expect(leftovers, isEmpty);
     });
   });
 }
