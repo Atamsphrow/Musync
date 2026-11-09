@@ -159,10 +159,10 @@ class LyricsSourceStore {
   Future<List<LyricsSourceConfig>> load() async {
     try {
       final file = await _file();
-      if (!await file.exists()) return builtInSources;
+      if (!await file.exists()) return List.of(builtInSources);
 
       final decoded = jsonDecode(await file.readAsString());
-      if (decoded is! List) return builtInSources;
+      if (decoded is! List) return List.of(builtInSources);
 
       final configs = <LyricsSourceConfig>[
         for (final entry in decoded) ?LyricsSourceConfig.fromJson(entry),
@@ -178,7 +178,7 @@ class LyricsSourceStore {
         error: error,
         stackTrace: stack,
       );
-      return builtInSources;
+      return List.of(builtInSources);
     }
   }
 
