@@ -98,8 +98,14 @@ abstract class AiTool {
   /// Ce que fait l'outil, en français — c'est ce que lit le LLM.
   String get description;
 
-  /// Schéma JSON simplifié des arguments, montré au LLM.
-  /// Ex. : `{"query": "string, optionnel — titre ou artiste"}`.
+  /// Description des arguments, montrée au LLM — PAS un JSON Schema.
+  ///
+  /// Les valeurs sont des descriptions en prose (« string, optionnel — … »),
+  /// interpolées telles quelles dans le prompt système
+  /// (`AiToolRegistry._schemaLine`) ; aucun validateur JSON Schema ne les
+  /// reçoit jamais, et `assistant_controller` ne fait que `containsKey`.
+  /// Ne pas les convertir en schémas objets sans adapter aussi ce rendu
+  /// texte et la validation — la forme chaîne est la convention du projet.
   Map<String, Object?> get parametersSchema;
 
   /// Vrai quand l'exécution exige une confirmation explicite (dialogue T3) :
