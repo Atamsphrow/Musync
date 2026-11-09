@@ -10,15 +10,34 @@ import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/settings/providers/excluded_files_provider.dart';
 
 /// Le fichier visé, résolu dans cet ordre :
-/// 1. `path` — le chemin exact, tel que donné ;
+/// 1. `path` — le chemin exact, tel que donné, s'il appartient à la
+///    bibliothèque ([requireInLibrary]) ;
 /// 2. `query` — titre ou artiste : le fichier du morceau trouvé ;
 /// 3. rien — le fichier du morceau en cours de lecture.
+///
+/// [requireInLibrary] est vrai pour l'exclusion : exclure un chemin hors
+/// bibliothèque n'a aucun sens (et un chemin inventé polluerait la liste des
+/// exclus). Faux pour la réintégration : un fichier exclu n'est justement
+/// plus dans la bibliothèque, il doit quand même pouvoir en sortir.
 Future<String> _resolveSongFile(
   AiToolContext ctx,
-  Map<String, Object?> args,
-) async {
+  Map<String, Object?> args, {
+  bool requireInLibrary = true,
+}) async {
   final path = optString(args, 'path');
-  if (path != null && path.trim().isNotEmpty) return path.trim();
+  if (path != null && path.trim().isNotEmpty) {
+    final trimmed = path.trim();
+    if (requireInLibrary) {
+      final inLibrary = (await librarySongs(ctx.ref))
+          .any((song) => song.filePath == trimmed);
+      if (!inLibrary) {
+        throw AiToolArgError(
+          '« $trimmed » ne fait pas partie de la bibliothèque.',
+        );
+      }
+    }
+    return trimmed;
+  }
   final query = optString(args, 'query');
   if (query != null && query.trim().isNotEmpty) {
     final hits = matchSongs(await librarySongs(ctx.ref), query);
@@ -121,7 +140,7 @@ class IncludeSongTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
-    final file = await _resolveSongFile(ctx, args);
+    final file = await _resolveSongFile(ctx, args, requireInLibrary: false);
     return 'Réintégrer le fichier « $file » dans la bibliothèque.';
   }
 
@@ -130,7 +149,7 @@ class IncludeSongTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
-    final file = await _resolveSongFile(ctx, args);
+    final file = await _resolveSongFile(ctx, args, requireInLibrary: false);
     await ctx.ref.read(excludedFilesProvider.notifier).remove(file);
     return AiToolResult.ok('Fichier réintégré : « $file ».');
   }
