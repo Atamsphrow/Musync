@@ -1,6 +1,7 @@
 // The sleep timer's options and state: durations, French labels, and the
 // active flag the now-playing button reads. Pure logic only — the timing
 // itself lives in [SleepTimerController] and needs a real player.
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:musync/features/player/providers/sleep_timer_provider.dart';
 
@@ -69,6 +70,36 @@ void main() {
         const SleepTimerState(option: SleepTimerOption.min30).displayLabel,
         '30 min',
       );
+    });
+  });
+
+  group('SleepTimerController.setCustomMinutes', () {
+    test('zero or negative minutes are ignored, even in release', () async {
+      // The old `assert(minutes > 0)` was stripped in release, so 0
+      // started a `Timer(Duration.zero)` that paused playback at once.
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final notifier = container.read(sleepTimerProvider.notifier);
+
+      notifier.setCustomMinutes(0);
+      expect(container.read(sleepTimerProvider).active, isFalse);
+
+      notifier.setCustomMinutes(-5);
+      expect(container.read(sleepTimerProvider).active, isFalse);
+    });
+
+    test('a valid custom duration starts a timer', () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final notifier = container.read(sleepTimerProvider.notifier);
+
+      notifier.setCustomMinutes(20);
+
+      final state = container.read(sleepTimerProvider);
+      expect(state.active, isTrue);
+      expect(state.option, SleepTimerOption.custom);
+      expect(state.customMinutes, 20);
+      expect(state.remaining, const Duration(minutes: 20));
     });
   });
 }
