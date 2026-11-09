@@ -52,10 +52,26 @@ void main() {
         'not a map',
         <String, Object?>{},
         {'lyricsOffsetMs': 'later'},
-        {'lyricsOffsetMs': 1.5},
       ]) {
         expect(PlaybackSettings.fromJson(raw), const PlaybackSettings());
       }
+    });
+
+    test('a double offset is read, not dropped', () {
+      // jsonDecode yields a double for `250.0`: rejecting it as "not an
+      // int" silently dropped the user's offset.
+      expect(
+        PlaybackSettings.fromJson({'lyricsOffsetMs': 250.0}),
+        const PlaybackSettings(lyricsOffsetMs: 250),
+      );
+      expect(
+        PlaybackSettings.fromJson({'lyricsOffsetMs': 1.5}).lyricsOffsetMs,
+        1,
+      );
+      expect(
+        PlaybackSettings.fromJson({'lyricsOffsetMs': 90000.0}).lyricsOffsetMs,
+        PlaybackSettings.maxOffsetMs,
+      );
     });
   });
 
