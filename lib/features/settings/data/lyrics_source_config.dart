@@ -19,9 +19,6 @@ enum LyricsSourceKind {
   /// Anything speaking LRCLIB's API: the bundled instance, a mirror, or a
   /// self-hosted copy. Returns timed lyrics.
   lrclib,
-
-  /// api.lyrics.ovh. Plain words, never timings, and nothing to configure.
-  lyricsOvh,
 }
 
 /// One entry in the sources list.
@@ -81,6 +78,12 @@ class LyricsSourceConfig {
     final baseUrl = raw['baseUrl'];
     if (id is! String || name is! String || baseUrl is! String) return null;
     if (id.isEmpty || baseUrl.isEmpty) return null;
+    // Migration (L94) : lyrics.ovh est retiré. Une entrée stockée avec
+    // `kind: "lyricsOvh"` — seul chemin qui pouvait encore le produire,
+    // via un JSON forgé — est abandonnée (null) au lieu d'être relue :
+    // le service n'est plus jamais interrogé. L'entrée disparaît du
+    // fichier au prochain `save()`, qui réécrit la liste chargée.
+    if (raw['kind'] == 'lyricsOvh') return null;
     // Same bar as the settings screen's validateBaseUrl: the file/import
     // path skips that UI check, so a forged entry must not smuggle a
     // scheme the network layer would then feed to Uri.parse('$baseUrl/get').
