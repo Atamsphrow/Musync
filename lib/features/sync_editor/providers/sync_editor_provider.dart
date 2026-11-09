@@ -435,9 +435,14 @@ class SyncEditorNotifier extends StateNotifier<SyncEditorState> {
   void removeLine(int index) {
     if (index < 0 || index >= state.lines.length) return;
     final lines = List<LyricLine>.from(state.lines)..removeAt(index);
+    // The cursor names a line, not a position in the list: removing a line
+    // above it shifts every line after it down by one, and leaving the
+    // number alone would stamp the wrong line next. (Removing the cursor's
+    // own line is fine as-is: the next line slides into its place.)
+    final cursor = index < state.cursor ? state.cursor - 1 : state.cursor;
     state = state.copyWith(
       lines: lines,
-      cursor: state.cursor.clamp(0, lines.length),
+      cursor: cursor.clamp(0, lines.length),
       hasChanges: true,
     );
   }
