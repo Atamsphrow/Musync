@@ -19,6 +19,7 @@ import 'package:musync/core/theme/artwork_scheme_provider.dart';
 import 'package:musync/core/utils/duration_format.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/core/services/media_store.dart';
+import 'package:musync/features/lyrics/data/ai_lyrics_finder.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
@@ -1304,6 +1305,8 @@ class _LyricsActions extends ConsumerWidget {
                 showQueuesSheet(context);
               case 'timer':
                 showSleepTimerSheet(context);
+              case 'verify':
+                _showVerifyLyricsSheet(context, ref, song!);
             }
           },
           itemBuilder: (context) => [
@@ -1324,6 +1327,16 @@ class _LyricsActions extends ConsumerWidget {
                   Icon(Icons.playlist_play, size: 20),
                   SizedBox(width: 12),
                   Text('Files d’attente'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'verify',
+              child: Row(
+                children: [
+                  Icon(Icons.fact_check, size: 20),
+                  SizedBox(width: 12),
+                  Text('Vérifier les paroles'),
                 ],
               ),
             ),
@@ -1414,6 +1427,180 @@ class _LyricsActions extends ConsumerWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Bottom sheet « Vérifier les paroles » (menu de « Lecture en cours »).
+///
+/// Lance une vérification à sec via [AiLyricsFinder] : rien n'est écrit.
+/// Le meilleur candidat (confiance 80 % ou plus) peut être intégré d'un
+/// tap, ou la recherche s'ouvre avec la requête pré-remplie.
+Future<void> _showVerifyLyricsSheet(
+  BuildContext context,
+  WidgetRef ref,
+  Song song,
+) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (_) => _VerifyLyricsSheet(song: song),
+  );
+}
+
+class _VerifyLyricsSheet extends ConsumerStatefulWidget {
+  const _VerifyLyricsSheet({required this.song});
+
+  final Song song;
+
+  @override
+  ConsumerState<_VerifyLyricsSheet> createState() =>
+      _VerifyLyricsSheetState();
+}
+
+class _VerifyLyricsSheetState extends ConsumerState<_VerifyLyricsSheet> {
+  late final Future<LyricsFindResult> _check;
+
+  bool _integrating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _check = ref
+        .read(aiLyricsFinderProvider)
+        .findFor(widget.song, dryRun: true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+        child: FutureBuilder<LyricsFindResult>(
+          future: _check,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 12),
+                  Text('Vérification des paroles en cours…'),
+                ],
+              );
+            }
+            if (snapshot.hasError || snapshot.data == null) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Vérifier les paroles', style: textTheme.titleLarge),
+                  const SizedBox(height: 8),
+                  Text(
+                    snapshot.hasError
+                        ? 'Vérification impossible : ${snapshot.error}'
+                        : 'Vérification impossible.',
+                  ),
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Fermer'),
+                    ),
+                  ),
+                ],
+              );
+            }
+            final result = snapshot.data!;
+            final canIntegrate =
+                result.verdict == LyricsFindVerdict.integrated &&
+                result.best != null;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Vérifier les paroles', style: textTheme.titleLarge),
+                const SizedBox(height: 8),
+                Text(result.note ?? ''),
+                if (result.top.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  ...result.top.map(
+                    (candidate) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        '« ${candidate.title} » — ${candidate.artist}',
+                      ),
+                      subtitle: Text(
+                        '${candidate.source} · '
+                        'confiance ${(candidate.confidence * 100).round()} %'
+                        '${candidate.hasSyncedLyrics ? ' · synchronisées' : ' · texte seul'}',
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    if (canIntegrate)
+                      FilledButton(
+                        onPressed: _integrating ? null : _integrateBest,
+                        child: const Text('Intégrer le meilleur'),
+                      ),
+                    if (canIntegrate) const SizedBox(width: 8),
+                    OutlinedButton(
+                      onPressed: _openSearch,
+                      child: const Text('Ouvrir la recherche'),
+                    ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Fermer'),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _integrateBest() async {
+    final result = await _check;
+    final best = result.best;
+    if (best == null) return;
+    setState(() => _integrating = true);
+    final done = await ref
+        .read(aiLyricsFinderProvider)
+        .replaceWith(
+          widget.song,
+          best,
+          queriedTitle: result.queriedTitle,
+          queriedArtist: result.queriedArtist,
+        );
+    if (!mounted) return;
+    Navigator.of(context).pop();
+    ScaffoldMessenger.of(context).showOnly(
+      SnackBar(content: Text(done.note ?? 'Paroles intégrées.')),
+    );
+  }
+
+  void _openSearch() async {
+    final result = await _check;
+    if (!mounted) return;
+    Navigator.of(context).pop();
+    Navigator.of(context).pushNamed(
+      AppRoutes.lyricsSearch,
+      arguments: SongRouteArgs(
+        song: widget.song,
+        initialTitle: result.queriedTitle.isEmpty ? null : result.queriedTitle,
+        initialArtist: result.queriedArtist.isEmpty
+            ? null
+            : result.queriedArtist,
       ),
     );
   }
