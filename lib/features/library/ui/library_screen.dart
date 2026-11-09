@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show File, FileStat, FileSystemEntityType, Platform;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:musync/core/utils/snackbar.dart';
@@ -86,6 +87,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// item extent, so the target offset is exact once the settled list content
   /// is known (see [_jumpToVisibleSong]).
   int _locateIndex = -1;
+
+  /// Cancels the pending outline clear when a new locate starts, so a
+  /// second locate on the same track is not cut short by the first one's
+  /// timer (see [_jumpToVisibleSong]).
+  Timer? _locateClearTimer;
 
   /// Conversation IA : l'historique vit ici tant que le mode chat est actif.
   /// Seule la croix × le fait quitter (et vide l'historique) : une fois la
@@ -318,13 +324,22 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     for (var i = 0; i < 40; i++) {
       iterations = i + 1;
       if (!mounted) return;
-      final songs = ref.read(filteredSongsProvider).valueOrNull;
+      // Only an AsyncData value is current: `valueOrNull` also returns the
+      // previous list while a reload is in flight, and resolving the index
+      // against that stale list jumps to the wrong row.
+      final async = ref.read(filteredSongsProvider);
+      final songs = async is AsyncData<List<Song>> ? async.value : null;
       lastCount = songs?.length ?? -1;
       final index = songs?.indexWhere((s) => s.filePath == filePath) ?? -1;
       lastIndex = index;
+      // A list shorter than the viewport never scrolls
+      // (`maxScrollExtent == 0`): the target row is already visible, so a
+      // zero extent settles too — requiring `extent >= index * rowH`
+      // abandoned every locate past row 0 on a short list.
       if (index >= 0 &&
           controller.hasClients &&
-          controller.position.maxScrollExtent >= index * rowH) {
+          (controller.position.maxScrollExtent == 0 ||
+              controller.position.maxScrollExtent >= index * rowH)) {
         settledIndex = index;
         break;
       }
@@ -346,7 +361,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     setState(() => _locateIndex = index);
     // The content can swap under us while we waited (a scan landing, a
     // filter clearing): re-resolve against what's on screen right now.
-    final fresh = ref.read(filteredSongsProvider).valueOrNull;
+    // Same guard as above: only an AsyncData value is current, a stale
+    // `valueOrNull` would move the outline to the wrong row.
+    final freshAsync = ref.read(filteredSongsProvider);
+    final fresh =
+        freshAsync is AsyncData<List<Song>> ? freshAsync.value : null;
     final freshIndex = fresh?.indexWhere((s) => s.filePath == filePath) ?? -1;
     final useIndex = freshIndex >= 0 ? freshIndex : index;
     if (useIndex != index && mounted) setState(() => _locateIndex = useIndex);
@@ -363,8 +382,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       DebugLog.instance.info('Appui long', 'abandon : contrôleur détaché');
     }
     // The outline has served its flash: drop it so later rebuilds don't
-    // carry a stale one.
-    Future.delayed(const Duration(seconds: 2), () {
+    // carry a stale one. A cancellable, re-armable timer: a second locate
+    // restarts the 2 s, instead of the first timer cutting the second
+    // outline short when both target the same track.
+    _locateClearTimer?.cancel();
+    _locateClearTimer = Timer(const Duration(seconds: 2), () {
       if (mounted && _locateIndex == useIndex) {
         setState(() => _locateIndex = -1);
       }
@@ -473,6 +495,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   @override
   void dispose() {
+    _locateClearTimer?.cancel();
     _scrollProbe?.stop();
     appRouteObserver.unsubscribe(this);
     MediaStore.stopListeningForSharedAudio();
@@ -548,6 +571,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// files stay visible in the scanner's ignored-files list if needed.
   Future<void> _refreshLibrary() async {
     await ref.read(songListProvider.notifier).refresh();
+    if (!mounted) return;
     // Pull-to-refresh rebuilds the lyrics cache from the files' actual
     // contents: if another app (Musicolet) edited tags, the Sans paroles /
     // Synchronisées tabs and counts are updated, not served stale.
@@ -557,6 +581,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // The current track's lyrics are read straight from disk, bypassing
     // every cache.
     ref.invalidate(currentLyricsProvider);
+    // The library changed: the path→song index below must be rebuilt
+    // against the fresh list.
+    _pathIndex = null;
+    _pathIndexList = null;
     // Diagnostic for external edits (Musicolet): log exactly which file
     // Musync reads for the current track, so a path mismatch can be ruled
     // in or out from the Journal (Paramètres, long-press the title).
@@ -809,6 +837,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         arguments: SongRouteArgs(song: songs.first),
       );
     } else {
+      // Before navigating, not after: `pushNamed` only completes when the
+      // player is popped, so a SnackBar shown after it was only visible
+      // on the way back. Shown here it rides the root ScaffoldMessenger
+      // and stays visible over the player.
+      ScaffoldMessenger.of(context).showOnly(
+        SnackBar(
+          content: Text(
+            '${songs.length} morceaux partagés : lecture du premier, '
+            'les autres sont en file d\u2019attente.',
+          ),
+        ),
+      );
       await Navigator.pushNamed(
         context,
         AppRoutes.player,
@@ -821,16 +861,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           index: 0,
         ),
       );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showOnly(
-          SnackBar(
-            content: Text(
-              '${songs.length} morceaux partagés : lecture du premier, '
-              'les autres sont en file d\u2019attente.',
-            ),
-          ),
-        );
-      }
     }
 
     // And the ones missing synced lyrics are searched for silently in the
@@ -866,11 +896,21 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     ref.invalidate(lyricsStatusProvider);
   }
 
+  /// Path → song index, built once per library list: resolving every
+  /// shared path used to re-scan the whole list linearly, so a share of N
+  /// files cost O(N × library). Rebuilt when the list instance changes
+  /// (the provider hands back a fresh list on refresh) or when
+  /// [_refreshLibrary] drops it.
+  Map<String, Song>? _pathIndex;
+  List<Song>? _pathIndexList;
+
   Future<Song?> _findSong(String path) async {
-    for (final song in await ref.read(songListProvider.future)) {
-      if (song.filePath == path) return song;
+    final songs = await ref.read(songListProvider.future);
+    if (!identical(songs, _pathIndexList) || _pathIndex == null) {
+      _pathIndexList = songs;
+      _pathIndex = {for (final song in songs) song.filePath: song};
     }
-    return null;
+    return _pathIndex![path];
   }
 
   @override
@@ -883,6 +923,15 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     // different things to say to someone staring at a blank list.
     final libraryIsEmpty =
         ref.watch(songListProvider).valueOrNull?.isEmpty ?? false;
+
+    // The header bottom (search field + tabs) grows with the system font:
+    // a fixed 124 overflows past ~2x text scale. Scale it with the text
+    // scaler, capped at 2x, and hand it to the app bar so its preferred
+    // size and its bottom agree.
+    final bottomHeight = (124 *
+            MediaQuery.textScalerOf(context).scale(1))
+        .clamp(124.0, 248.0)
+        .toDouble();
 
     return PopScope(
       // Never pops on its own: the confirmation decides, and it decides by
@@ -897,6 +946,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
             ? null
             : _LibraryAppBar(
                 songsAsync: songsAsync,
+                bottomHeight: bottomHeight,
                 searchController: _searchController,
                 searchFocusNode: _searchFocusNode,
                 tabController: _tabController,
@@ -919,6 +969,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                     onNotification: (notification) {
                       // TEMPORARY probe (the lag hunt): observe the
                       // frames of any library scroll, stop at rest.
+                      // Debug only: in release this sampled every scroll
+                      // and persisted a journal line per frame batch.
+                      if (!kDebugMode) return false;
                       // Vertical only: the TabBarView's own page swipes
                       // bubble up here too and would pollute the series.
                       if (notification.metrics.axis != Axis.vertical) {
@@ -1033,6 +1086,10 @@ class _TabSongListState extends ConsumerState<_TabSongList>
           interactive: true,
           child: CustomScrollView(
             controller: widget.scrollController,
+            // Pull-to-refresh must work even when the list fits the
+            // viewport: the default ClampingScrollPhysics gives no
+            // overscroll then, so a short list could never be refreshed.
+            physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
               ...switch (songsAsync) {
                 AsyncData(:final value) when value.isEmpty => [
@@ -1132,8 +1189,13 @@ String _sortLabel(LibrarySort sort) => switch (sort) {
 
 class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
   @override
-  Size get preferredSize => const Size.fromHeight(kToolbarHeight + 124);
-  final AsyncValue<List> songsAsync;
+  Size get preferredSize => Size.fromHeight(kToolbarHeight + bottomHeight);
+  final AsyncValue<List<Song>> songsAsync;
+
+  /// Height of the header bottom (search field + tabs), scaled with the
+  /// system font by the caller: a fixed 124 overflows at a large text
+  /// scale, so the size and the bottom below must use the same value.
+  final double bottomHeight;
   final TextEditingController searchController;
   final FocusNode searchFocusNode;
 
@@ -1147,6 +1209,7 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
 
   const _LibraryAppBar({
     required this.songsAsync,
+    this.bottomHeight = 124,
     required this.searchController,
     required this.searchFocusNode,
     required this.tabController,
@@ -1217,9 +1280,10 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
       ],
       bottom: PreferredSize(
         // Measured tight at the default text scale: field, padding and tabs
-        // come to about 102. The margin is for a larger system font, where a
-        // fixed height that fits exactly turns into an overflow stripe.
-        preferredSize: const Size.fromHeight(124),
+        // come to about 102. [bottomHeight] is that 124 scaled with the
+        // system font (capped at 2x by the caller), so a larger font grows
+        // the bar instead of overflowing it.
+        preferredSize: Size.fromHeight(bottomHeight),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
