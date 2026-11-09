@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/library/data/music_scanner.dart';
 
 /// A user-managed playback queue: a name, a snapshot of songs, and the index
 /// of the song that was current when the queue was last active.
@@ -91,7 +94,11 @@ Map<String, dynamic> _songToJson(Song song) => {
     };
 
 Song _songFromJson(Map<String, dynamic> json) => Song(
-      id: (json['id'] as num?)?.toInt() ?? 0,
+      id: migrateStoredSongId(
+        (json['id'] as num?)?.toInt() ?? 0,
+        json['filePath'] as String? ?? '',
+        isIOS: Platform.isIOS,
+      ),
       title: json['title'] as String? ?? '',
       artist: json['artist'] as String? ?? '',
       album: json['album'] as String? ?? '',
@@ -99,3 +106,23 @@ Song _songFromJson(Map<String, dynamic> json) => Song(
       filePath: json['filePath'] as String? ?? '',
       albumId: (json['albumId'] as num?)?.toInt(),
     );
+
+/// Migration M121 : les ids iOS stockés sont des FNV-1a 32 bits, le hash
+/// est passé en 64 bits (voir `MusicScanner.stableIdForPath`).
+///
+/// Un id stocké ne se convertit pas seul — mais chaque morceau stocké porte
+/// aussi son `filePath`, dont l'id dérive : sur iOS, il est recalculé au
+/// chargement, et l'ancien id devient le nouveau sans perte d'état (le
+/// prochain `save()` réécrit la file avec les ids migrés). Côté Android
+/// l'id est celui de MediaStore, pas un hash du chemin : il est conservé
+/// tel quel. Sans chemin, il n'y a rien à recalculer : l'id stocké est
+/// conservé (un morceau sans chemin ne peut de toute façon pas être joué).
+///
+/// `isIOS` est un paramètre — et non `Platform.isIOS` lu ici — pour que la
+/// migration soit testable sous `flutter test` (Linux), où `Platform.isIOS`
+/// est toujours faux.
+@visibleForTesting
+int migrateStoredSongId(int stored, String path, {required bool isIOS}) {
+  if (!isIOS || path.isEmpty) return stored;
+  return MusicScanner.stableIdForPath(path);
+}
