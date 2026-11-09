@@ -1,7 +1,7 @@
 /// Settings › IA: the models, their keys, and what they are told to do.
 library;
 
-import 'dart:async' show unawaited;
+import 'dart:async' show scheduleMicrotask, unawaited;
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
@@ -107,7 +107,12 @@ class _InstructionCardState extends ConsumerState<_InstructionCard> {
     if (controller != null &&
         notifier != null &&
         controller.text != _savedInstruction) {
-      unawaited(notifier.setInstruction(controller.text));
+      // Deferred past this frame: dispose runs while the tree is being
+      // rebuilt (the screen is closing), and Riverpod forbids modifying a
+      // provider mid-build — the direct call throws in debug and the edit
+      // would be lost. A microtask runs right after the build.
+      final text = controller.text;
+      scheduleMicrotask(() => unawaited(notifier.setInstruction(text)));
     }
     _controller?.dispose();
     super.dispose();
