@@ -98,20 +98,30 @@ void main() {
       expect(await File(path).readAsBytes(), before);
     });
 
-    test('refuses an MP4: no backup, so no fake undo', () async {
+    test('backs up an MP4 with no ©lyr: empty blob, restore removes nothing', () async {
+      // Audit P8 : un MP4 ne se sauvegarde plus en refusant — la ©lyr
+      // courante (ici absente) est stockée dans un blob vide, et la
+      // restaurer supprime l'atome, donc ne touche pas au fichier.
       // A minimal ftyp box is all the container sniffing needs; the
       // rest is filler standing in for atoms.
       final path = '${tempDir.path}${Platform.pathSeparator}track.m4a';
-      await File(path).writeAsBytes([
+      final before = [
         0, 0, 0, 24, // atom size
         ...ascii.encode('ftyp'),
         ...ascii.encode('M4A '),
         0, 0, 0, 0,
         ...List<int>.generate(4096, (i) => (i * 5) % 256),
-      ]);
+      ];
+      await File(path).writeAsBytes(before);
 
-      expect(await store.capture(path), isFalse);
-      expect(await store.backupFor(path), isNull);
+      expect(await store.capture(path), isTrue);
+      expect(await store.backupFor(path), isNotNull);
+      // Ce fichier minimal n'a pas de moov : la restauration, qui
+      // réécrit l'atome ©lyr via M4aWriter, refuse plutôt que de
+      // corrompre. La restauration qui supprime est couverte sur un
+      // vrai M4A dans tag_backup_m4a_lyrics_test.dart.
+      await expectLater(store.restore(path), throwsA(isA<TagRestoreException>()));
+      expect(await File(path).readAsBytes(), before);
     });
 
     test('leaves the audio untouched when the tag grew', () async {
