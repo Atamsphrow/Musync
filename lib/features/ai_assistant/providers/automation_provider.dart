@@ -105,6 +105,15 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
     }
   }
 
+  /// Suffixe d'unicité des ids : `microsecondsSinceEpoch` seul peut
+  /// collisionner quand deux `schedule*` lisent l'horloge au même instant
+  /// (résolution réelle en millisecondes sur Android). Le compteur est
+  /// statique pour rester unique entre deux instances du notifier.
+  static int _idCounter = 0;
+
+  static String _newId() =>
+      'sched-${DateTime.now().microsecondsSinceEpoch}-${_idCounter++}';
+
   /// « demain à 7h, joue ma file Nuit ». [at] en heure locale, dans le futur.
   ///
   /// Un [at] passé est rejeté ici, pas seulement par l'outil appelant : le
@@ -126,13 +135,15 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
           );
         }
         final action = ScheduledAction(
-          id: 'sched-${DateTime.now().microsecondsSinceEpoch}',
+          id: _newId(),
           daily: false,
           fireAtMillis: at.millisecondsSinceEpoch,
           hour: at.hour,
           minute: at.minute,
           toolName: tool,
-          args: args,
+          // Copie défensive : la Map de l'appelant ne doit pas pouvoir
+          // modifier l'action en mémoire après coup.
+          args: Map<String, Object?>.of(args),
           label: label,
         );
         final current = state.valueOrNull ?? const AutomationsDoc();
@@ -155,13 +166,14 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
         await _ready();
         final now = DateTime.now();
         final action = ScheduledAction(
-          id: 'sched-${now.microsecondsSinceEpoch}',
+          id: _newId(),
           daily: true,
           fireAtMillis: ScheduledAction.nextDailyFire(hour, minute, now),
           hour: hour,
           minute: minute,
           toolName: tool,
-          args: args,
+          // Copie défensive : voir `scheduleOnce`.
+          args: Map<String, Object?>.of(args),
           label: label,
         );
         final current = state.valueOrNull ?? const AutomationsDoc();
@@ -279,7 +291,8 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
           actions: current.actions,
           headphoneTrigger: HeadphoneTrigger(
             toolName: tool,
-            args: args,
+            // Copie défensive : voir `scheduleOnce`.
+            args: Map<String, Object?>.of(args),
             label: label,
           ),
         ));
