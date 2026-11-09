@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 
 /// Réarme les automatisations après un redémarrage : les alarmes
 /// `AlarmManager` ne survivent pas au reboot.
@@ -89,8 +90,11 @@ class BootReceiver : BroadcastReceiver() {
                     alarmManager.setAlarmClock(
                         AlarmManager.AlarmClockInfo(trigger, showPending), pending,
                     )
-                } catch (_: Exception) {
-                    // Skipped on purpose — see above.
+                } catch (e: Exception) {
+                    // Une alarme ignorée doit rester visible : sans ce log,
+                    // une automatisation non réarmée après boot (permission
+                    // révoquée, par ex.) était indiagnosticable.
+                    Log.w("MusyncBoot", "Alarme $id non réarmée après boot", e)
                 }
             }
 
