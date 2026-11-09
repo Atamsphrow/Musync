@@ -123,16 +123,24 @@ class MusicScanner {
     '.mp3', '.m4a', '.mp4', '.flac', '.ogg', '.oga', '.opus', '.wav', '.aac',
   };
 
-  /// Id stable d'un morceau iOS, dérivé de son chemin (FNV-1a 32 bits).
+  /// Id stable d'un morceau iOS, dérivé de son chemin (FNV-1a 64 bits,
+  /// masqué à 63 bits pour rester positif).
   ///
   /// `String.hashCode` n'est pas contractuellement stable d'un lancement à
   /// l'autre ; ce hash-ci l'est, ce qui évite que toute la bibliothèque
   /// change d'identifiant à chaque redémarrage.
+  ///
+  /// M121 : l'empreinte était en 32 bits — sur une bibliothèque de quelques
+  /// milliers de fichiers, le risque de collision devenait non négligeable,
+  /// et `Song ==` ne compare que l'id : deux morceaux distincts devenaient
+  /// égaux (file d'attente, déduplication, pochettes). La migration des ids
+  /// stockés est dans `migrateStoredSongId` (`named_queue.dart`) : chaque
+  /// morceau stocké porte aussi son chemin, dont l'id dérive.
   static int stableIdForPath(String path) {
-    var hash = 0x811c9dc5;
+    var hash = 0xcbf29ce484222325;
     for (final unit in path.codeUnits) {
       hash ^= unit;
-      hash = (hash * 0x01000193) & 0xffffffff;
+      hash = (hash * 0x100000001b3) & 0x7fffffffffffffff;
     }
     return hash;
   }
