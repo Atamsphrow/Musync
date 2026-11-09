@@ -124,7 +124,16 @@ class SleepTimerController extends Notifier<SleepTimerState> {
           _onTrackEnded();
         }
       });
-      _completionSub = service.playerStateStream.listen((playerState) {
+      // G72: `playerStateStream` is just_audio's BehaviorSubject: subscribing
+      // replays its current value at once. If the player already sits on
+      // `completed` (last track ended before the timer was set), that replay
+      // is not a track ending under this timer — it would cancel the timer
+      // the instant it is armed. Only a `completed` that arrives after the
+      // subscription counts. The service getter itself is left alone:
+      // `playerStateProvider` needs the current value at subscription.
+      _completionSub = service.playerStateStream.skip(1).listen((
+        playerState,
+      ) {
         if (playerState.processingState == ProcessingState.completed) {
           _onTrackEnded();
         }
