@@ -100,7 +100,7 @@ class PermissionService {
     // worst: the caller then asks for all-files access instead of
     // wrongly reporting that writes will work.
     final sdk = await MediaStore.sdkInt();
-    if (sdk != null && sdk < 30) return Permission.storage.isGranted;
+    if (sdk != null && sdk < 30) return await Permission.storage.isGranted;
     return false;
   }
 
