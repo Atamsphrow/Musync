@@ -717,21 +717,25 @@ class M4aWriter {
 
   // ── Atom parsing ──
 
-  /// A parsed atom header.
-  static _AtomHeader? _readHeader(Uint8List bytes, int offset) {
-    if (offset + 8 > bytes.length) return null;
+  /// A parsed atom header, bounded by [end] — the end of the enclosing atom,
+  /// not the end of the file. A child whose declared size overruns its parent
+  /// is rejected even when it still fits in the file: trusting it let
+  /// [_shiftEntries] write chunk offsets past `stbl` into the neighbouring
+  /// atoms.
+  static _AtomHeader? _readHeader(Uint8List bytes, int offset, int end) {
+    if (offset + 8 > end) return null;
     var size = _readU32(bytes, offset);
     var headerSize = 8;
     if (size == 1) {
       // 64-bit largesize.
-      if (offset + 16 > bytes.length) return null;
+      if (offset + 16 > end) return null;
       size = _readU64(bytes, offset + 8);
       headerSize = 16;
     } else if (size == 0) {
-      // Extends to end of file.
-      size = bytes.length - offset;
+      // Extends to the end of the enclosing atom, not the file.
+      size = end - offset;
     }
-    if (size < headerSize || offset + size > bytes.length) return null;
+    if (size < headerSize || offset + size > end) return null;
     return _AtomHeader(
       offset: offset,
       size: size,
@@ -751,7 +755,7 @@ class M4aWriter {
     final atoms = <_AtomHeader>[];
     var offset = base + childrenStart;
     while (offset + 8 <= end) {
-      final header = _readHeader(bytes, offset);
+      final header = _readHeader(bytes, offset, end);
       if (header == null) break;
       if (!_looksLikeType(header.type)) {
         // Custom atom with a non-ASCII type: skip it by its (sane) size
