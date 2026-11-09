@@ -52,11 +52,20 @@ class ScheduledAction {
   }
 
   /// « Tous les jours à 22:00 » / « Le ven. 9 oct. à 07:00 ».
+  ///
+  /// Pour une action unique, la date ET l'heure viennent de [fireAtMillis]
+  /// (la prochaine exécution réelle) : afficher l'heure des champs
+  /// [hour]/[minute] mentait dès qu'ils divergeaient de `fireAtMillis`
+  /// (DST, changement de fuseau, resync partielle).
   String describeSchedule() {
-    final hh = hour.toString().padLeft(2, '0');
-    final mm = minute.toString().padLeft(2, '0');
-    if (daily) return 'Tous les jours à $hh:$mm';
+    if (daily) {
+      final hh = hour.toString().padLeft(2, '0');
+      final mm = minute.toString().padLeft(2, '0');
+      return 'Tous les jours à $hh:$mm';
+    }
     final at = DateTime.fromMillisecondsSinceEpoch(fireAtMillis);
+    final hh = at.hour.toString().padLeft(2, '0');
+    final mm = at.minute.toString().padLeft(2, '0');
     return 'Le ${_frenchDay(at)} à $hh:$mm';
   }
 
