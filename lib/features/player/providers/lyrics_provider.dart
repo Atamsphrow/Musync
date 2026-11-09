@@ -25,37 +25,34 @@ import 'package:musync/features/settings/providers/playback_settings_provider.da
 /// rebuild, re-yielding and rebuilding in a loop. One stat every two seconds
 /// for the app's lifetime is negligible; the container's disposal still stops
 /// it in tests.
+///
+/// The stat is the file's mtime + size in one call. The lyrics frames are
+/// only re-read when that stat moves (see [lyricsContentHash]): walking the
+/// ID3 frames every 2 s cost a full tag read for a value that only changes
+/// when the file does.
 final _currentSongMtimeProvider = StreamProvider<int>((ref) async* {
   final song = ref.watch(currentSongProvider);
   if (song == null) return;
 
-  Future<int> mtime() async {
+  /// (mtime, size) of the file, (-1, -1) when it cannot be stat'ed.
+  Future<(int, int)> fileStat() async {
     try {
-      return (await File(song.filePath).lastModified()).millisecondsSinceEpoch;
+      final stat = await File(song.filePath).stat();
+      return (stat.modified.millisecondsSinceEpoch, stat.size);
     } catch (_) {
-      return -1;
+      return (-1, -1);
     }
   }
 
   // Content hash of the lyrics frames: some tag editors (Musicolet) preserve
   // the mtime when writing, so mtime alone misses their edits. Hashing the
-  // actual lyrics bytes catches every change. The read is frame-walking
-  // (no cover art), so it's cheap enough for a 5 s poll.
+  // actual lyrics bytes catches every change. Only computed when the file's
+  // stat moved (mtime or size) — re-walking the frames on every 2 s tick
+  // was the poll's whole cost, for a value that cannot change otherwise.
   Future<int> lyricsHash() async {
     try {
       final pair = await Id3Reader.readLyricsFrames(song.filePath);
-      final synced = pair.synced;
-      final unsynced = pair.unsynced;
-      var h = 0;
-      if (synced != null) {
-        for (final line in synced.lines) {
-          h = h * 31 + (line.timestamp?.inMilliseconds ?? 0);
-          h = h * 31 + line.text.hashCode;
-        }
-      } else if (unsynced != null) {
-        h = unsynced.text.hashCode;
-      }
-      return h;
+      return lyricsContentHash(pair.synced, pair.unsynced);
     } catch (_) {
       return -1;
     }
@@ -79,7 +76,7 @@ final _currentSongMtimeProvider = StreamProvider<int>((ref) async* {
     return -1;
   }
 
-  var lastMtime = await mtime();
+  var (lastMtime, lastSize) = await fileStat();
   var lastHash = await lyricsHash();
   var lastSidecar = await sidecarMtime();
   await for (final _ in Stream.periodic(const Duration(seconds: 2))) {
@@ -87,13 +84,20 @@ final _currentSongMtimeProvider = StreamProvider<int>((ref) async* {
     // lyrics-frame read, two sidecar checks every 2 s) buys nothing —
     // refreshLyricsOnForeground re-reads everything on resume anyway.
     if (!ref.read(appForegroundProvider)) continue;
-    final currentMtime = await mtime();
-    final currentHash = await lyricsHash();
+    final (currentMtime, currentSize) = await fileStat();
+    // The frames are re-read only when the file moved: same mtime and
+    // same size means the lyrics bytes cannot have changed, so the
+    // cached hash is reused instead of a fresh frame walk.
+    final currentHash = currentMtime != lastMtime || currentSize != lastSize
+        ? await lyricsHash()
+        : lastHash;
     final currentSidecar = await sidecarMtime();
     if (currentMtime != lastMtime ||
+        currentSize != lastSize ||
         currentHash != lastHash ||
         currentSidecar != lastSidecar) {
       lastMtime = currentMtime;
+      lastSize = currentSize;
       lastHash = currentHash;
       lastSidecar = currentSidecar;
       yield currentMtime;
@@ -101,10 +105,44 @@ final _currentSongMtimeProvider = StreamProvider<int>((ref) async* {
   }
 });
 
+/// Change-detection hash of a song's lyrics frames — FNV-1a 64-bit over the
+/// synced lines (timestamp + text) and the unsynced text.
+///
+/// Both frames are hashed, never one or the other: an external edit touching
+/// only the USLT while a SYLT exists used to leave the hash unchanged and
+/// slip past the poll. `String.hashCode` is a 32-bit hash, so collisions
+/// were a matter of time; FNV-1a over the raw code units gives 64 bits.
+///
+/// Change detection only — never a fingerprint, never persisted, never
+/// compared across runs (the comparison is always within one execution).
+int lyricsContentHash(SyncedLyrics? synced, UnsyncedLyrics? unsynced) {
+  var h = 0xcbf29ce484222325;
+  void mix(int value) {
+    h = (h ^ value) * 0x100000001b3;
+  }
+
+  void mixText(String text) {
+    for (final unit in text.codeUnits) {
+      mix(unit);
+    }
+    mix(0xFF); // Separator: "ab"+"c" must differ from "a"+"bc".
+  }
+
+  if (synced != null) {
+    for (final line in synced.lines) {
+      mix(line.timestamp?.inMilliseconds ?? -1);
+      mixText(line.text);
+    }
+  }
+  mix(0xFE); // Separator between the synced and unsynced parts.
+  if (unsynced != null) mixText(unsynced.text);
+  return h;
+}
+
 final currentLyricsProvider =
-    FutureProvider<({Song? song, SyncedLyrics? synced, UnsyncedLyrics? unsynced})>((
-      ref,
-    ) async {
+    FutureProvider<
+      ({Song? song, SyncedLyrics? synced, UnsyncedLyrics? unsynced})
+    >((ref) async {
       final currentSong = ref.watch(currentSongProvider);
       if (currentSong == null) {
         return (song: null, synced: null, unsynced: null);
@@ -161,7 +199,9 @@ const Duration lineRefreshInterval = Duration(milliseconds: 16);
 /// Index of the line that should be lit right now, or null when there is none.
 ///
 /// Emits only when the index actually changes, so the sixty samples a second
-/// cost one binary search each and rebuild nothing in between.
+/// cost one binary search each while playing — and none at all while paused:
+/// a frozen position reuses the last answer instead of re-running the search
+/// (see below). Nothing rebuilds in between either way.
 final currentLineIndexProvider = StreamProvider.autoDispose<int?>((ref) {
   // Song-tagged like the bubble: while the next track's lyrics load, the
   // provider above still holds the previous track's, and ticking the old
@@ -176,8 +216,16 @@ final currentLineIndexProvider = StreamProvider.autoDispose<int?>((ref) {
   // as it is dragged, otherwise there is no way to tell when it is right.
   final offset = ref.watch(lyricsOffsetProvider);
 
-  return Stream<int?>.periodic(
-    lineRefreshInterval,
-    (_) => synced.getLineAt(service.position + offset),
-  ).distinct();
+  // While paused the position does not move, so re-running the binary search
+  // sixty times a second only ever returns the same index. The last position
+  // and its answer are kept: a tick whose position has not moved reuses them.
+  // A seek while paused still recomputes once, because the position did move.
+  Duration? lastPosition;
+  int? lastIndex;
+  return Stream<int?>.periodic(lineRefreshInterval, (_) {
+    final position = service.position + offset;
+    if (position == lastPosition) return lastIndex;
+    lastPosition = position;
+    return lastIndex = synced.getLineAt(position);
+  }).distinct();
 });
