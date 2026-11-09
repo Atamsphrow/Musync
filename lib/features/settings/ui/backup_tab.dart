@@ -26,7 +26,9 @@ class BackupTab extends ConsumerWidget {
 
     return backupsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (error, _) => Center(child: Text('$error')),
+      error: (error, _) => const Center(
+            child: Text('Impossible de charger l’historique.'),
+          ),
       data: (all) {
         // One row per track, showing its newest step; the older ones are
         // reached by undoing again, and counted in the row.
@@ -50,7 +52,7 @@ class BackupTab extends ConsumerWidget {
                     backups.isEmpty
                         ? 'Aucune écriture enregistrée.'
                         : '${backups.length} morceau(x) restaurable(s), '
-                              '${_totalSize(backups)}.',
+                              '${_totalSize(all)}.',
                     style: textTheme.bodySmall?.copyWith(
                       color: scheme.onSurfaceVariant,
                     ),
@@ -69,9 +71,7 @@ class BackupTab extends ConsumerWidget {
           const Divider(height: 1),
           Expanded(
             child: backups.isEmpty
-                ? Center(
-                    child: const SizedBox.shrink(),
-                  )
+                ? const SizedBox.shrink()
                 : ListView.separated(
                     itemCount: backups.length,
                     separatorBuilder: (_, _) => const Divider(height: 1),
@@ -87,6 +87,9 @@ class BackupTab extends ConsumerWidget {
     );
   }
 
+  // Somme TOUTES les étapes, pas seulement la plus récente par piste :
+  // `tagBytes` est la taille d'une étape, et le plafond du store somme lui
+  // aussi toutes les entrées.
   static String _totalSize(List<TagBackup> backups) {
     final bytes = backups.fold<int>(0, (sum, b) => sum + b.tagBytes);
     if (bytes < 1024 * 1024) return '${(bytes / 1024).round()} Ko';
@@ -193,7 +196,9 @@ Future<void> _restore(
   await MediaStore.rescan(backup.filePath);
   changes.fileChanged(backup.filePath);
 
-  DebugLog.instance.info('Annulation', 'Tag restauré : ${backup.filePath}');
+  // Nom du fichier seulement, jamais le chemin complet : l'arborescence
+  // de la bibliothèque n'a rien à faire dans le journal.
+  DebugLog.instance.info('Annulation', 'Tag restauré : ${backup.displayName}');
   messenger.showOnly(const SnackBar(content: Text('Tag précédent rétabli.')));
 }
 
