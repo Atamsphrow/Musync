@@ -242,6 +242,38 @@ class AudioPlayerService {
     }
   }
 
+  /// A file was renamed/moved on disk: the song keeps its id, only its path
+  /// changes. Updates the current song and every queue entry carrying the
+  /// old path, so playback never keeps pointing at a path that no longer
+  /// exists. The audio source itself is untouched: just_audio already holds
+  /// the open file, and the next track loads from the updated queue.
+  ///
+  /// Bypasses [_setCurrentSong]'s equality check on purpose, like
+  /// [updateCurrentSongMetadata]: [Song.==] compares ids only, so a
+  /// path-only change would look like "the same song" and never reach the
+  /// UI. The queue is reassigned, never mutated in place — it is always an
+  /// unmodifiable list.
+  void updateSongPath(String oldPath, String newPath) {
+    if (oldPath == newPath) return;
+    var changed = false;
+    final current = _currentSong;
+    if (current != null && current.filePath == oldPath) {
+      _currentSong = current.copyWith(filePath: newPath);
+      if (!_currentSongController.isClosed) {
+        _currentSongController.add(_currentSong);
+      }
+      changed = true;
+    }
+    if (_queue.any((s) => s.filePath == oldPath)) {
+      _queue = List.unmodifiable([
+        for (final s in _queue)
+          s.filePath == oldPath ? s.copyWith(filePath: newPath) : s,
+      ]);
+      changed = true;
+    }
+    if (changed) _persistPlaybackState();
+  }
+
   /// Drops the cached artworks for [song], e.g. after its cover was
   /// edited: the notification extraction re-reads the tag and the player
   /// pane re-queries MediaStore.
@@ -265,6 +297,17 @@ class AudioPlayerService {
   Stream<int?> get currentIndexStream => _player.currentIndexStream;
   Stream<bool> get shuffleModeEnabledStream => _player.shuffleModeEnabledStream;
   Stream<LoopMode> get loopModeStream => _player.loopModeStream;
+
+  /// Position jumps the player reports — seek, and auto-advance to the next
+  /// track (or wrap-around under [LoopMode.one]).
+  ///
+  /// G71 : c'est le signal exact de « fin de morceau » pour le minuteur
+  /// (`SleepTimerController`) : just_audio n'émet `autoAdvance` que quand
+  /// l'index change sans seek, ou quand la piste reboucle en `LoopMode.one`
+  /// — jamais sur un saut manuel. `PublishSubject` : pas de rejeu à la
+  /// souscription, contrairement à `playerStateStream`.
+  Stream<PositionDiscontinuity> get positionDiscontinuityStream =>
+      _player.positionDiscontinuityStream;
 
   /// Serializes overlapping [playSong] calls (double-tap, fast list taps).
   ///
