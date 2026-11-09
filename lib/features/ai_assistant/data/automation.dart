@@ -10,6 +10,8 @@
 /// Tout le texte destiné à l'utilisateur est en français.
 library;
 
+import 'package:musync/core/services/debug_log.dart';
+
 /// Une action planifiée : un outil de l'assistant à exécuter à une heure
 /// précise.
 ///
@@ -114,11 +116,23 @@ class ScheduledAction {
         hour: (json['hour'] as num).toInt(),
         minute: (json['minute'] as num).toInt(),
         toolName: json['toolName'] as String,
-        args: args is Map ? args.cast<String, Object?>() : const {},
+        // Matérialisée par compréhension : `cast` ne rend qu'une vue
+        // paresseuse dont l'erreur sort à l'accès, hors du try.
+        args: args is Map
+            ? {
+                for (final entry in args.entries)
+                  entry.key as String: entry.value as Object?,
+              }
+            : const {},
         label: json['label'] as String,
         enabled: json['enabled'] as bool? ?? true,
       );
-    } catch (_) {
+    } catch (error) {
+      DebugLog.instance.warning(
+        'Automatisations',
+        'Action planifiée illisible : ignorée',
+        error: error,
+      );
       return null;
     }
   }
@@ -152,10 +166,21 @@ class HeadphoneTrigger {
       final args = json['args'];
       return HeadphoneTrigger(
         toolName: json['toolName'] as String,
-        args: args is Map ? args.cast<String, Object?>() : const {},
+        // Matérialisée par compréhension : voir `ScheduledAction.fromJson`.
+        args: args is Map
+            ? {
+                for (final entry in args.entries)
+                  entry.key as String: entry.value as Object?,
+              }
+            : const {},
         label: json['label'] as String,
       );
-    } catch (_) {
+    } catch (error) {
+      DebugLog.instance.warning(
+        'Automatisations',
+        'Déclencheur écouteurs illisible : ignoré',
+        error: error,
+      );
       return null;
     }
   }
