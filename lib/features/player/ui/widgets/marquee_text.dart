@@ -121,7 +121,10 @@ class _MarqueeTextState extends State<MarqueeText> {
       _controller.jumpTo(0);
     }
 
-    _running = false;
+    // Only the current generation may stop the loop: an unconditional
+    // `_running = false` here killed a newer loop started by
+    // `didUpdateWidget` while this one was still awaiting its animation.
+    if (myGeneration == _generation) _running = false;
   }
 
   @override
