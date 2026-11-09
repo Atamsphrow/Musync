@@ -65,10 +65,63 @@ class MainActivity : AudioServiceActivity() {
     private var channel: MethodChannel? = null
     private var screenChannel: MethodChannel? = null
 
-    /// Id de l'action planifiée dont l'alarme vient de sonner, en attente que
-    /// Dart le draine (`takeScheduledAction`). L'intent d'alarme arrive bien
-    /// avant que le moteur Dart soit prêt : on ne peut pas le pousser.
-    private var pendingScheduledActionId: String? = null
+    /// Ids des actions planifiées dont l'alarme vient de sonner, en attente
+    /// que Dart les draine (`takeScheduledAction`). L'intent d'alarme arrive
+    /// bien avant que le moteur Dart soit prêt : on ne peut pas les pousser.
+    ///
+    /// File, pas un seul slot : deux alarmes avant le drain écrasaient la
+    /// première (`pendingScheduledActionId = id`). Dart draine une par une,
+    /// dans l'ordre d'arrivée.
+    private val pendingScheduledActionIds = ArrayDeque<String>()
+
+    /// Réessais de l'ouverture de la revue de lot (démarrage à froid par
+    /// la notification de fin de lot). Voir [configureFlutterEngine].
+    private val batchReviewHandler =
+        android.os.Handler(android.os.Looper.getMainLooper())
+    private var batchReviewAttempts = 0
+    private var batchReviewDelivered = false
+    private val batchReviewRetry = object : Runnable {
+        override fun run() {
+            if (batchReviewDelivered || isDestroyed) return
+            batchReviewAttempts++
+            channel?.invokeMethod(
+                "openBatchReview",
+                null,
+                object : MethodChannel.Result {
+                    override fun success(result: Any?) {
+                        batchReviewDelivered = true
+                    }
+
+                    override fun error(
+                        code: String,
+                        message: String?,
+                        details: Any?,
+                    ) {
+                        scheduleNext()
+                    }
+
+                    override fun notImplemented() {
+                        scheduleNext()
+                    }
+                },
+            ) ?: scheduleNext()
+        }
+
+        private fun scheduleNext() {
+            // Sans handler Dart installé, l'appel platform→Dart n'est pas
+            // bufferisé : le moteur répond vide, ce qui arrive ici en
+            // notImplemented. Dart installe son handler dans main() ; sur
+            // démarrage lent il n'est pas encore là à 1200 ms, d'où la
+            // réessaie toutes les 500 ms jusqu'à ~10 s, puis l'abandon :
+            // la notification a déjà été consommée (extra retiré) et
+            // rouvrir la revue n'aurait plus de sens.
+            if (batchReviewAttempts < 20 && !batchReviewDelivered &&
+                !isDestroyed
+            ) {
+                batchReviewHandler.postDelayed(this, 500)
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installCrashHandler()
@@ -76,6 +129,11 @@ class MainActivity : AudioServiceActivity() {
         // Démarrage à froid par une alarme setAlarmClock : l'id attendra que
         // Dart le draine dans AutomationRunner.init().
         handleScheduledActionIntent(intent)
+    }
+
+    override fun onDestroy() {
+        batchReviewHandler.removeCallbacks(batchReviewRetry)
+        super.onDestroy()
     }
 
     /// Records a crash on the Android side, which Dart structurally cannot see.
@@ -91,18 +149,26 @@ class MainActivity : AudioServiceActivity() {
     /// the app's own private storage, the same tree Dart's
     /// `getApplicationSupportDirectory` lives inside.
     ///
+    /// Installé UNE fois par processus (garde statique) : chaque `onCreate`
+    /// enveloppait le handler précédent, et la chaîne retenait les anciennes
+    /// instances d'Activity. La lambda ne capture que le fichier de crash
+    /// (via `applicationContext`, jamais l'Activity) : elle vit tant que le
+    /// processus vit, elle ne doit retenir aucune Activity.
+    ///
     /// The previous handler is always called afterwards. Swallowing it would
     /// leave a process that has already lost its state running as though nothing
     /// had happened, which is worse than the crash.
     private fun installCrashHandler() {
+        if (!crashHandlerInstalled.compareAndSet(false, true)) return
         val previous = Thread.getDefaultUncaughtExceptionHandler()
+        val crashFile = File(applicationContext.filesDir, NATIVE_CRASH_FILE)
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             try {
                 val text = StringWriter().also {
                     it.write("Thread : ${thread.name}\n")
                     error.printStackTrace(PrintWriter(it))
                 }.toString()
-                File(filesDir, NATIVE_CRASH_FILE).writeText(text)
+                crashFile.writeText(text)
             } catch (_: Throwable) {
                 // Nothing useful left to do: the process is going down either
                 // way, and a failure here must not replace the real crash.
@@ -122,12 +188,14 @@ class MainActivity : AudioServiceActivity() {
         )
         // Cold start from the batch-done notification: the tap intent carries
         // the extra, but onNewIntent never fires. Dart needs a moment to
-        // install its handler, hence the post.
+        // install its handler, hence the first attempt at 1200 ms — and
+        // retries after that (see batchReviewRetry): without a Dart handler
+        // installed, the platform→Dart call is not buffered, it is lost.
         if (intent.getBooleanExtra("musync_open_batch", false)) {
             intent.removeExtra("musync_open_batch")
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                channel?.invokeMethod("openBatchReview", null)
-            }, 1200)
+            batchReviewDelivered = false
+            batchReviewAttempts = 0
+            batchReviewHandler.postDelayed(batchReviewRetry, 1200)
         }
 
         // Keep-screen-on for the lyrics displays (player lyrics pane;
@@ -258,11 +326,7 @@ class MainActivity : AudioServiceActivity() {
                     result.success(null)
                 }
                 "takeScheduledAction" -> {
-                    result.success(
-                        pendingScheduledActionId.also {
-                            pendingScheduledActionId = null
-                        },
-                    )
+                    result.success(pendingScheduledActionIds.removeFirstOrNull())
                 }
                 else -> result.notImplemented()
             }
@@ -581,10 +645,6 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
-    /// Pending result for the system write-access dialog, answered in
-    /// [onActivityResult].
-    private var pendingWriteAccessResult: MethodChannel.Result? = null
-
     /// Asks Android for permission to modify a media file, the way Musicolet
     /// does before writing tags.
     ///
@@ -595,8 +655,9 @@ class MainActivity : AudioServiceActivity() {
     ///
     /// Below API 30 there is no such request ([MediaStore.createWriteRequest]
     /// does not exist) and plain file access applies, so it answers true
-    /// straight away. A track MediaStore doesn't index has nothing the system
-    /// could grant, so that answers true too.
+    /// straight away. A track MediaStore doesn't index has no URI the system
+    /// could grant write access for, so that answers false — Dart aborts the
+    /// save instead of writing without authorisation and failing later.
     private fun requestWriteAccess(
         mediaStoreId: Long?,
         path: String?,
@@ -608,7 +669,7 @@ class MainActivity : AudioServiceActivity() {
         }
         val uri = resolveMediaUri(mediaStoreId, path)
         if (uri == null) {
-            result.success(true)
+            result.success(false)
             return
         }
         if (pendingWriteAccessResult != null) {
@@ -658,6 +719,20 @@ class MainActivity : AudioServiceActivity() {
             }
         }
         if (path.isNullOrEmpty()) return null
+        // Depuis API 30, MediaStore résout lui-même le chemin en content://
+        // (`getMediaUri`) : la colonne DATA, dépréciée en API 29, n'est plus
+        // consultée — sur les ROMs où elle n'est pas renseignée, la recherche
+        // par DATA rendait null et `requestWriteAccess` répondait true.
+        // `getMediaUri` rend null quand le fichier n'est pas indexé : on
+        // échoue proprement au lieu de répondre sans autorisation.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return try {
+                MediaStore.getMediaUri(this, Uri.fromFile(File(path)))
+            } catch (_: Exception) {
+                null
+            }
+        }
+        @Suppress("DEPRECATION")
         return try {
             contentResolver.query(
                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
@@ -735,10 +810,6 @@ class MainActivity : AudioServiceActivity() {
     /// refuse malgré le javadoc — constaté sur appareil le 2026-10-14.
     private fun armAlarm(id: String, triggerAtMillis: Long, daily: Boolean): Boolean {
         val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
-        schedulerPrefs().edit()
-            .putLong("trigger_$id", triggerAtMillis)
-            .putBoolean("daily_$id", daily)
-            .apply()
         val pending = PendingIntent.getActivity(
             this, requestCodeFor(id), alarmIntent(id),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -752,6 +823,14 @@ class MainActivity : AudioServiceActivity() {
             alarmManager.setAlarmClock(
                 AlarmManager.AlarmClockInfo(triggerAtMillis, showPending), pending,
             )
+            // Miroir écrit SEULEMENT après succès : en cas de
+            // SecurityException (SCHEDULE_EXACT_ALARM manquante), le miroir
+            // ne doit pas prétendre que l'alarme est armée — BootReceiver
+            // et syncAlarms le reliraient comme telle.
+            schedulerPrefs().edit()
+                .putLong("trigger_$id", triggerAtMillis)
+                .putBoolean("daily_$id", daily)
+                .apply()
             true
         } catch (_: SecurityException) {
             false
@@ -778,9 +857,10 @@ class MainActivity : AudioServiceActivity() {
 
     /// L'alarme a sonné : l'id attend que Dart le draine. Si le moteur est
     /// déjà prêt (app ouverte), on le prévient tout de suite ; sinon
-    /// `AutomationRunner.init()` drainera au démarrage.
+    /// `AutomationRunner.init()` drainera au démarrage. File FIFO : une
+    /// deuxième alarme n'écrase plus la première en attente.
     private fun queueScheduledAction(id: String) {
-        pendingScheduledActionId = id
+        pendingScheduledActionIds.addLast(id)
         schedulerChannel?.invokeMethod("scheduledActionFired", null)
     }
 
@@ -829,6 +909,22 @@ class MainActivity : AudioServiceActivity() {
 
         /// Request code for the `MediaStore.createWriteRequest` dialog.
         const val WRITE_ACCESS_REQUEST_CODE = 2401
+
+        /// Pending result for the system write-access dialog, answered in
+        /// [MainActivity.onActivityResult].
+        ///
+        /// Static, pas un champ d'instance : une recréation d'Activity
+        /// (« ne pas conserver les activités », destruction système — la
+        /// rotation est exclue par le manifeste) donne une nouvelle instance
+        /// au champ null, et le Future Dart restait sans réponse. Un
+        /// `MethodChannel.Result` n'est pas Parcelable : `onSaveInstanceState`
+        /// ne peut pas le porter ; le statique survit à la recréation dans
+        /// le même processus — et une mort du processus tue aussi Dart, il
+        /// n'y a alors plus de Future à répondre.
+        var pendingWriteAccessResult: MethodChannel.Result? = null
+
+        /// Garde d'installation du crash handler (un seul par processus).
+        val crashHandlerInstalled = AtomicBoolean(false)
 
         /// Must match `NativeCrashReport.fileName` on the Dart side.
         const val NATIVE_CRASH_FILE = "native_crash.txt"
