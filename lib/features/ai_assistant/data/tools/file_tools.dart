@@ -19,6 +19,7 @@ import 'package:musync/core/id3/id3_writer.dart';
 import 'package:musync/core/id3/tag_metadata.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/media_store.dart';
+import 'package:musync/core/services/permission_service.dart';
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
@@ -48,25 +49,28 @@ Future<AiToolResult> _writeTagsSecurely(
   if (!granted) {
     return AiToolResult.fail('Écriture refusée par le système.');
   }
+  // Suffixe unique par exécution : deux écritures concurrentes sur le même
+  // morceau ne partagent plus leurs fichiers temporaires.
+  final stamp = DateTime.now().microsecondsSinceEpoch;
+  File? workFile;
+  File? stage;
   try {
     final cacheDir = await getTemporaryDirectory();
-    final workPath = p.join(cacheDir.path, 'ai_tag_${song.id}.tmp');
-    final workFile = File(workPath);
+    final workPath = p.join(cacheDir.path, 'ai_tag_${song.id}_$stamp.tmp');
+    workFile = File(workPath);
     if (await workFile.exists()) await workFile.delete();
     await File(song.filePath).copy(workPath);
 
     try {
       await Id3Writer.writeMetadata(workPath, metadata);
     } on Id3WriteException catch (e) {
-      if (await workFile.exists()) await workFile.delete();
       return AiToolResult.fail(e.message);
     }
 
     final target = File(song.filePath);
-    final stage = File('${target.path}.musync.tmp');
+    stage = File('${target.path}.musync.$stamp.tmp');
     if (await stage.exists()) await stage.delete();
     await workFile.copy(stage.path);
-    if (await workFile.exists()) await workFile.delete();
     await stage.rename(target.path);
 
     await MediaStore.rescan(target.path);
@@ -77,6 +81,15 @@ Future<AiToolResult> _writeTagsSecurely(
       error: e,
     );
     return AiToolResult.fail('Écriture impossible — fichier intact.');
+  } finally {
+    // Tout échec (écriture, copie, rename) laissait sinon un .tmp orphelin
+    // dans le cache ou à côté du morceau. Après succès les deux ont déjà
+    // disparu (copie supprimée, stage renommé) : le nettoyage est un no-op.
+    for (final f in [workFile, stage]) {
+      try {
+        if (f != null && await f.exists()) await f.delete();
+      } catch (_) {}
+    }
   }
 
   // Le morceau en cours garde ses tags affichés à jour.
@@ -88,6 +101,10 @@ Future<AiToolResult> _writeTagsSecurely(
       album: metadata.album ?? song.album,
     );
   }
+  // La liste aussi : titre/artiste/album affichés venaient de l'ancienne
+  // lecture, le morceau retaggué restait affiché tel quel jusqu'au prochain
+  // rafraîchissement.
+  ref.invalidate(songListProvider);
   ref.invalidate(currentLyricsProvider);
   return AiToolResult.ok('Tags mis à jour pour ${songLabel(song)}.');
 }
@@ -238,6 +255,10 @@ class EditTagsTool extends AiTool {
     AiToolContext ctx,
     Map<String, Object?> args,
   ) async {
+    // Valide d'abord : sans champ à modifier, le dialogue confirmerait une
+    // écriture qui ne change rien — le contrôle n'avait lieu que dans
+    // `execute`, après la confirmation.
+    _diff(args);
     final query = optString(args, 'query');
     final target = await _resolveSingleTarget(ctx, query);
     if (target == null) {
@@ -350,6 +371,16 @@ class DeleteFileTool extends AiTool {
         : await _resolveSingleTarget(ctx, optString(args, 'query'));
     if (target == null) {
       return AiToolResult.fail('Morceau introuvable.');
+    }
+    // Sans l'accès « Tous les fichiers », la suppression d'un fichier de la
+    // bibliothèque partagée échoue côté système : le vérifier d'abord donne
+    // un message actionnable au lieu d'un échec générique après coup.
+    // (Hors Android, `hasWriteAccess` rend vrai sans appel natif.)
+    if (!await PermissionService.hasWriteAccess()) {
+      return AiToolResult.fail(
+        'Suppression impossible : accordez l’accès « Tous les fichiers » '
+        'à Musync dans les paramètres Android.',
+      );
     }
     final service = ctx.ref.read(audioPlayerServiceProvider);
     try {
@@ -566,6 +597,35 @@ String _validatedPattern(Map<String, Object?> args) {
   return pattern;
 }
 
+/// Déplace un fichier, avec repli copie + suppression quand le rename direct
+/// échoue (EXDEV : volumes différents — carte SD, OTG…). Rend `true` si le
+/// fichier est arrivé à destination, `false` sinon ; une copie partielle est
+/// nettoyée, et la source n'est jamais supprimée sans copie réussie.
+Future<bool> _moveFile(File source, String target) async {
+  try {
+    await source.rename(target);
+    return true;
+  } on FileSystemException {
+    // rename ne traverse pas les volumes : copie puis suppression.
+    try {
+      await source.copy(target);
+      await source.delete();
+      return true;
+    } catch (e) {
+      DebugLog.instance.warning(
+        'OutilsFichiers',
+        'Déplacement impossible pour ${source.path}',
+        error: e,
+      );
+      try {
+        final partial = File(target);
+        if (await partial.exists()) await partial.delete();
+      } catch (_) {}
+      return false;
+    }
+  }
+}
+
 /// Renomme les fichiers audio d'après leurs tags.
 ///
 /// Motif « Artiste - Titre » par défaut, « Titre - Artiste » sur demande.
@@ -666,13 +726,26 @@ class BatchRenameFilesTool extends AiTool {
       }
       final target = p.join(p.dirname(song.filePath), name);
       try {
+        // Fenêtre TOCTOU résiduelle : un autre processus peut créer la
+        // cible entre ce test et le rename, qui l'écraserait alors. Dart
+        // n'offre pas de rename-if-absent (il faudrait renameat2
+        // RENAME_NOREPLACE, natif) ; le test couvre le cas réaliste — deux
+        // renommages concurrents du même morceau dans l'app.
         if (await File(target).exists()) {
           skipped++;
           continue;
         }
-        await File(song.filePath).rename(target);
-        await MediaStore.rescan(target);
-        renamed++;
+        if (await _moveFile(File(song.filePath), target)) {
+          // Chemin mis à jour avant le rescan : même si celui-ci lève, le
+          // lecteur ne pointe plus vers l'ancien chemin.
+          ctx.ref
+              .read(audioPlayerServiceProvider)
+              .updateSongPath(song.filePath, target);
+          await MediaStore.rescan(target);
+          renamed++;
+        } else {
+          skipped++;
+        }
       } catch (e) {
         DebugLog.instance.warning(
           'OutilsFichiers',
@@ -721,18 +794,30 @@ class ChangeCoverTool extends AiTool {
 
   static bool _looksLikeImage(List<int> bytes) {
     if (bytes.length < 4) return false;
-    // JPEG, PNG, GIF, WebP, BMP.
-    return (bytes[0] == 0xFF && bytes[1] == 0xD8) ||
+    // JPEG, PNG, GIF.
+    if ((bytes[0] == 0xFF && bytes[1] == 0xD8) ||
         (bytes[0] == 0x89 &&
             bytes[1] == 0x50 &&
             bytes[2] == 0x4E &&
             bytes[3] == 0x47) ||
-        (bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46) ||
-        (bytes[0] == 0x52 &&
-            bytes[1] == 0x49 &&
-            bytes[2] == 0x46 &&
-            bytes[3] == 0x46) ||
-        (bytes[0] == 0x42 && bytes[1] == 0x4D);
+        (bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46)) {
+      return true;
+    }
+    // WebP : RIFF + taille (4 octets) + « WEBP » à l'offset 8 — un RIFF
+    // seul peut être un WAV ou un AVI.
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50) {
+      return true;
+    }
+    // BMP : 2 octets, c'est la signature complète du format.
+    return bytes[0] == 0x42 && bytes[1] == 0x4D;
   }
 
   @override
@@ -771,7 +856,14 @@ class ChangeCoverTool extends AiTool {
     final imagePath = reqString(args, 'image');
     Uint8List bytes;
     try {
-      bytes = await File(imagePath).readAsBytes();
+      final imageFile = File(imagePath);
+      // Plafond : une pochette de 20 Mo et plus n'a rien à faire en tag —
+      // et lire un fichier arbitraire d'un coup en mémoire, sans limite,
+      // ouvrait la porte à une vidéo renommée en .jpg.
+      if (await imageFile.length() > 20 * 1024 * 1024) {
+        return AiToolResult.fail('Image trop volumineuse (limite 20 Mo).');
+      }
+      bytes = await imageFile.readAsBytes();
     } catch (_) {
       return AiToolResult.fail('Image introuvable : $imagePath');
     }
@@ -914,13 +1006,23 @@ class MoveSongsTool extends AiTool {
         continue;
       }
       try {
+        // Fenêtre TOCTOU résiduelle : voir BatchRenameFilesTool — même
+        // limite Dart (pas de rename-if-absent), même couverture réaliste.
         if (await File(target).exists()) {
           skipped++;
           continue;
         }
-        await File(song.filePath).rename(target);
-        await MediaStore.rescan(target);
-        moved++;
+        if (await _moveFile(File(song.filePath), target)) {
+          // Chemin mis à jour avant le rescan : même si celui-ci lève, le
+          // lecteur ne pointe plus vers l'ancien chemin.
+          ctx.ref
+              .read(audioPlayerServiceProvider)
+              .updateSongPath(song.filePath, target);
+          await MediaStore.rescan(target);
+          moved++;
+        } else {
+          skipped++;
+        }
       } catch (e) {
         DebugLog.instance.warning(
           'OutilsFichiers',
