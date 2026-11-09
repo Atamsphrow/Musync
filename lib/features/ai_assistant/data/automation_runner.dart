@@ -62,10 +62,18 @@ class AutomationRunner {
     await drainAndRun();
   }
 
-  /// Vide l'action en attente côté natif et l'exécute, s'il y en a une.
+  /// Vide TOUTES les actions en attente côté natif et les exécute, dans
+  /// l'ordre d'arrivée.
+  ///
+  /// Le natif file les ids (`ArrayDeque` côté MainActivity) : avec 3 alarmes
+  /// en attente au démarrage, ne drainer qu'un id par signal laissait la 3e
+  /// attendre le prochain signal — ou le prochain lancement.
   Future<void> drainAndRun() async {
-    final id = await SchedulerBridge.takeScheduledAction();
-    if (id != null) await runFired(id);
+    while (true) {
+      final id = await SchedulerBridge.takeScheduledAction();
+      if (id == null) return;
+      await runFired(id);
+    }
   }
 
   /// Exécute l'action planifiée [id], puis l'avance (quotidienne) ou la
@@ -89,6 +97,16 @@ class AutomationRunner {
       DebugLog.instance.info(
         'Automatisations',
         '${action.label} : ${result.message}',
+      );
+    } catch (error, stack) {
+      // `runStoredTool` convertit déjà les échecs d'outil en `AiToolResult`
+      // (voir `_executeTool`) : ce qui arrive ici est un échec du
+      // déclenchement lui-même — sans ce log, il restait invisible.
+      DebugLog.instance.error(
+        'Automatisations',
+        'Échec de ${action.label}',
+        error: error,
+        stackTrace: stack,
       );
     } finally {
       // Advance (daily) or remove (one-shot) even when the tool
