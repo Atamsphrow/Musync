@@ -40,9 +40,11 @@ class FetchLyricsTool extends AiTool {
 
   @override
   String get description =>
-      'Récupère les paroles du morceau en cours depuis les sources '
-      'configurées et les intègre au fichier quand la confiance atteint '
-      '80 % (seuil automatique). Ne remplace jamais seul des paroles '
+      'Trouve les paroles du morceau en cours en ligne et les intègre au '
+      'fichier quand la confiance atteint 80 % (seuil automatique). À '
+      'utiliser quand le morceau n\'a pas de paroles ou quand '
+      'l\'utilisateur demande de trouver ses paroles (« chercher », '
+      '« trouver en ligne »). Ne remplace jamais seul des paroles '
       'existantes : en dessous de 80 %, il propose les meilleurs '
       'candidats au lieu d\'écrire.';
 
@@ -68,7 +70,7 @@ class FetchLyricsTool extends AiTool {
       return AiToolResult.fail('Aucun morceau en cours.');
     }
     final finder = ctx.ref.read(aiLyricsFinderProvider);
-    final result = await finder.findFor(song);
+    final result = await finder.findFor(song, explicit: true);
     _invalidateLyricsAfterWrite(ctx.ref);
     switch (result.verdict) {
       case LyricsFindVerdict.integrated:
@@ -97,9 +99,11 @@ class FetchLyricsTool extends AiTool {
   }
 }
 
-/// « Vérifie si les paroles du morceau en cours sont bien les siennes :
-/// recherche le morceau, compare avec ce qui est dans le fichier, et dit
-/// si elles semblent fausses. Ne modifie rien. »
+/// « Vérifie si les paroles DÉJÀ dans le fichier du morceau en cours sont
+/// bien les siennes : recherche le morceau, compare avec ce qui est dans le
+/// fichier, et dit si elles semblent fausses. Ne modifie rien. À utiliser
+/// seulement quand le morceau a déjà des paroles dans son fichier ; s'il
+/// n'en a pas, c'est fetch_lyrics qui cherche en ligne. »
 class VerifyCurrentLyricsTool extends AiTool {
   const VerifyCurrentLyricsTool();
 
@@ -108,9 +112,12 @@ class VerifyCurrentLyricsTool extends AiTool {
 
   @override
   String get description =>
-      'Vérifie si les paroles du morceau en cours sont bien les siennes : '
-      'recherche le morceau, compare avec ce qui est dans le fichier, et '
-      'dit si elles semblent fausses. Ne modifie rien.';
+      'Vérifie si les paroles DÉJÀ présentes dans le fichier du morceau '
+      'en cours sont bien les siennes : recherche le morceau, compare '
+      'avec ce qui est dans le fichier, et dit si elles semblent '
+      'fausses. À utiliser seulement quand le morceau a déjà des '
+      'paroles dans son fichier ; s\'il n\'en a pas, utilise '
+      'fetch_lyrics pour les chercher en ligne. Ne modifie rien.';
 
   @override
   Map<String, Object?> get parametersSchema => {
@@ -171,7 +178,9 @@ class ReplaceLyricsTool extends AiTool {
   Future<LyricsFindResult> _dryRun(AiToolContext ctx) async {
     final song = ctx.ref.read(audioPlayerServiceProvider).currentSong;
     if (song == null) throw const AiToolArgError('Aucun morceau en cours.');
-    return ctx.ref.read(aiLyricsFinderProvider).findFor(song, dryRun: true);
+    return ctx.ref
+        .read(aiLyricsFinderProvider)
+        .findFor(song, dryRun: true, explicit: true);
   }
 
   LyricsSearchResult _pick(LyricsFindResult dry, int rank) {
@@ -234,7 +243,7 @@ class ReplaceLyricsTool extends AiTool {
     final rank = (optInt(args, 'rank') ?? 1).clamp(1, 3);
     final dry = await ctx.ref
         .read(aiLyricsFinderProvider)
-        .findFor(song, dryRun: true);
+        .findFor(song, dryRun: true, explicit: true);
     final LyricsSearchResult candidate;
     try {
       candidate = _pick(dry, rank);
