@@ -211,4 +211,101 @@ void main() {
     expect(find.byIcon(Icons.error_outline), findsOneWidget);
     expect(find.byIcon(Icons.help_outline), findsOneWidget);
   });
+
+  testWidgets('a stopped probe can be resumed from where it stopped', (
+    tester,
+  ) async {
+    // alpha answers, beta is rate-limited on the first pass (then
+    // answers), gamma is never reached: resume must retest beta, test
+    // gamma, and keep alpha's mark.
+    final pings = <String, int>{};
+    final reader = AiFilenameReader(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/models')) {
+          return http.Response(
+            jsonEncode({
+              'models': [
+                {'name': 'models/alpha'},
+                {'name': 'models/beta'},
+                {'name': 'models/gamma'},
+              ],
+            }),
+            200,
+          );
+        }
+        final model = request.url.pathSegments.last.split(':').first;
+        pings[model] = (pings[model] ?? 0) + 1;
+        if (model == 'beta' && pings[model] == 1) {
+          return http.Response('quota', 429);
+        }
+        return http.Response(
+          jsonEncode({
+            'candidates': [
+              {
+                'content': {
+                  'parts': [
+                    {'text': '{"ok": true}'},
+                  ],
+                },
+              },
+            ],
+          }),
+          200,
+        );
+      }),
+    );
+
+    final store = _MemoryStore(const AiSettings());
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          aiSettingsStoreProvider.overrideWithValue(store),
+          automationStoreProvider.overrideWithValue(noFsAutomationStore),
+          aiFilenameReaderProvider.overrideWithValue(reader),
+        ],
+        child: const MaterialApp(home: AiTab()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.ancestor(
+        of: find.text('Clé API'),
+        matching: find.byType(TextField),
+      ),
+      'test-key',
+    );
+    await tester.tap(find.byTooltip('Scanner les modèles disponibles'));
+    await tester.pumpAndSettle();
+
+    // Stopped on beta's 429: alpha judged, beta marked as failed,
+    // gamma never pinged — and the resume button is there.
+    expect(find.text('1 répond, 1 ne répond pas.'), findsOneWidget);
+    expect(
+      find.text('Limite atteinte (HTTP 429), tests arrêtés.'),
+      findsOneWidget,
+    );
+    expect(find.text('Reprendre'), findsOneWidget);
+    expect(pings, {'alpha': 1, 'beta': 1});
+
+    // The button sits below the dropdown: scroll it into view first, or
+    // the tap lands on whatever is under its coordinates instead.
+    await tester.ensureVisible(find.text('Reprendre'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Reprendre'));
+    await tester.pumpAndSettle();
+
+    // Beta retested (answers now), gamma tested, alpha kept: the
+    // batch completes and the stop message and button are gone.
+    expect(pings, {'alpha': 1, 'beta': 2, 'gamma': 1});
+    expect(find.text('3 répondent, 0 ne répondent pas.'), findsOneWidget);
+    expect(
+      find.text('Limite atteinte (HTTP 429), tests arrêtés.'),
+      findsNothing,
+    );
+    expect(find.text('Reprendre'), findsNothing);
+  });
 }
