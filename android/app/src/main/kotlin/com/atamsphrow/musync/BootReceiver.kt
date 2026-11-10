@@ -106,8 +106,9 @@ class BootReceiver : BroadcastReceiver() {
                 }
                 edit.apply()
             }
-        } catch (_: Exception) {
-            // Voir le docstring : un boot raté ne bloque rien.
+        } catch (e: Exception) {
+            // Un boot raté ne bloque rien, mais il doit être diagnostiquable.
+            Log.e("MusyncBoot", "Réarmement global impossible après boot", e)
         }
     }
 }
