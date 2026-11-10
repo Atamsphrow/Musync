@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:on_audio_query/on_audio_query.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:musync/core/audio/mp3_gapless.dart';
 import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/id3/id3_writer.dart';
@@ -115,6 +116,7 @@ void main() {
   late _MutableSongList library;
 
   setUp(() async {
+    SharedPreferences.setMockInitialValues({});
     tempDir = await Directory.systemTemp.createTemp('musync_wave3_');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
