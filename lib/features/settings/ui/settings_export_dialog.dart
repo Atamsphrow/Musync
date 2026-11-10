@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/utils/snackbar.dart';
 import 'package:musync/features/settings/data/settings_export.dart';
+import 'package:musync/features/settings/data/ai_provider_config.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -43,6 +44,7 @@ Future<void> exportSettings(BuildContext context) async {
     final moment = DateTime.now();
     final bundle = await exporter.build(
       includeSecrets: includeSecrets,
+      aiSettings: includeSecrets ? await AiSettingsStore().load() : null,
       preferences: {
         for (final key in _exportedPreferences)
           if (prefs.containsKey(key)) key: prefs.get(key),
