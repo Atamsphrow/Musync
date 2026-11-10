@@ -14,8 +14,10 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:musync/core/utils/atomic_file.dart';
+import 'package:musync/features/settings/data/ai_secrets.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:synchronized/synchronized.dart';
 
 /// Which API shape a provider speaks.
 enum AiProviderKind {
@@ -40,8 +42,8 @@ class AiProviderConfig {
   /// Model identifier, as that provider spells it.
   final String model;
 
-  /// The secret. Kept in the app's private storage and never logged — see
-  /// [redactedKey], which is the only form anything else is allowed to show.
+  /// Only held in memory. At rest the key lives in the platform
+  /// keystore/keychain, not in ai_providers.json; see [AiSettingsStore].
   final String apiKey;
 
   final bool enabled;
@@ -164,10 +166,7 @@ class OpenAiCompatiblePreset {
 }
 
 const List<OpenAiCompatiblePreset> openAiCompatiblePresets = [
-  OpenAiCompatiblePreset(
-    name: 'OpenAI',
-    baseUrl: 'https://api.openai.com/v1',
-  ),
+  OpenAiCompatiblePreset(name: 'OpenAI', baseUrl: 'https://api.openai.com/v1'),
   OpenAiCompatiblePreset(
     name: 'Groq',
     baseUrl: 'https://api.groq.com/openai/v1',
@@ -176,10 +175,7 @@ const List<OpenAiCompatiblePreset> openAiCompatiblePresets = [
     name: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
   ),
-  OpenAiCompatiblePreset(
-    name: 'Mistral',
-    baseUrl: 'https://api.mistral.ai/v1',
-  ),
+  OpenAiCompatiblePreset(name: 'Mistral', baseUrl: 'https://api.mistral.ai/v1'),
   OpenAiCompatiblePreset(
     name: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com/v1',
@@ -248,63 +244,288 @@ Réponds uniquement par un objet JSON, sans texte autour :
 
 /// Reads and writes the providers and the instruction.
 ///
-/// A file in the app's private storage, like the lyrics sources. It holds an
-/// API key, so it must never be somewhere another app can read: this is
-/// `getApplicationSupportDirectory`, which on Android is inside the app's own
-/// sandbox.
+/// Metadata lives in the app's private support directory; API keys live in
+/// the platform vault. Serialize the complete operation, including vault
+/// updates and rollback, across store instances in this isolate.
 class AiSettingsStore {
   static const String _fileName = 'ai_providers.json';
+  static final Lock _lock = Lock();
+
+  final AiSecretVault _vault;
+  final Directory? supportDir;
+
+  AiSettingsStore({AiSecretVault? vault, this.supportDir})
+    : _vault = vault ?? const PlatformAiSecretVault();
 
   Future<File> _file() async {
-    final dir = await getApplicationSupportDirectory();
+    final dir = supportDir ?? await getApplicationSupportDirectory();
     return File('${dir.path}${Platform.pathSeparator}$_fileName');
   }
 
-  Future<AiSettings> load() async {
+  static Map<String, Object?> _nonSecretJson(AiProviderConfig provider) => {
+    ...provider.toJson(),
+    'apiKey': '',
+  };
+
+  Future<AiSettings> load() =>
+      _lock.synchronized(() => _load(preferFileSecrets: false));
+
+  /// Compatibility entry point for an already-imported legacy JSON file.
+  /// New imports use [importTransaction] so keys never pass through that file.
+  Future<AiSettings> loadImported() =>
+      _lock.synchronized(() => _load(preferFileSecrets: true));
+
+  Future<AiSettings> _load({required bool preferFileSecrets}) async {
     try {
       final file = await _file();
       if (!await file.exists()) return const AiSettings();
 
       final decoded = jsonDecode(await file.readAsString());
-      if (decoded is! Map) return const AiSettings();
+      if (decoded is! Map || decoded['providers'] is! List) {
+        throw const FormatException('Réglages IA illisibles.');
+      }
 
+      final rawProviders = decoded['providers'] as List;
+      final ids = <String>{};
+      final providers = <AiProviderConfig>[];
+      var needsMigration = false;
+      for (final entry in rawProviders) {
+        final provider = AiProviderConfig.fromJson(entry);
+        if (provider == null || !ids.add(provider.id)) {
+          throw const FormatException('Fournisseur IA invalide ou dupliqué.');
+        }
+        final legacyKey = provider.apiKey;
+        var key = await _vault.read(provider.id);
+        if (legacyKey.isNotEmpty) {
+          // Migration is deliberately fail-closed: do not erase the legacy
+          // plaintext until the keystore has acknowledged every credential.
+          if (preferFileSecrets || key == null || key.isEmpty) {
+            await _vault.write(provider.id, legacyKey);
+            key = legacyKey;
+          }
+          needsMigration = true;
+        }
+        providers.add(provider.copyWith(apiKey: key ?? ''));
+      }
+      if (needsMigration) {
+        await AtomicFile.writeString(
+          file,
+          jsonEncode({
+            ...decoded.map((key, value) => MapEntry('$key', value)),
+            'providers': [
+              for (final provider in providers) _nonSecretJson(provider),
+            ],
+          }),
+        );
+      }
       final instruction = decoded['instruction'];
       return AiSettings(
-        providers: [
-          for (final entry in (decoded['providers'] as List? ?? const []))
-            ?AiProviderConfig.fromJson(entry),
-        ],
+        providers: providers,
         instruction: instruction is String && instruction.trim().isNotEmpty
             ? instruction
             : defaultAiInstruction,
       );
     } catch (error, stack) {
-      // Unreadable settings must not stop the app; the button simply falls back
-      // to the heuristic.
-      //
-      // But from the user's side this is indistinguishable from their keys
-      // having been forgotten, and they would go and type them in again. No key
-      // material in the message — the file holds secrets, so nothing about its
-      // contents is quoted, only that it could not be read.
+      // Do not silently replace credential-read failures with an empty store
+      // and then overwrite it during an unrelated settings update.
       DebugLog.instance.error(
         'Réglages',
-        'Fichier des modèles IA illisible : aucun modèle ne sera utilisé, et '
-            'les clés enregistrées semblent absentes',
+        'Impossible de lire/migrer les modèles IA (clés conservées)',
         error: error,
         stackTrace: stack,
       );
-      return const AiSettings();
+      rethrow;
     }
   }
 
-  Future<void> save(AiSettings settings) async {
-    await AtomicFile.writeString(
-      await _file(),
-      jsonEncode({
-        'providers': [for (final p in settings.providers) p.toJson()],
-        'instruction': settings.instruction,
-      }),
-    );
+  /// Keeps vault changes and the importer's file rollback in the same lock.
+  /// The callback must restore its files before throwing. Imported API keys
+  /// are removed from the JSON before the callback writes anything to disk.
+  Future<T> importTransaction<T>(
+    Future<T> Function(AiSettingsImport transaction) apply,
+  ) => _lock.synchronized(() async {
+    final file = await _file();
+    final Object? current = await file.exists()
+        ? jsonDecode(await file.readAsString())
+        : null;
+    if (current != null && current is! Map) {
+      throw const FormatException('Réglages IA existants illisibles.');
+    }
+    final transaction = AiSettingsImport._(_vault);
+    await transaction._readCurrent(current as Map?);
+    try {
+      return await apply(transaction);
+    } catch (_) {
+      await transaction._rollback();
+      rethrow;
+    }
+  });
+
+  Future<void> save(AiSettings settings) =>
+      _lock.synchronized(() => _save(settings));
+
+  Future<void> _save(AiSettings settings) async {
+    final ids = <String>{};
+    for (final provider in settings.providers) {
+      if (provider.id.isEmpty || !ids.add(provider.id)) {
+        throw const FormatException('Identifiant de fournisseur IA invalide.');
+      }
+    }
+    final file = await _file();
+    // Migrate first, and fail before saving if the keystore cannot be read.
+    final previous = await _load(preferFileSecrets: false);
+    final oldKeys = <String, String?>{
+      for (final id in <String>{
+        ...previous.providers.map((provider) => provider.id),
+        ...settings.providers.map((provider) => provider.id),
+      })
+        id: await _vault.read(id),
+    };
+    try {
+      for (final provider in settings.providers) {
+        if (provider.apiKey.isNotEmpty) {
+          await _vault.write(provider.id, provider.apiKey);
+        } else {
+          await _vault.delete(provider.id);
+        }
+      }
+      await AtomicFile.writeString(
+        file,
+        jsonEncode({
+          'providers': [for (final p in settings.providers) _nonSecretJson(p)],
+          'instruction': settings.instruction,
+        }),
+      );
+    } catch (_) {
+      // Best-effort rollback of secrets if the metadata commit failed.
+      // The original file is left unchanged by AtomicFile on write failure.
+      for (final entry in oldKeys.entries) {
+        try {
+          if (entry.value == null) {
+            await _vault.delete(entry.key);
+          } else {
+            await _vault.write(entry.key, entry.value!);
+          }
+        } catch (error) {
+          DebugLog.instance.error(
+            'Réglages',
+            'Restauration de clé IA impossible',
+            error: error,
+          );
+        }
+      }
+      rethrow;
+    }
+    final remaining = settings.providers.map((p) => p.id).toSet();
+    for (final old in previous.providers) {
+      if (!remaining.contains(old.id)) {
+        try {
+          await _vault.delete(old.id);
+        } catch (error) {
+          DebugLog.instance.warning(
+            'Réglages',
+            'Nettoyage de clé IA supprimée impossible',
+            error: error,
+          );
+        }
+      }
+    }
+  }
+}
+
+/// Vault part of a settings import; created only while the store is locked.
+class AiSettingsImport {
+  final AiSecretVault _vault;
+  final Map<String, String?> _before = {};
+  final Set<String> _changed = {};
+  Map<String, Object?>? currentJson;
+
+  AiSettingsImport._(this._vault);
+
+  Future<void> _remember(String id) async {
+    if (!_before.containsKey(id)) _before[id] = await _vault.read(id);
+  }
+
+  Future<void> _readCurrent(Map? raw) async {
+    if (raw == null) return;
+    final rows = raw['providers'];
+    if (rows is! List) {
+      throw const FormatException('Réglages IA existants illisibles.');
+    }
+    final hydrated = <Object?>[];
+    for (final row in rows) {
+      final provider = AiProviderConfig.fromJson(row);
+      if (provider == null || row is! Map) {
+        throw const FormatException('Fournisseur IA existant illisible.');
+      }
+      await _remember(provider.id);
+      final stored = _before[provider.id];
+      hydrated.add({
+        ...row,
+        'apiKey': stored == null || stored.isEmpty ? provider.apiKey : stored,
+      });
+    }
+    currentJson = {
+      for (final entry in raw.entries) '${entry.key}': entry.value,
+      'providers': hydrated,
+    };
+  }
+
+  /// Stages merged credentials and returns JSON with no provider API keys.
+  Future<Map<String, Object?>> prepare(Map imported) async {
+    final rows = imported['providers'] as List;
+    final providers = <AiProviderConfig>[];
+    final ids = <String>{};
+    for (final row in rows) {
+      final provider = AiProviderConfig.fromJson(row);
+      if (provider == null || !ids.add(provider.id)) {
+        throw const FormatException('Fournisseur IA invalide ou dupliqué.');
+      }
+      providers.add(provider);
+      await _remember(provider.id);
+    }
+    // All reads finish before the first write. Track a write before awaiting
+    // it: a platform error can arrive after the platform changed the value.
+    for (final provider in providers) {
+      _changed.add(provider.id);
+      if (provider.apiKey.isEmpty) {
+        await _vault.delete(provider.id);
+      } else {
+        await _vault.write(provider.id, provider.apiKey);
+      }
+    }
+    for (final id in _before.keys) {
+      if (ids.contains(id)) continue;
+      _changed.add(id);
+      await _vault.delete(id);
+    }
+    return {
+      for (final entry in imported.entries) '${entry.key}': entry.value,
+      'providers': [
+        for (final row in rows) {...row as Map, 'apiKey': ''},
+      ],
+    };
+  }
+
+  Future<void> _rollback() async {
+    var failed = false;
+    for (final id in _changed) {
+      try {
+        final value = _before[id];
+        if (value == null) {
+          await _vault.delete(id);
+        } else {
+          await _vault.write(id, value);
+        }
+      } catch (_) {
+        failed = true;
+      }
+    }
+    if (failed) {
+      throw StateError(
+        'Import interrompu : certaines clés IA n’ont pas pu être restaurées.',
+      );
+    }
   }
 }
 
