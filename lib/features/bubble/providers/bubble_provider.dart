@@ -86,6 +86,13 @@ bool isStaleTailSample(
   return positionMs >= prevTailMs - 3000 && positionMs <= prevTailMs + 2000;
 }
 
+/// True when Android has kept a bubble that this isolate expects hidden.
+/// Explicit because a live native overlay with a disabled toggle must be
+/// *closed*, not mistaken for permission to re-enable the toggle.
+@visibleForTesting
+bool isOrphanOverlay({required bool expectedUp, required bool actualUp}) =>
+    !expectedUp && actualUp;
+
 class LyricsBubbleController extends Notifier<BubbleState> {
   static const String _prefsKey = 'bubble_lines';
 
@@ -253,22 +260,33 @@ class LyricsBubbleController extends Notifier<BubbleState> {
   /// (backgrounded engine, lost message), which would leave the Lecture en
   /// cours toggle on for a bubble that is gone.
   Future<void> reconcile() async {
-    if (!_overlayUp) return;
-    // A bubble that is still opening must not be mistaken for one that is
-    // gone: the check would run while the window is not up yet and kill it.
+    // An in-flight open/close is not yet reflected by the native query.
     final since = _overlayUpSince;
     if (since != null &&
         DateTime.now().difference(since) < const Duration(seconds: 5)) {
       return;
     }
     try {
-      if (!await FlutterOverlayWindow.isActive()) {
+      final isNativeActive = await FlutterOverlayWindow.isActive();
+      if (_overlayUp && !isNativeActive) {
+        // Native bubble closed through its X without a Dart notification.
         _overlayUp = false;
         _overlayUpSince = null;
         await stop();
+      } else if (isOrphanOverlay(
+        expectedUp: _overlayUp, actualUp: isNativeActive,
+      )) {
+        // The opposite desync: the app asked to hide the overlay but
+        // Android still displays an orphan. Respect the app's visibility
+        // rules, do not mark its toggle ON or revive a disabled bubble.
+        _syncOverlayVisibility();
+        if (!_overlayUp) await _closeOverlayNow();
       }
-    } catch (_) {
+    } catch (error) {
       // A failed check keeps the current state: never close on a guess.
+      DebugLog.instance.warning(
+        'Bulle', 'Réconciliation native impossible', error: error,
+      );
     }
   }
 
