@@ -31,6 +31,13 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # An APK is not a release until both static analysis and tests pass.
+      - name: Analyze Dart
+        run: flutter analyze --fatal-infos
+
+      - name: Run Flutter tests
+        run: flutter test
+
       - name: Setup release signing
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -38,11 +45,18 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "Aucun keystore configuré : la release sera signée avec la clé debug."
-            exit 0
+          set -euo pipefail
+          for variable in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_PASSWORD KEY_ALIAS; do
+            if [ -z "${!variable}" ]; then
+              echo "::error::Secret de signature obligatoire manquant : $variable"
+              exit 1
+            fi
+          done
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/musync-release.jks
+          if [ ! -s android/app/musync-release.jks ]; then
+            echo "::error::Keystore de release vide."
+            exit 1
           fi
-          echo "$KEYSTORE_BASE64" | base64 -d > android/app/musync-release.jks
           cat > android/key.properties <<PROPEOF
           storePassword=$KEYSTORE_PASSWORD
           keyPassword=$KEY_PASSWORD
