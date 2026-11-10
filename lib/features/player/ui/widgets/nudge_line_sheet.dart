@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/id3/lrc_parser.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/features/lyrics/ui/embed_lyrics_action.dart';
+import 'package:musync/features/player/providers/player_provider.dart';
 
 /// Opens the quick ±100 ms timing sheet for one synced line.
 ///
@@ -35,7 +36,6 @@ Future<void> showNudgeLineSheet(
   );
   if (!session.dirty) return;
   if (!context.mounted) return;
-  final totalMs = session.totalDelta.inMilliseconds.abs();
   await embedLyrics(
     context,
     ref,
@@ -45,9 +45,31 @@ Future<void> showNudgeLineSheet(
     // This sheet owns the whole synced state for the session, like the sync
     // editor does — a plain-text write must not wipe the timings.
     onPlainOverSynced: PlainOverSynced.replace,
-    successMessage:
-        '« ${session.lineText} » ${session.totalDelta.isNegative ? '−' : '+'}$totalMs ms.',
+    successMessage: _successMessage(session),
   );
+}
+
+/// What the write is announced as, once it lands.
+///
+/// A nudge session says how far the line moved; a deletion says the line is
+/// gone. Both can happen in one session, so the message is built from parts
+/// instead of assuming one shape.
+String _successMessage(_NudgeSession session) {
+  final parts = <String>[];
+  if (session.removedCount > 0) {
+    parts.add(
+      session.removedCount == 1
+          ? 'Ligne vide supprimée.'
+          : '${session.removedCount} lignes vides supprimées.',
+    );
+  }
+  if (session.totalDelta != Duration.zero) {
+    final totalMs = session.totalDelta.inMilliseconds.abs();
+    parts.add(
+      '« ${session.lineText} » ${session.totalDelta.isNegative ? '−' : '+'}$totalMs ms.',
+    );
+  }
+  return parts.join(' ');
 }
 
 /// The taps of one sheet session, accumulated in memory.
@@ -66,10 +88,14 @@ class _NudgeSession {
   /// only moves 50 ms). Zero means nothing changed: no write, no history.
   Duration totalDelta = Duration.zero;
 
+  /// Lines removed this session. A removal alone makes the session dirty:
+  /// without it a delete with no nudge would never be written.
+  int removedCount = 0;
+
   /// The line's text at the last tap, for the summary snackbar.
   String lineText = '';
 
-  bool get dirty => totalDelta != Duration.zero;
+  bool get dirty => totalDelta != Duration.zero || removedCount > 0;
 
   /// Applies one step in memory and returns the updated state, or null when
   /// the tap changes nothing.
@@ -98,6 +124,18 @@ class _NudgeSession {
     lineText = nudgedLine.text.trim();
     _synced = nudged;
     return (synced: nudged, index: nudged.lines.indexOf(nudgedLine));
+  }
+
+  /// Removes the line at [index] from the session state.
+  ///
+  /// Only ever called for an empty line — the sheet shows the button for
+  /// those alone. Returns false when there is nothing to remove.
+  bool removeLine(int index) {
+    if (index < 0 || index >= _synced.lines.length) return false;
+    final lines = List<LyricLine>.from(_synced.lines)..removeAt(index);
+    _synced = SyncedLyrics(lines);
+    removedCount++;
+    return true;
   }
 }
 
@@ -145,13 +183,37 @@ class _NudgeLineSheetState extends ConsumerState<_NudgeLineSheet> {
     });
   }
 
+  /// Plays from this line's timestamp, resuming first when paused — the
+  /// point is to hear whether the line lands where it should.
+  Future<void> _playFromLine() async {
+    final timestamp = _line?.timestamp;
+    if (timestamp == null) return;
+    final service = ref.read(audioPlayerServiceProvider);
+    await service.seekTo(timestamp);
+    if (!service.isPlaying) await service.play();
+  }
+
+  /// Deletes the line — empty ones only — and closes the sheet. The write
+  /// happens on close, like a nudge's, with the session marked dirty by the
+  /// removal itself.
+  void _deleteLine() {
+    if (!widget.session.removeLine(_index)) return;
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  LyricLine? get _line => (_index >= 0 && _index < _synced.lines.length)
+      ? _synced.lines[_index]
+      : null;
+
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final line = (_index >= 0 && _index < _synced.lines.length)
-        ? _synced.lines[_index]
-        : null;
+    final line = _line;
     final timestamp = line?.timestamp;
+    // The delete button is for empty lines only: a line with words is never
+    // offered for deletion from here — that stays the sync editor's job.
+    final isEmptyLine = line != null && line.text.trim().isEmpty;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
@@ -175,6 +237,12 @@ class _NudgeLineSheetState extends ConsumerState<_NudgeLineSheet> {
               ),
             ),
             const SizedBox(height: 16),
+            FilledButton.tonalIcon(
+              onPressed: timestamp == null ? null : _playFromLine,
+              icon: const Icon(Icons.play_arrow),
+              label: const Text("Écouter à partir d'ici"),
+            ),
+            const SizedBox(height: 12),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
@@ -190,6 +258,15 @@ class _NudgeLineSheetState extends ConsumerState<_NudgeLineSheet> {
                 ),
               ],
             ),
+            if (isEmptyLine) ...[
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: _deleteLine,
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Supprimer la ligne'),
+                style: TextButton.styleFrom(foregroundColor: scheme.error),
+              ),
+            ],
           ],
         ),
       ),
