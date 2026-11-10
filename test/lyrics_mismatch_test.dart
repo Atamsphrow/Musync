@@ -185,6 +185,25 @@ void main() {
       expect(result.verdict, LyricsFindVerdict.integrated);
     });
 
+    test('morceau marqué + demande explicite → la recherche tourne', () async {
+      final path = await realFile('1.mp3');
+      repo.fallback = [_hit()];
+      await mismatch.markMismatched(
+        path,
+        title: 'Titre',
+        artist: 'Artiste',
+      );
+      await mismatch.save();
+      // La marque ne bloque que l'automatique : une demande explicite
+      // (assistant, recherche manuelle) passe outre.
+      final result = await finder().findFor(
+        _song(filePath: path),
+        explicit: true,
+      );
+      expect(repo.searches, greaterThan(0));
+      expect(result.verdict, LyricsFindVerdict.integrated);
+    });
+
     test('morceau retaggé depuis la marque → plus bloqué', () async {
       final path = await realFile('1.mp3');
       repo.fallback = [_hit()];
