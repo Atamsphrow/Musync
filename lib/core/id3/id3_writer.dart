@@ -81,15 +81,16 @@ class Id3Writer {
       throw Id3WriteException('Fichier introuvable : $filePath');
     }
 
-    final Uint8List bytes;
+    final ({Uint8List bytes, int length}) head;
     try {
-      bytes = await file.readAsBytes();
+      head = await _readTagHead(file);
     } on FileSystemException catch (e) {
       throw Id3WriteException(
         'Lecture impossible : ${e.osError?.message ?? e.message}',
         e,
       );
     }
+    final bytes = head.bytes;
 
     // The format is named before a single byte is written.
     //
@@ -131,7 +132,7 @@ class Id3Writer {
     // declaredSize would then allocate hundreds of MB for the fast path
     // and bloat the file to match. Refusing is honest — the audio is
     // damaged too.
-    if (tag.audioOffset > bytes.length) {
+    if (tag.audioOffset > head.length) {
       throw Id3WriteException(
         'Tag ID3 corrompu (fichier tronqué) : '
         'impossible d\'y écrire des paroles.',
@@ -178,7 +179,7 @@ class Id3Writer {
         _buildUsltFrame(plain, tag.majorVersion),
     ];
 
-    await _commitFrames(file, bytes, tag, frames);
+    await _commitFrames(file, head.length, tag, frames);
   }
 
 
@@ -190,7 +191,7 @@ class Id3Writer {
   /// whichever frames are being written.
   static Future<void> _commitFrames(
     File file,
-    Uint8List bytes,
+    int originalLength,
     Id3Tag tag,
     List<Id3Frame> frames,
   ) async {
@@ -217,7 +218,7 @@ class Id3Writer {
       if (fitsInPlace) {
         await _overwriteHead(file, newTag);
       } else {
-        await _rewriteFile(file, newTag, bytes, tag.audioOffset);
+        await _rewriteFile(file, newTag, originalLength, tag.audioOffset);
       }
     } on FileSystemException catch (e) {
       throw Id3WriteException(_describeWriteFailure(e), e);
@@ -266,15 +267,16 @@ class Id3Writer {
       throw Id3WriteException('Fichier introuvable : $filePath');
     }
 
-    final Uint8List bytes;
+    final ({Uint8List bytes, int length}) head;
     try {
-      bytes = await file.readAsBytes();
+      head = await _readTagHead(file);
     } on FileSystemException catch (e) {
       throw Id3WriteException(
         'Lecture impossible : ${e.osError?.message ?? e.message}',
         e,
       );
     }
+    final bytes = head.bytes;
 
     // Same naming-before-writing rule as [writeLyrics]: the container decides
     // which writer runs.
@@ -302,7 +304,7 @@ class Id3Writer {
     }
 
     final tag = Id3Tag.parse(bytes) ?? Id3Tag.empty();
-    if (tag.audioOffset > bytes.length) {
+    if (tag.audioOffset > head.length) {
       throw Id3WriteException(
         'Tag ID3 corrompu (fichier tronqué) : '
         'impossible d\'y écrire des tags.',
@@ -398,7 +400,7 @@ class Id3Writer {
       frames.add(_buildApicFrame(artwork, majorVersion));
     }
 
-    await _commitFrames(file, bytes, tag, frames);
+    await _commitFrames(file, head.length, tag, frames);
   }
 
   /// Reads the current "n/m" pair of [frameId], so a number field the caller
@@ -584,22 +586,109 @@ class Id3Writer {
   /// timestamp and a random suffix: a fixed name meant two concurrent writes
   /// on the same track opened and truncated the same temp, and the second
   /// rename found its source gone.
+  /// Streams only the tag bytes into memory, not the whole audio payload.
+  /// A 300 MB song with a 4 KB ID3 tag must never allocate 300 MB just to
+  /// update its lyrics. Malformed oversized tags are refused before allocation.
+  static Future<({Uint8List bytes, int length})> _readTagHead(File file) async {
+    final reader = await file.open(mode: FileMode.read);
+    try {
+      final length = await reader.length();
+      final prefix = await reader.read(AudioContainerReader.headerBytes);
+      if (prefix.length < 10 ||
+          prefix[0] != 0x49 || prefix[1] != 0x44 || prefix[2] != 0x33) {
+        return (bytes: Uint8List.fromList(prefix), length: length);
+      }
+      // The synchsafe ID3 header encodes up to 256 MB. An enormous or
+      // corrupted header must not make a tag-edit operation run out of RAM.
+      const maxTagBytes = 64 * 1024 * 1024;
+      final declared = Id3Tag.readSynchsafe(prefix, 6);
+      final footer = prefix[3] >= 4 && (prefix[5] & 0x10) != 0;
+      final total = 10 + declared + (footer ? 10 : 0);
+      if (total > maxTagBytes) {
+        throw const Id3WriteException(
+          'Tag ID3 trop volumineux (> 64 Mo) : écriture refusée.',
+        );
+      }
+      // A truncated tag is rejected by the caller against the true file
+      // length, rather than allocating the missing bytes.
+      await reader.setPosition(0);
+      final bytes = await reader.read(min(total, length));
+      return (bytes: bytes, length: length);
+    } finally {
+      await reader.close();
+    }
+  }
+
+  /// Copy with bounded memory; only swap once the new file is verified.
+  /// The original is left untouched on write errors or a short copy.
   static Future<void> _rewriteFile(
     File file,
     Uint8List newTag,
-    Uint8List original,
+    int originalLength,
     int audioOffset,
   ) async {
     await _deleteStaleTemps(file);
     final temp = File(_uniqueTempPath(file));
+    const chunkSize = 256 * 1024;
     try {
-      final handle = await temp.open(mode: FileMode.write);
+      final source = await file.open(mode: FileMode.read);
       try {
-        await handle.writeFrom(newTag);
-        await handle.writeFrom(original, audioOffset);
-        await handle.flush();
+        final output = await temp.open(mode: FileMode.write);
+        try {
+          await source.setPosition(audioOffset);
+          await output.writeFrom(newTag);
+          var remaining = originalLength - audioOffset;
+          while (remaining > 0) {
+            final chunk = await source.read(min(chunkSize, remaining));
+            if (chunk.isEmpty) {
+              throw const Id3WriteException(
+                'Lecture incomplète pendant la copie des données audio.',
+              );
+            }
+            await output.writeFrom(chunk);
+            remaining -= chunk.length;
+          }
+          await output.flush();
+        } finally {
+          await output.close();
+        }
       } finally {
-        await handle.close();
+        await source.close();
+      }
+      // Compare source and destination audio byte-for-byte, in bounded
+      // chunks. A hash alone would permit collisions and miss short copies.
+      // Check the tag as well, and detect a source size change before rename.
+      if (await file.length() != originalLength ||
+          await temp.length() != newTag.length + originalLength - audioOffset) {
+        throw const Id3WriteException(
+          'Taille modifiée pendant la copie : original préservé.',
+        );
+      }
+      final verificationSource = await file.open(mode: FileMode.read);
+      try {
+        final output = await temp.open(mode: FileMode.read);
+        try {
+          if (!_bytesEqual(await output.read(newTag.length), newTag)) {
+            throw const Id3WriteException('Tag temporaire non conforme.');
+          }
+          await verificationSource.setPosition(audioOffset);
+          var remaining = originalLength - audioOffset;
+          while (remaining > 0) {
+            final n = min(chunkSize, remaining);
+            final before = await verificationSource.read(n);
+            final after = await output.read(n);
+            if (before.isEmpty || !_bytesEqual(before, after)) {
+              throw const Id3WriteException(
+                'Copie audio non conforme : original préservé.',
+              );
+            }
+            remaining -= before.length;
+          }
+        } finally {
+          await output.close();
+        }
+      } finally {
+        await verificationSource.close();
       }
       await temp.rename(file.path);
     } catch (_) {
