@@ -95,8 +95,13 @@ enum AiModelPing {
   keyRejected,
 
   /// The model did not answer usefully: empty reply, or an HTTP error that
-  /// is not the key.
+  /// is not the key and not a rate limit.
   noAnswer,
+
+  /// The provider is rate-limiting (HTTP 429): a limit was hit, not the
+  /// model. Kept apart from [noAnswer] so a batch probe can stop instead
+  /// of burning one call per model into the same wall.
+  rateLimited,
 
   /// The test could not be made — no network.
   unknown,
@@ -196,6 +201,9 @@ class AiFilenameReader {
     } on AiReaderException catch (e) {
       if (e.statusCode == 401 || e.statusCode == 403) {
         return AiModelPing.keyRejected;
+      }
+      if (e.statusCode == 429) {
+        return AiModelPing.rateLimited;
       }
       if (e.statusCode != null || e.noAnswer) {
         // An HTTP error, or the model reached but answering nothing
