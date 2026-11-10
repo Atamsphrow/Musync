@@ -776,6 +776,35 @@ class AudioPlayerService {
     return event.updatePosition;
   }
 
+  /// A new index can inherit just_audio's stale seek target from the old
+  /// track if no READY transition occurred. Detect only a nonzero anchor
+  /// identical to the old one and never a recent deliberate user seek.
+  @visibleForTesting
+  static bool shouldCorrectIndexAnchor({
+    required int? previousIndex,
+    required int? currentIndex,
+    required Duration previousPosition,
+    required Duration currentPosition,
+    required bool playing,
+    required DateTime? lastServiceSeekAt,
+    required DateTime now,
+  }) {
+    if (!playing || previousIndex == null || currentIndex == null ||
+        previousIndex == currentIndex) {
+      return false;
+    }
+    if (lastServiceSeekAt != null &&
+        now.difference(lastServiceSeekAt) < _ownSeekWindow) {
+      return false;
+    }
+    if (previousPosition < const Duration(seconds: 3) ||
+        currentPosition < const Duration(seconds: 3)) {
+      return false;
+    }
+    return (previousPosition - currentPosition).abs() <
+        const Duration(milliseconds: 750);
+  }
+
   /// Loop re-anchor: just_audio's Android player remembers the last seek
   /// target (`seekPos`) and only clears it on a READY state transition.
   /// A seek on a buffered local file often produces none, so the stale
@@ -793,6 +822,22 @@ class AudioPlayerService {
     final prev = _lastPlaybackEvent;
     _lastPlaybackEvent = event;
     if (prev == null) return;
+    if (shouldCorrectIndexAnchor(
+      previousIndex: prev.currentIndex,
+      currentIndex: event.currentIndex,
+      previousPosition: _extrapolatedPosition(prev, now),
+      currentPosition: event.updatePosition,
+      playing: _player.playing,
+      lastServiceSeekAt: _lastServiceSeekAt,
+      now: now,
+    )) {
+      DebugLog.instance.warning(
+        'Player',
+        'Ancre de position héritée du morceau précédent : seek(0)',
+      );
+      unawaited(_seekWithRecord(Duration.zero, index: event.currentIndex));
+      return;
+    }
     final duration = event.duration ?? _player.duration;
     if (shouldCorrectLoopAnchor(
       prevExtrapolated: _extrapolatedPosition(prev, now),
