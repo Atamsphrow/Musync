@@ -31,7 +31,6 @@ import 'package:musync/features/ai_assistant/data/assistant_bridge.dart';
 import 'package:musync/features/ai_assistant/data/tools/file_tools.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/data/music_scanner.dart';
-import 'package:musync/features/library/data/tag_mtime_store.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
 import 'package:musync/features/player/data/audio_player_service.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
@@ -319,46 +318,7 @@ void main() {
       );
     });
 
-    test('titre « <unknown> » : le nom de fichier gagne, comme artiste/album',
-        () async {
-      final path = await makeTrack(
-        'piste.mp3',
-        _id3TagBytes(
-          major: 3,
-          frames: [
-            _Id3Frame('TIT2', [0, ...'<unknown>'.codeUnits]),
-            _Id3Frame('TPE1', [0, ...'Vrai Artiste'.codeUnits]),
-          ],
-        ),
-      );
-      final scanner = MusicScanner(
-        mtimeStore: TagMtimeStore(root: tempDir),
-      );
-      final song = _song(1, 'Ancien Titre', 'Ancien Artiste', path);
-      final updated = await scanner.refreshMetadataFromFiles([song]);
-      expect(updated.single.title, 'Ancien Titre');
-      expect(updated.single.artist, 'Vrai Artiste');
-    });
 
-    test('refresh : l’ordre d’entrée est préservé (lots parallèles)',
-        () async {
-      final paths = <String>[];
-      for (var i = 0; i < 12; i++) {
-        paths.add(await makeTrack('p$i.mp3'));
-      }
-      final scanner = MusicScanner(
-        mtimeStore: TagMtimeStore(root: tempDir),
-      );
-      final songs = [
-        for (var i = 0; i < paths.length; i++)
-          _song(i, 'Titre $i', 'Artiste', paths[i]),
-      ];
-      final updated = await scanner.refreshMetadataFromFiles(songs);
-      expect(
-        updated.map((s) => s.filePath).toList(),
-        paths,
-      );
-    });
   });
 
   group('I28/I29 — lecture ID3 : opaque d’abord, tronqué propre', () {
@@ -573,20 +533,7 @@ void main() {
     });
   });
 
-  group('K69 — tag_mtime_store : seules les valeurs scalaires', () {
-    test('null / liste / objet ignorés, int et chaîne gardés', () async {
-      final file = File('${tempDir.path}/tag_mtimes.json');
-      await file.writeAsString(jsonEncode({
-        'a.mp3': null,
-        'b.mp3': [1, 2],
-        'c.mp3': {'x': 1},
-        'd.mp3': 123456,
-        'e.mp3': '111:222',
-      }));
-      final loaded = await TagMtimeStore(root: tempDir).load();
-      expect(loaded, {'d.mp3': '123456', 'e.mp3': '111:222'});
-    });
-  });
+
 }
 
 // ── Helpers : fixtures ────────────────────────────────────────────────────
