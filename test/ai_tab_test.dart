@@ -1,12 +1,16 @@
 // The IA tab: the add button must wait for the stored settings, and an
 // instruction typed but never unfocused must still be saved on close.
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:musync/features/ai_assistant/data/automation_store.dart';
 import 'package:musync/features/ai_assistant/providers/automation_provider.dart';
+import 'package:musync/features/lyrics/data/ai_filename_reader.dart';
 import 'package:musync/features/settings/data/ai_provider_config.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
 import 'package:musync/features/settings/ui/ai_tab.dart';
@@ -123,5 +127,88 @@ void main() {
     await tester.pump();
 
     expect(store.settings.instruction, 'Nouvelle instruction');
+  });
+
+  testWidgets('scanning marks the models that answer, live', (tester) async {
+    // alpha answers, beta answers nothing usable, gamma is unreachable:
+    // one of each mark, and a counter that says so.
+    final reader = AiFilenameReader(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/models')) {
+          return http.Response(
+            jsonEncode({
+              'models': [
+                {'name': 'models/alpha'},
+                {'name': 'models/beta'},
+                {'name': 'models/gamma'},
+              ],
+            }),
+            200,
+          );
+        }
+        final model = request.url.pathSegments.last.split(':').first;
+        if (model == 'beta') {
+          return http.Response(jsonEncode({'candidates': []}), 200);
+        }
+        if (model == 'gamma') throw http.ClientException('down');
+        return http.Response(
+          jsonEncode({
+            'candidates': [
+              {
+                'content': {
+                  'parts': [
+                    {'text': 'OK'},
+                  ],
+                },
+              },
+            ],
+          }),
+          200,
+        );
+      }),
+    );
+
+    final store = _MemoryStore(const AiSettings());
+    // The scope sits above the app, as in production: the dialog is a
+    // route on MaterialApp's navigator, so a scope inside `home` would
+    // leave it outside — `_scanModels` reads the reader through `ref`
+    // and would throw "No ProviderScope found".
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          aiSettingsStoreProvider.overrideWithValue(store),
+          automationStoreProvider.overrideWithValue(noFsAutomationStore),
+          aiFilenameReaderProvider.overrideWithValue(reader),
+        ],
+        child: const MaterialApp(home: AiTab()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.ancestor(
+        of: find.text('Clé API'),
+        matching: find.byType(TextField),
+      ),
+      'test-key',
+    );
+    await tester.tap(find.byTooltip('Scanner les modèles disponibles'));
+    await tester.pumpAndSettle();
+
+    // The scan ran, the probe ran after it: one of each outcome.
+    expect(
+      find.text('1 répond, 1 ne répond pas, 1 indéterminé.'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+
+    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+    expect(find.byIcon(Icons.error_outline), findsOneWidget);
+    expect(find.byIcon(Icons.help_outline), findsOneWidget);
   });
 }
