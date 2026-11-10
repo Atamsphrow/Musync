@@ -126,20 +126,28 @@ class AiLyricsFinder {
   /// [origin] est la provenance enregistrée en cas d'écriture.
   /// [dryRun] ne fait que décider : rien n'est écrit, le verdict
   /// `integrated` signifie alors « intégrerait ».
+  /// [explicit] : demande explicite de l'utilisateur (assistant, outil
+  /// de remplacement, diagnostic) — la marque « non correspondant » ne
+  /// bloque que l'automatique, elle est ignorée ici. Par défaut faux :
+  /// le balayage et l'auto-fetch restent bloqués pour un morceau marqué.
   Future<LyricsFindResult> findFor(
     Song song, {
     bool aiFallback = true,
     bool dryRun = false,
+    bool explicit = false,
     LyricsProvenanceOrigin origin = LyricsProvenanceOrigin.autoAi,
   }) async {
     // Marqué « non correspondant » : plus aucun téléchargement
     // automatique pour ce morceau — ni recherche (même pas la
     // résolution d'identité, qui peut appeler l'IA), ni écriture.
-    if (await mismatchStore.isMismatched(
-      song.filePath,
-      title: song.title,
-      artist: song.artist,
-    )) {
+    // Une demande explicite passe outre : la marque ne bloque que
+    // l'automatique (balayage, auto-fetch).
+    if (!explicit &&
+        await mismatchStore.isMismatched(
+          song.filePath,
+          title: song.title,
+          artist: song.artist,
+        )) {
       _log('marqué non correspondant', song, 0, '');
       return const LyricsFindResult(
         verdict: LyricsFindVerdict.keptExisting,
@@ -461,15 +469,14 @@ class AiLyricsFinder {
     final current = await _readCurrent(song.filePath);
     final currentProvenance = await provenance.forPath(song.filePath);
     final hasCurrent = _hasAnyLyrics(current);
-    final find = await findFor(song, dryRun: true);
+    // Demande explicite (outil Vérifier) : la marque « non
+    // correspondant » ne bloque pas le diagnostic.
+    final find = await findFor(song, dryRun: true, explicit: true);
 
     if (!hasCurrent) {
       return LyricsVerifyResult(
         verdict: LyricsVerifyVerdict.unknown,
-        message: 'Ce morceau n\'a pas de paroles dans son fichier.'
-            '${find.best == null ? '' : ' Meilleur candidat : '
-                '« ${find.best!.title} » — ${find.best!.artist} '
-                '(confiance ${(find.bestConfidence * 100).round()} %).'}',
+        message: _noLyricsMessage(song, find),
         find: find,
       );
     }
@@ -533,6 +540,56 @@ class AiLyricsFinder {
           'contredit.',
       find: find,
     );
+  }
+
+  /// Message quand le fichier n'a pas de paroles : au lieu de s'arrêter
+  /// là, présenter ce que la recherche en ligne a trouvé (ou pas).
+  ///
+  /// La vérification n'écrit jamais : un candidat sûr est présenté comme
+  /// trouvaille, pas comme paroles intégrées.
+  String _noLyricsMessage(Song song, LyricsFindResult find) {
+    const lead = 'Ce morceau n\'a pas de paroles dans son fichier.';
+    switch (find.verdict) {
+      case LyricsFindVerdict.integrated:
+        // dryRun : « intégrerait » — la vérification n'écrit jamais.
+        final best = find.best;
+        if (best == null) return lead;
+        return '$lead Trouvé en ligne : « ${best.title} » — '
+            '${best.artist} (${best.source}, confiance '
+            '${(best.confidence * 100).round()} %).';
+      case LyricsFindVerdict.needsChoice:
+        final lines = [
+          for (var i = 0; i < find.top.length; i++)
+            '${i + 1}. « ${find.top[i].title} » — ${find.top[i].artist} '
+                '(${find.top[i].source}, confiance '
+                '${(find.top[i].confidence * 100).round()} %)'
+                '${find.top[i].hasSyncedLyrics ? ', synchronisées' : ', texte seul'}',
+        ];
+        return '$lead Plusieurs candidats possibles '
+            '(confiance insuffisante pour intégrer seul) :\n'
+            '${lines.join('\n')}';
+      case LyricsFindVerdict.notFound:
+        if (find.searchesFailed) {
+          return '$lead La recherche en ligne n\'a pas abouti '
+              '(aucune source ne répond).';
+        }
+        final title = find.queriedTitle.isEmpty
+            ? song.title
+            : find.queriedTitle;
+        final artist = find.queriedArtist.isEmpty
+            ? song.artist
+            : find.queriedArtist;
+        return '$lead Aucune parole trouvée en ligne pour '
+            '« $title » — $artist.';
+      case LyricsFindVerdict.keptExisting:
+        // Ne devrait pas arriver sans paroles dans le fichier (rien à
+        // garder) : présenter le meilleur candidat s'il y en a un.
+        final best = find.best;
+        if (best == null) return lead;
+        return '$lead Meilleur candidat : « ${best.title} » — '
+            '${best.artist} (confiance '
+            '${(best.confidence * 100).round()} %).';
+    }
   }
 
   // ---- décision ---------------------------------------------------------
