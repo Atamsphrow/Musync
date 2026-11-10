@@ -413,6 +413,18 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
   /// a superseded batch can neither write into the new results nor call
   /// setState on a disposed widget.
   int _probeRun = 0;
+  /// The provider config the form describes right now: the scan and
+  /// the probe both run on the draft, never on the saved provider.
+  AiProviderConfig _draft() => AiProviderConfig(
+    id: widget.existing?.id ?? 'scan',
+    name: _name.text.trim().isEmpty ? labelFor(_kind) : _name.text.trim(),
+    kind: _kind,
+    baseUrl: _baseUrl.text.trim().isEmpty
+        ? defaultBaseUrlFor(_kind)
+        : _baseUrl.text.trim(),
+    model: _model.text.trim(),
+    apiKey: _apiKey.text.trim(),
+  );
   /// Asks the provider for its catalogue, using the values in the form.
   ///
   /// The form's values and not the saved ones: the whole point is to scan
@@ -434,16 +446,7 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
       _probeStop = null;
       _probing = false;
     });
-    final draft = AiProviderConfig(
-      id: widget.existing?.id ?? 'scan',
-      name: _name.text.trim().isEmpty ? labelFor(_kind) : _name.text.trim(),
-      kind: _kind,
-      baseUrl: _baseUrl.text.trim().isEmpty
-          ? defaultBaseUrlFor(_kind)
-          : _baseUrl.text.trim(),
-      model: _model.text.trim(),
-      apiKey: _apiKey.text.trim(),
-    );
+    final draft = _draft();
     try {
       final models = await ref.read(aiFilenameReaderProvider).listModels(draft);
       if (!mounted || runId != _probeRun) return;
@@ -476,6 +479,8 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
   /// provider about *that* model, not the one typed in the form. A refused
   /// key or a rate limit stops the batch — both poison every remaining
   /// probe. Closing the dialog (or re-scanning) cancels it via [_probeRun].
+  /// A stopped batch can be resumed with [_resumeProbe], which re-probes
+  /// only the models never judged (plus the interrupted one).
   Future<void> _probeModels(
     AiProviderConfig draft,
     List<String> models,
@@ -504,6 +509,29 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
         _ => null,
       };
     });
+  }
+  /// Resumes a batch stopped early (refused key, rate limit) from the
+  /// first model never judged.
+  ///
+  /// The interrupted model's stop result is not a verdict on it — the
+  /// provider refused the call itself — so it is dropped and retested,
+  /// and every other mark is kept. A new 429 / refused key stops the
+  /// resumed batch the same way, with a fresh message.
+  Future<void> _resumeProbe() async {
+    final models = _models;
+    if (models == null || _probing || _probeStop == null) return;
+    final remaining = AiModelProbe.remaining(
+      models: models,
+      results: _probeResults,
+    );
+    if (remaining.isEmpty) return;
+    setState(() {
+      for (final model in remaining) {
+        _probeResults.remove(model);
+      }
+      _probeStop = null;
+    });
+    unawaited(_probeModels(_draft(), remaining, _probeRun));
   }
   /// True when [model] is the one being probed right now: probes run in
   /// order, so it is the first model of the list with no result yet.
@@ -726,6 +754,18 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
                     _probeStop!,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+              if (_probeStop != null && !_probing)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: _resumeProbe,
+                      icon: const Icon(Icons.play_arrow),
+                      label: const Text('Reprendre'),
                     ),
                   ),
                 ),
