@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/shared_http_client.dart';
+import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
@@ -16,9 +17,16 @@ import 'package:musync/features/settings/providers/settings_provider.dart';
 final lyricsRepositoryProvider = Provider<LyricsRepository>((ref) {
   final configs = ref.watch(lyricsSourcesProvider).valueOrNull;
   final client = ref.watch(sharedHttpClientProvider);
-  if (configs == null) return LyricsRepository(sources: [LrclibSource(client: client)]);
+  final mismatchStore = ref.watch(lyricsMismatchStoreProvider);
+  if (configs == null) {
+    return LyricsRepository(
+      sources: [LrclibSource(client: client)],
+      mismatchStore: mismatchStore,
+    );
+  }
 
   return LyricsRepository(
+    mismatchStore: mismatchStore,
     sources: [
       for (final config in configs.where((c) => c.enabled))
         switch (config.kind) {
