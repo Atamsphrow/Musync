@@ -134,7 +134,8 @@ String _summary(ImportReport report) {
   return text;
 }
 
-String _plural(int n, String one, String many) => n == 1 ? '1 $one' : '$n $many';
+String _plural(int n, String one, String many) =>
+    n == 1 ? '1 $one' : '$n $many';
 
 class _ImportConfirmDialog extends StatelessWidget {
   final ImportBundle bundle;
@@ -153,7 +154,7 @@ class _ImportConfirmDialog extends StatelessWidget {
       if (bundle.preferences.containsKey('last_song_path')) 'Dernier morceau',
       if (history != null)
         'Historique : ${history.entries.length} sauvegarde(s)'
-        '${history.skipped.isEmpty ? '' : ' (${history.skipped.length} sans contenu)'}',
+            '${history.skipped.isEmpty ? '' : ' (${history.skipped.length} sans contenu)'}',
     ];
     return AlertDialog(
       title: const Text('Importer les paramètres'),
@@ -164,9 +165,8 @@ class _ImportConfirmDialog extends StatelessWidget {
           children: [
             Text(
               fileName,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+              style: Theme.of(context).textTheme.bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.bold),
             ),
             if (bundle.exportedAt.isNotEmpty)
               Text(
@@ -188,7 +188,7 @@ class _ImportConfirmDialog extends StatelessWidget {
               bundle.includesSecrets
                   ? 'Le fichier contient des clés API : elles seront appliquées.'
                   : 'Le fichier ne contient pas de clés API : celles déjà '
-                      'configurées sont conservées.',
+                        'configurées sont conservées.',
             ),
             const SizedBox(height: 8),
             const Text(
