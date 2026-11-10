@@ -101,6 +101,43 @@ void main() {
     return file;
   }
 
+  group('J33 — écriture par flux', () {
+    test('copie un audio volumineux sans modifier un octet de sa piste',
+        () async {
+      // Forces the slow path: no existing ID3 padding, new USLT tag is
+      // prepended and the entire audio has to be streamed into a temp.
+      final audio = Uint8List.fromList(
+        List<int>.generate(3 * 1024 * 1024 + 31, (i) => (i * 19) & 0xFF),
+      );
+      final file = await writeFixture('grand.mp3', audio);
+      await Id3Writer.writeLyrics(
+        file.path,
+        unsynced: const UnsyncedLyrics('texte'),
+      );
+      final rewritten = await file.readAsBytes();
+      final tag = Id3Tag.parse(rewritten)!;
+      expect(tag.frames.map((f) => f.id), contains('USLT'));
+      expect(rewritten.sublist(tag.audioOffset), audio);
+      expect(tempDir.listSync().where((f) => f.path.endsWith('.musync.tmp')),
+          isEmpty);
+    });
+
+    test('refuse un tag ID3 annoncé à plus de 64 Mo', () async {
+      final file = await writeFixture('bombe.mp3', [
+        ...ascii.encode('ID3'),
+        4, 0, 0,
+        0x7F, 0x7F, 0x7F, 0x7F,
+        ...List<int>.filled(16, 0),
+      ]);
+      final before = await file.readAsBytes();
+      await expectLater(
+        Id3Writer.writeLyrics(file.path),
+        throwsA(isA<Id3WriteException>()),
+      );
+      expect(await file.readAsBytes(), before);
+    });
+  });
+
   group('Id3Tag.parse', () {
     test('reads v2.3 frames, whose sizes are big-endian', () {
       final bytes = _tagBytes(
