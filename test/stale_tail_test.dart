@@ -2,6 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:musync/features/bubble/providers/bubble_provider.dart';
 
 void main() {
+  test('native overlay is closed only when unexpected', () {
+    expect(isOrphanOverlay(expectedUp: false, actualUp: true), isTrue);
+    expect(isOrphanOverlay(expectedUp: true, actualUp: true), isFalse);
+    expect(isOrphanOverlay(expectedUp: false, actualUp: false), isFalse);
+  });
+
   group('isStaleTailSample', () {
     test('no previous tail: never stale', () {
       expect(isStaleTailSample(null, 239500), isFalse);
