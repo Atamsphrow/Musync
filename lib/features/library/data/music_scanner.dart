@@ -9,7 +9,6 @@ import 'package:musync/core/id3/m4a_writer.dart';
 import 'package:musync/features/library/data/excluded_dirs_store.dart';
 import 'package:musync/features/library/data/excluded_files_store.dart';
 import 'package:musync/features/library/data/models/song.dart';
-import 'package:musync/features/library/data/tag_mtime_store.dart';
 
 /// Reads the device's music library through MediaStore.
 ///
@@ -26,17 +25,14 @@ class IgnoredFile {
 
 class MusicScanner {
   final OnAudioQuery _audioQuery;
-  final TagMtimeStore _mtimeStore;
   final ExcludedDirsStore _excludedDirsStore;
   final ExcludedFilesStore _excludedFilesStore;
 
   MusicScanner({
     OnAudioQuery? audioQuery,
-    TagMtimeStore? mtimeStore,
     ExcludedDirsStore? excludedDirsStore,
     ExcludedFilesStore? excludedFilesStore,
   }) : _audioQuery = audioQuery ?? OnAudioQuery(),
-       _mtimeStore = mtimeStore ?? const TagMtimeStore(),
        _excludedDirsStore = excludedDirsStore ?? const ExcludedDirsStore(),
        _excludedFilesStore = excludedFilesStore ?? const ExcludedFilesStore();
 
@@ -346,119 +342,6 @@ class MusicScanner {
     final base = sep < 0 ? path : path.substring(sep + 1);
     final dot = base.lastIndexOf('.');
     return (dot < 0 ? base : base.substring(0, dot)).replaceAll('_', ' ');
-  }
-
-  /// Re-reads title/artist/album straight from the audio files whose content
-  /// changed since the last refresh, bypassing the MediaStore cache.
-  ///
-  /// MediaStore only picks up an external tag edit (Musicolet) on Android's
-  /// own schedule, so a refresh that merely re-queries it keeps showing the
-  /// old values. This stats every library file and, for each one whose mtime
-  /// moved since the last call (or was never recorded), parses TIT2/TPE1/TALB
-  /// directly out of the ID3 tag. Unchanged files cost one stat() each and no
-  /// tag parsing; the mtimes persist across launches, so a refresh with
-  /// nothing edited re-reads zero tags.
-  ///
-  /// Only MP3 (ID3) files are re-read — other containers keep their MediaStore
-  /// values. A file that can't be read keeps its values too: a refresh must
-  /// never blank a title it cannot replace.
-  Future<List<Song>> refreshMetadataFromFiles(List<Song> songs) async {
-    final mtimes = await _mtimeStore.load();
-    var dirty = false;
-    // A removed / renamed track used to keep a dead path in the persistent
-    // tag cache forever, making the cache grow on every library turnover.
-    final currentPaths = songs.map((song) => song.filePath).toSet();
-    final oldSize = mtimes.length;
-    mtimes.removeWhere((path, _) => !currentPaths.contains(path));
-    if (mtimes.length != oldSize) dirty = true;
-    final updated = <Song>[];
-
-    // Lectures de tags I/O-bound, en lots bornés — comme le scan iOS.
-    // Les résultats sont réassemblés dans l'ordre d'entrée.
-    const batchSize = 8;
-    for (var i = 0; i < songs.length; i += batchSize) {
-      final batch = songs.skip(i).take(batchSize).toList();
-      final results = await Future.wait(
-        batch.map((song) => _refreshOne(song, mtimes)),
-      );
-      for (final result in results) {
-        updated.add(result.song);
-        if (result.changed) dirty = true;
-      }
-    }
-
-    if (dirty) await _mtimeStore.save(mtimes);
-    return updated;
-  }
-
-  /// Relecture d'un seul fichier : stat, puis tag ID3 si le contenu a bougé.
-  ///
-  /// La clé `mtime:size` n'est enregistrée qu'après une lecture réussie (ou
-  /// quand il n'y a rien à lire, hors MP3) : un échec (fichier retiré en
-  /// cours de scan, tag corrompu, I/O) est retenté au prochain rafraîchissement
-  /// au lieu d'être mémorisé comme fait.
-  Future<({Song song, bool changed})> _refreshOne(
-    Song song,
-    Map<String, String> mtimes,
-  ) async {
-    final path = song.filePath;
-    final stat = await _statOf(path);
-    if (stat == null) return (song: song, changed: false);
-    // mtime AND size: some tag editors (Musicolet) preserve the mtime when
-    // writing, so mtime alone misses their edits. Size catches those.
-    final key = '${stat.mtime}:${stat.size}';
-    if (mtimes[path] == key) return (song: song, changed: false);
-    if (_isMp3(path)) {
-      try {
-        final updated = _withFileMetadata(
-          song,
-          await Id3Reader.readMetadata(path),
-        );
-        mtimes[path] = key;
-        return (song: updated, changed: true);
-      } catch (_) {
-        // The file changed but can't be read (removed mid-scan, corrupt
-        // tag, I/O error): keep its previous metadata instead of
-        // aborting the whole refresh over one bad file — and don't record
-        // the key, so the next refresh retries.
-        return (song: song, changed: false);
-      }
-    }
-    mtimes[path] = key;
-    return (song: song, changed: true);
-  }
-
-  /// File stat (mtime + size), or null when the file can't be statted. Never
-  /// throws: an unreadable file simply keeps its current metadata.
-  static Future<({int mtime, int size})?> _statOf(String path) async {
-    try {
-      final s = await File(path).stat();
-      return (mtime: s.modified.millisecondsSinceEpoch, size: s.size);
-    } on FileSystemException {
-      return null;
-    }
-  }
-
-  static bool _isMp3(String path) => path.toLowerCase().endsWith('.mp3');
-
-  /// Applies ID3 metadata onto [song]. A field the tag doesn't carry keeps the
-  /// MediaStore value — the file was re-read because its bytes changed, but an
-  /// absent frame is not an instruction to blank the display.
-  Song _withFileMetadata(Song song, TagMetadata meta) {
-    var updated = song;
-    final title = meta.title?.trim();
-    if (title != null && title.isNotEmpty && title != '<unknown>') {
-      updated = updated.copyWith(title: title);
-    }
-    final artist = meta.artist?.trim();
-    if (artist != null && artist.isNotEmpty) {
-      updated = updated.copyWith(artist: _orUnknown(artist, unknownArtist));
-    }
-    final album = meta.album?.trim();
-    if (album != null && album.isNotEmpty) {
-      updated = updated.copyWith(album: _orUnknown(album, unknownAlbum));
-    }
-    return updated;
   }
 
   /// What an untagged file is shown as.
