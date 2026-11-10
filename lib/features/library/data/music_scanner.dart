@@ -365,6 +365,12 @@ class MusicScanner {
   Future<List<Song>> refreshMetadataFromFiles(List<Song> songs) async {
     final mtimes = await _mtimeStore.load();
     var dirty = false;
+    // A removed / renamed track used to keep a dead path in the persistent
+    // tag cache forever, making the cache grow on every library turnover.
+    final currentPaths = songs.map((song) => song.filePath).toSet();
+    final oldSize = mtimes.length;
+    mtimes.removeWhere((path, _) => !currentPaths.contains(path));
+    if (mtimes.length != oldSize) dirty = true;
     final updated = <Song>[];
 
     // Lectures de tags I/O-bound, en lots bornés — comme le scan iOS.
