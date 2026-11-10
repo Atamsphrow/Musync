@@ -27,6 +27,24 @@ enum AiModelProbeOutcome {
 }
 
 class AiModelProbe {
+  /// The models of [models] still to probe, given [results] so far.
+  ///
+  /// A model with no result yet is still to probe. So is a model whose
+  /// result stopped a batch (refused key, rate limit): that result is
+  /// not a verdict on the model — the provider refused the call itself —
+  /// so a resumed batch retests it. Every other result (answered,
+  /// no answer, unknown) stands and is never pinged again.
+  static List<String> remaining({
+    required List<String> models,
+    required Map<String, AiModelPing> results,
+  }) => [
+    for (final model in models)
+      if (!results.containsKey(model) ||
+          results[model] == AiModelPing.rateLimited ||
+          results[model] == AiModelPing.keyRejected)
+        model,
+  ];
+
   /// Probes [models] in order, one at a time, calling [onResult] after
   /// each model with what the probe found.
   ///
