@@ -239,8 +239,8 @@ class AssistantController {
       raw = routed;
     } else {
       final settings = await _ref.read(aiSettingsStoreProvider).load();
-      final provider = settings.active;
-      if (provider == null) {
+      final providers = settings.usable;
+      if (providers.isEmpty) {
         return const AssistantFailed(
           'Aucune clé IA configurée. Ajoutez-en une dans Paramètres › IA.',
         );
@@ -250,22 +250,51 @@ class AssistantController {
           AssistantBridge(client: _ref.read(sharedHttpClientProvider));
       final system =
           AssistantBridge.systemPrompt(_registry.describeForLlm());
-      try {
-        raw = await bridge.complete(
-          provider: provider,
-          system: system,
-          history: _history.messages,
-          userText: trimmed,
-        );
-      } on AiReaderException catch (e) {
-        return AssistantFailed(e.message);
-      } on Exception {
-        // `Exception` seulement : une `Error` (bug de programmation) doit se
-        // propager au lieu d'être déguisée en « modèle muet ».
-        return const AssistantFailed(
-          'Le modèle ne répond pas. Réessayez.',
-        );
+      // Cascade : on essaie les fournisseurs dans l'ordre de la liste, comme
+      // la recherche de paroles (AiFilenameResolver) — le premier qui répond
+      // gagne ; un échec technique passe au suivant. L'utilisateur n'entend
+      // parler d'un échec que si plus aucun ne répond.
+      final failures = <({String name, AiReaderException failure})>[];
+      String? answered;
+      for (final provider in providers) {
+        try {
+          answered = await bridge.complete(
+            provider: provider,
+            system: system,
+            history: _history.messages,
+            userText: trimmed,
+          );
+          break;
+        } on AiReaderException catch (e) {
+          failures.add((name: provider.name, failure: e));
+          DebugLog.instance.info(
+            'Assistant',
+            '${provider.name} a échoué, on passe au suivant — ${e.detail}',
+          );
+        } on Exception catch (e) {
+          // Comme le resolver : une erreur non enveloppée ne doit pas casser
+          // la cascade. Une `Error`, elle, se propage (bug de programmation)
+          // au lieu d'être déguisée en « modèle muet ».
+          final wrapped = AiReaderException('Échec inattendu : $e');
+          failures.add((name: provider.name, failure: wrapped));
+          DebugLog.instance.info(
+            'Assistant',
+            '${provider.name} a échoué, on passe au suivant — '
+            '${wrapped.detail}',
+          );
+        }
       }
+      if (answered == null) {
+        final summary = failures
+            .map((f) => '${f.name} : ${f.failure.detail}')
+            .join(' · ');
+        DebugLog.instance.warning(
+          'Assistant',
+          'Tous les fournisseurs ont échoué. $summary',
+        );
+        return AssistantFailed(summary);
+      }
+      raw = answered;
     }
     if (raw.trim().isEmpty) {
       return const AssistantFailed('Le modèle n’a rien répondu.');
