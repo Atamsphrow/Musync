@@ -1,6 +1,9 @@
 // The "Tester la réponse" contract: a ping tells answered / keyRejected /
-// noAnswer / unknown apart, and — the point of this file — a dead network
-// is "the test could not be made", never "the model is silent".
+// rateLimited / noAnswer / unknown apart, and — the point of this file — a
+// dead network is "the test could not be made", never "the model is
+// silent". A 429 is a limit hit, not a silent model: it is rateLimited,
+// so a batch probe can stop instead of burning one call per model into
+// the same wall.
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -90,11 +93,11 @@ void main() {
       );
     });
 
-    test('HTTP 429 is no answer, not unknown', () async {
+    test('HTTP 429 is rate limited, not noAnswer', () async {
       final reader = _reader(() async => http.Response('quota', 429));
       expect(
         await reader.pingModel(_provider(AiProviderKind.openAiCompatible)),
-        AiModelPing.noAnswer,
+        AiModelPing.rateLimited,
       );
     });
 
