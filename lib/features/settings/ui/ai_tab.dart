@@ -1,29 +1,24 @@
 /// Settings › IA: the models, their keys, and what they are told to do.
 library;
-
 import 'dart:async' show scheduleMicrotask, unawaited;
 import 'dart:io' show Platform;
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/lyrics/data/ai_filename_reader.dart';
 import 'package:musync/features/ai_assistant/data/automation.dart';
 import 'package:musync/features/ai_assistant/data/scheduler_bridge.dart';
 import 'package:musync/features/ai_assistant/providers/automation_provider.dart';
+import 'package:musync/features/settings/data/ai_model_probe.dart';
 import 'package:musync/features/settings/data/ai_provider_config.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
-
 class AiTab extends ConsumerWidget {
   const AiTab({super.key});
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final settingsAsync = ref.watch(aiSettingsProvider);
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-
     return Scaffold(
       body: settingsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
@@ -33,9 +28,7 @@ class AiTab extends ConsumerWidget {
           children: [
             // iOS : pas d'alarmes exactes ni de déclencheur écouteurs.
             if (!Platform.isIOS) const _AutomationsSection(),
-
             const _InstructionCard(),
-
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
               child: Text(
@@ -43,7 +36,6 @@ class AiTab extends ConsumerWidget {
                 style: textTheme.titleSmall?.copyWith(color: scheme.primary),
               ),
             ),
-
             if (settings.providers.isEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -54,7 +46,6 @@ class AiTab extends ConsumerWidget {
                   ),
                 ),
               ),
-
             for (final provider in settings.providers)
               _ProviderTile(provider: provider, key: ValueKey(provider.id)),
           ],
@@ -73,7 +64,6 @@ class AiTab extends ConsumerWidget {
     );
   }
 }
-
 /// The instruction, editable and foldable.
 ///
 /// Folded by default: it is long, and most people will never touch it. It is
@@ -81,11 +71,9 @@ class AiTab extends ConsumerWidget {
 /// here rather than being buried in the code.
 class _InstructionCard extends ConsumerStatefulWidget {
   const _InstructionCard();
-
   @override
   ConsumerState<_InstructionCard> createState() => _InstructionCardState();
 }
-
 class _InstructionCardState extends ConsumerState<_InstructionCard> {
   TextEditingController? _controller;
   // The notifier, captured while the widget is alive: `ref` must not be
@@ -95,7 +83,6 @@ class _InstructionCardState extends ConsumerState<_InstructionCard> {
   // writes when something actually changed.
   String? _savedInstruction;
   bool _open = false;
-
   @override
   void dispose() {
     // The Focus widget removes its listener before the detach unfocuses
@@ -117,18 +104,15 @@ class _InstructionCardState extends ConsumerState<_InstructionCard> {
     _controller?.dispose();
     super.dispose();
   }
-
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(aiSettingsProvider).valueOrNull;
     if (settings == null) return const SizedBox.shrink();
-
     _notifier ??= ref.read(aiSettingsProvider.notifier);
     // Created on first open, from the stored value. Not rebuilt afterwards, so
     // typing is never interrupted by the save that typing itself triggers.
     _controller ??= TextEditingController(text: settings.instruction);
     _savedInstruction ??= settings.instruction;
-
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12),
       child: Column(
@@ -197,17 +181,13 @@ class _InstructionCardState extends ConsumerState<_InstructionCard> {
     );
   }
 }
-
 class _ProviderTile extends ConsumerWidget {
   final AiProviderConfig provider;
-
   const _ProviderTile({super.key, required this.provider});
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(aiSettingsProvider.notifier);
     final status = ref.watch(aiProviderStatusProvider)[provider.id];
-
     return Column(
       children: [
         SwitchListTile(
@@ -273,7 +253,6 @@ class _ProviderTile extends ConsumerWidget {
     );
   }
 }
-
 /// The last thing this provider did, next to the setting that caused it.
 ///
 /// The point of showing it here: with three providers configured, "the AI does
@@ -281,14 +260,11 @@ class _ProviderTile extends ConsumerWidget {
 /// each entry says for itself whether it answered, and why not.
 class _StatusLine extends StatelessWidget {
   final AiProviderStatus status;
-
   const _StatusLine({required this.status});
-
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-
     // Three states, not two: `ok == null` is "we could not tell", which must
     // not be shown as a failure.
     final (icon, colour) = switch (status.ok) {
@@ -296,7 +272,6 @@ class _StatusLine extends StatelessWidget {
       false => (Icons.error_outline, scheme.error),
       null => (Icons.help_outline, scheme.onSurfaceVariant),
     };
-
     return Padding(
       padding: const EdgeInsets.only(left: 72, right: 16, bottom: 12),
       child: Row(
@@ -324,9 +299,7 @@ class _StatusLine extends StatelessWidget {
     );
   }
 }
-
 enum _Action { check, ping, edit, delete }
-
 Future<void> _confirmDelete(
   BuildContext context,
   WidgetRef ref,
@@ -358,7 +331,6 @@ Future<void> _confirmDelete(
     await ref.read(aiSettingsProvider.notifier).remove(provider.id);
   }
 }
-
 typedef _FormResult = ({
   String name,
   AiProviderKind kind,
@@ -366,7 +338,6 @@ typedef _FormResult = ({
   String model,
   String apiKey,
 });
-
 Future<void> _openEditor(
   BuildContext context,
   WidgetRef ref, {
@@ -378,7 +349,6 @@ Future<void> _openEditor(
   );
   if (result == null) return;
   if (!context.mounted) return;
-
   final notifier = ref.read(aiSettingsProvider.notifier);
   if (existing == null) {
     await notifier.add(
@@ -399,21 +369,16 @@ Future<void> _openEditor(
     );
   }
 }
-
 /// Add/edit form. Owns its controllers — see `_LineTextDialog` for why that is
 /// not optional.
 class _ProviderDialog extends ConsumerStatefulWidget {
   final AiProviderConfig? existing;
-
   const _ProviderDialog({this.existing});
-
   @override
   ConsumerState<_ProviderDialog> createState() => _ProviderDialogState();
 }
-
 class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
   late AiProviderKind _kind = widget.existing?.kind ?? AiProviderKind.gemini;
-
   late final TextEditingController _name = TextEditingController(
     text: widget.existing?.name ?? '',
   );
@@ -426,10 +391,8 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
   late final TextEditingController _apiKey = TextEditingController(
     text: widget.existing?.apiKey ?? '',
   );
-
   bool _showKey = false;
   String? _keyError;
-
   /// What the provider says it serves, once asked.
   ///
   /// Null until a scan has been run — which is not the same as an empty list,
@@ -437,7 +400,19 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
   List<String>? _models;
   bool _scanning = false;
   String? _scanError;
-
+  /// What the probe found per model, as results arrive.
+  ///
+  /// A model is absent until its probe answers: the mark is live, not a
+  /// batch applied at the end. Cleared on every re-scan.
+  final Map<String, AiModelPing> _probeResults = {};
+  /// True while a probe batch is running.
+  bool _probing = false;
+  /// Why a batch stopped early, if it did (refused key, rate limit).
+  String? _probeStop;
+  /// The batch in flight, if any. Bumped on every scan and on dispose, so
+  /// a superseded batch can neither write into the new results nor call
+  /// setState on a disposed widget.
+  int _probeRun = 0;
   /// Asks the provider for its catalogue, using the values in the form.
   ///
   /// The form's values and not the saved ones: the whole point is to scan
@@ -450,12 +425,15 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
       setState(() => _scanError = 'Il faut une clé pour interroger la liste.');
       return;
     }
-
+    // A new scan supersedes any probe batch still running.
+    final runId = ++_probeRun;
     setState(() {
       _scanning = true;
       _scanError = null;
+      _probeResults.clear();
+      _probeStop = null;
+      _probing = false;
     });
-
     final draft = AiProviderConfig(
       id: widget.existing?.id ?? 'scan',
       name: _name.text.trim().isEmpty ? labelFor(_kind) : _name.text.trim(),
@@ -466,18 +444,20 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
       model: _model.text.trim(),
       apiKey: _apiKey.text.trim(),
     );
-
     try {
       final models = await ref.read(aiFilenameReaderProvider).listModels(draft);
-      if (!mounted) return;
+      if (!mounted || runId != _probeRun) return;
       setState(() {
         _models = models;
         _scanError = models.isEmpty
             ? 'Ce fournisseur ne publie pas la liste de ses modèles.'
             : null;
       });
+      if (models.isNotEmpty) {
+        unawaited(_probeModels(draft, models, runId));
+      }
     } on AiReaderException catch (e) {
-      if (!mounted) return;
+      if (!mounted || runId != _probeRun) return;
       // The reason matters: a refused key and a provider with no listing
       // endpoint are two different things to do about it.
       setState(() {
@@ -485,19 +465,95 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
         _scanError = e.message;
       });
     } finally {
-      if (mounted) setState(() => _scanning = false);
+      if (mounted && runId == _probeRun) {
+        setState(() => _scanning = false);
+      }
     }
   }
-
+  /// Probes every scanned model, one at a time, marking each answer live.
+  ///
+  /// The draft's model is swapped per candidate: the probe asks the
+  /// provider about *that* model, not the one typed in the form. A refused
+  /// key or a rate limit stops the batch — both poison every remaining
+  /// probe. Closing the dialog (or re-scanning) cancels it via [_probeRun].
+  Future<void> _probeModels(
+    AiProviderConfig draft,
+    List<String> models,
+    int runId,
+  ) async {
+    if (!mounted || runId != _probeRun) return;
+    setState(() => _probing = true);
+    final reader = ref.read(aiFilenameReaderProvider);
+    final outcome = await AiModelProbe.run(
+      models: models,
+      ping: (model) => reader.pingModel(draft.copyWith(model: model)),
+      onResult: (model, result) {
+        if (!mounted || runId != _probeRun) return;
+        setState(() => _probeResults[model] = result);
+      },
+      isCancelled: () => !mounted || runId != _probeRun,
+    );
+    if (!mounted || runId != _probeRun) return;
+    setState(() {
+      _probing = false;
+      _probeStop = switch (outcome) {
+        AiModelProbeOutcome.stoppedKeyRejected =>
+          'Clé refusée, tests arrêtés.',
+        AiModelProbeOutcome.stoppedRateLimited =>
+          'Limite atteinte (HTTP 429), tests arrêtés.',
+        _ => null,
+      };
+    });
+  }
+  /// True when [model] is the one being probed right now: probes run in
+  /// order, so it is the first model of the list with no result yet.
+  bool _isNextToProbe(String model) {
+    if (!_probing) return false;
+    for (final candidate in _models ?? const <String>[]) {
+      if (!_probeResults.containsKey(candidate)) return candidate == model;
+    }
+    return false;
+  }
+  /// « X répondent, Y ne répondent pas » — live, from the results so far.
+  /// Unknowns (test impossible) are counted apart: silence from the
+  /// network is not a model refusing to answer.
+  String _probeSummary() {
+    var answered = 0;
+    var failed = 0;
+    var unknown = 0;
+    for (final result in _probeResults.values) {
+      switch (result) {
+        case AiModelPing.answered:
+          answered++;
+        case AiModelPing.noAnswer:
+        case AiModelPing.keyRejected:
+        case AiModelPing.rateLimited:
+          failed++;
+        case AiModelPing.unknown:
+          unknown++;
+      }
+    }
+    final done = _probeResults.length;
+    final total = _models?.length ?? done;
+    final head = _probing ? 'Test des réponses… $done/$total — ' : '';
+    final counts =
+        '$answered ${answered == 1 ? 'répond' : 'répondent'}, '
+        '$failed ${failed == 1 ? 'ne répond pas' : 'ne répondent pas'}';
+    final tail = unknown > 0
+        ? ', $unknown indéterminé${unknown == 1 ? '' : 's'}'
+        : '';
+    return '$head$counts$tail.';
+  }
   @override
   void dispose() {
+    // A probe batch still running must not write into a disposed dialog.
+    ++_probeRun;
     _name.dispose();
     _baseUrl.dispose();
     _model.dispose();
     _apiKey.dispose();
     super.dispose();
   }
-
   /// Follows the kind, unless the user has typed something of their own.
   void _onKindChanged(AiProviderKind kind) {
     setState(() {
@@ -507,13 +563,11 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
       final wasDefaultModel =
           _model.text.trim() == defaultModelFor(_kind) ||
           _model.text.trim().isEmpty;
-
       _kind = kind;
       if (wasDefaultUrl) _baseUrl.text = defaultBaseUrlFor(kind);
       if (wasDefaultModel) _model.text = defaultModelFor(kind);
     });
   }
-
   /// Whether [url] matches one of the known OpenAI-compatible presets.
   ///
   /// Returns the URL itself when it does — that's what the dropdown binds to.
@@ -525,7 +579,6 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
     }
     return null;
   }
-
   void _submit() {
     if (_apiKey.text.trim().isEmpty) {
       setState(() => _keyError = 'Sans clé, le modèle ne sera pas interrogé.');
@@ -539,7 +592,6 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
       apiKey: _apiKey.text,
     ));
   }
-
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -636,13 +688,47 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
                   for (final model in _models!)
                     DropdownMenuItem(
                       value: model,
-                      child: Text(model, overflow: TextOverflow.ellipsis),
+                      child: Row(
+                        children: [
+                          _ProbeMark(
+                            result: _probeResults[model],
+                            probing: _isNextToProbe(model),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              model,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                 ],
                 onChanged: (model) {
                   if (model != null) setState(() => _model.text = model);
                 },
               ),
+              if (_probing || _probeResults.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    _probeSummary(),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              if (_probeStop != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    _probeStop!,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
             ],
             const SizedBox(height: 12),
             TextField(
@@ -709,14 +795,44 @@ class _ProviderDialogState extends ConsumerState<_ProviderDialog> {
 /// sans « Alarmes et rappels », les automatisations sont enregistrées mais ne
 /// se déclencheront jamais — c'est exactement ce qui est arrivé le 2026-10-14.
 /// Le bandeau se rafraîchit au retour des réglages système.
+/// The live probe mark in front of a scanned model name: spinner while
+/// the model is being tested, ✓ when it answers, ✗ when it does not, ?
+/// when the test could not be made. Nothing for a model not yet reached.
+class _ProbeMark extends StatelessWidget {
+  final AiModelPing? result;
+  final bool probing;
+  const _ProbeMark({required this.result, required this.probing});
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Local, so the null check below promotes the switch: a field is
+    // never promoted, and the switch would demand a `null` case.
+    final ping = result;
+    if (ping == null) {
+      if (!probing) return const SizedBox(width: 20);
+      return const SizedBox(
+        width: 16,
+        height: 16,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
+    }
+    final (icon, colour) = switch (ping) {
+      AiModelPing.answered => (Icons.check_circle_outline, scheme.primary),
+      AiModelPing.noAnswer ||
+      AiModelPing.keyRejected ||
+      AiModelPing.rateLimited => (Icons.error_outline, scheme.error),
+      AiModelPing.unknown =>
+        (Icons.help_outline, scheme.onSurfaceVariant),
+    };
+    return Icon(icon, size: 20, color: colour);
+  }
+}
 class _AutomationsSection extends ConsumerStatefulWidget {
   const _AutomationsSection();
-
   @override
   ConsumerState<_AutomationsSection> createState() =>
       _AutomationsSectionState();
 }
-
 class _AutomationsSectionState extends ConsumerState<_AutomationsSection>
     with WidgetsBindingObserver {
   @override
@@ -724,13 +840,11 @@ class _AutomationsSectionState extends ConsumerState<_AutomationsSection>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
   }
-
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
-
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Retour de l'écran système « Alarmes et rappels » : revérifier, et si
@@ -741,7 +855,6 @@ class _AutomationsSectionState extends ConsumerState<_AutomationsSection>
       _recheckExactAlarm();
     }
   }
-
   Future<void> _recheckExactAlarm() async {
     try {
       final ok = await SchedulerBridge.canScheduleExactAlarms();
@@ -765,14 +878,12 @@ class _AutomationsSectionState extends ConsumerState<_AutomationsSection>
       );
     }
   }
-
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
     final automationsAsync = ref.watch(automationsProvider);
     final exactAlarm = ref.watch(exactAlarmGrantedProvider);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -831,14 +942,11 @@ class _AutomationsSectionState extends ConsumerState<_AutomationsSection>
     );
   }
 }
-
 /// Bandeau « Alarmes et rappels » refusées : sans elle, les alarmes exactes
 /// ne s'arment pas et les automatisations ne se déclenchent jamais.
 class _ExactAlarmBanner extends StatelessWidget {
   final bool hasAutomations;
-
   const _ExactAlarmBanner({super.key, required this.hasAutomations});
-
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -877,12 +985,9 @@ class _ExactAlarmBanner extends StatelessWidget {
     );
   }
 }
-
 class _ScheduledActionTile extends ConsumerWidget {
   final ScheduledAction action;
-
   const _ScheduledActionTile({super.key, required this.action});
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return ListTile(
@@ -903,12 +1008,9 @@ class _ScheduledActionTile extends ConsumerWidget {
     );
   }
 }
-
 class _TriggerTile extends ConsumerWidget {
   final HeadphoneTrigger trigger;
-
   const _TriggerTile({super.key, required this.trigger});
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return ListTile(
@@ -928,7 +1030,6 @@ class _TriggerTile extends ConsumerWidget {
     );
   }
 }
-
 /// Les suppressions d'automatisations demandent confirmation : c'est
 /// l'utilisateur qui les a créées en langage naturel, il ne faut pas les
 /// perdre d'un tap accidentel.
