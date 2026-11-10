@@ -20,6 +20,7 @@ import 'dart:io';
 import 'package:musync/core/app_info.dart';
 import 'package:musync/core/id3/tag_backup.dart';
 import 'package:musync/core/utils/atomic_file.dart';
+import 'package:musync/features/settings/data/ai_provider_config.dart';
 
 /// Value a blanked secret is replaced with. The key stays, so the export still
 /// shows that a provider was configured.
@@ -79,6 +80,7 @@ class SettingsExporter {
   /// whole export.
   Future<Map<String, Object?>> build({
     bool includeSecrets = false,
+    AiSettings? aiSettings,
     Map<String, Object?> preferences = const {},
     DateTime? now,
   }) async {
@@ -87,11 +89,37 @@ class SettingsExporter {
 
     for (final source in _sources) {
       final dir = source.inDocuments ? documentsDir : supportDir;
-      final file = File('${dir.path}${Platform.pathSeparator}${source.fileName}');
+      final file = File(
+        '${dir.path}${Platform.pathSeparator}${source.fileName}',
+      );
       if (!await file.exists()) continue;
       try {
         final decoded = jsonDecode(await file.readAsString());
-        files[source.fileName] = includeSecrets ? decoded : redact(decoded);
+        // The on-disk file is intentionally secret-free. A user explicitly
+        // requesting a portable export can opt in to adding vault-held keys.
+        if (includeSecrets &&
+            source.fileName == 'ai_providers.json' &&
+            aiSettings != null &&
+            decoded is Map) {
+          final keysById = {
+            for (final provider in aiSettings.providers)
+              provider.id: provider.apiKey,
+          };
+          final rows = decoded['providers'];
+          files[source.fileName] = {
+            ...decoded,
+            if (rows is List)
+              'providers': [
+                for (final row in rows)
+                  if (row is Map)
+                    {...row, 'apiKey': keysById[row['id']] ?? ''}
+                  else
+                    row,
+              ],
+          };
+        } else {
+          files[source.fileName] = includeSecrets ? decoded : redact(decoded);
+        }
       } on FormatException {
         unreadable.add(source.fileName);
       } on FileSystemException {
@@ -128,9 +156,7 @@ class SettingsExporter {
     final missing = <String>[];
     final unreadable = <String>[];
 
-    final indexFile = File(
-      '${dir.path}${Platform.pathSeparator}index.json',
-    );
+    final indexFile = File('${dir.path}${Platform.pathSeparator}index.json');
     if (!await indexFile.exists()) {
       return {'index': index, 'files': files};
     }
@@ -192,6 +218,7 @@ class SettingsExporter {
   Future<File> exportTo(
     Directory targetDir, {
     bool includeSecrets = false,
+    AiSettings? aiSettings,
     Map<String, Object?> preferences = const {},
     DateTime? now,
   }) async {
@@ -200,6 +227,7 @@ class SettingsExporter {
       includeSecrets: includeSecrets,
       preferences: preferences,
       now: moment,
+      aiSettings: aiSettings,
     );
 
     await targetDir.create(recursive: true);
@@ -228,8 +256,8 @@ class SettingsExporter {
     if (node is Map) {
       return {
         for (final entry in node.entries)
-          '${entry.key}': secretFieldName.hasMatch('${entry.key}') &&
-                  entry.value is String
+          '${entry.key}':
+              secretFieldName.hasMatch('${entry.key}') && entry.value is String
               ? kExportRedacted
               : redact(entry.value),
       };
