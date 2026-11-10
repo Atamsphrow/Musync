@@ -21,12 +21,39 @@ import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/core/services/permission_service.dart';
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
+import 'package:musync/features/ai_assistant/data/tools/library_path_guard.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
+
+/// Verify a copied file byte-for-byte before removing its source or
+/// replacing the original. Reads bounded chunks; storage exhaustion and
+/// partial copies cause a failed operation, not a broken music file.
+Future<bool> _sameFileBytes(File a, File b) async {
+  if (await a.length() != await b.length()) return false;
+  final first = await a.open(mode: FileMode.read);
+  try {
+    final second = await b.open(mode: FileMode.read);
+    try {
+      while (true) {
+        final left = await first.read(256 * 1024);
+        final right = await second.read(256 * 1024);
+        if (left.length != right.length) return false;
+        if (left.isEmpty) return true;
+        for (var i = 0; i < left.length; i++) {
+          if (left[i] != right[i]) return false;
+        }
+      }
+    } finally {
+      await second.close();
+    }
+  } finally {
+    await first.close();
+  }
+}
 
 /// Écrit des tags en suivant le protocole sécurisé de l'éditeur de tags.
 ///
@@ -71,6 +98,9 @@ Future<AiToolResult> _writeTagsSecurely(
     stage = File('${target.path}.musync.$stamp.tmp');
     if (await stage.exists()) await stage.delete();
     await workFile.copy(stage.path);
+    if (!await _sameFileBytes(workFile, stage)) {
+      return AiToolResult.fail('Copie incomplète : fichier original préservé.');
+    }
     await stage.rename(target.path);
 
     await MediaStore.rescan(target.path);
@@ -156,6 +186,35 @@ const _snapshotKey = '__musync_confirmed_targets';
 /// de re-résoudre. Écrasé à chaque [describeAction], un seul dialogue de
 /// confirmation ne pouvant être ouvert à la fois.
 final Map<String, List<_ConfirmedTarget>> _fallbackTargets = {};
+
+// The preview must also freeze the destination / cover path. Without this a
+// mutable args map could be edited after a user confirms one path.
+const _confirmedPathKey = '_musync_confirmed_path';
+final Map<String, String> _fallbackConfirmedPaths = {};
+
+void _freezeConfirmedPath(
+  Map<String, Object?> args,
+  String toolName,
+  String path,
+) {
+  try {
+    args[_confirmedPathKey] = path;
+    _fallbackConfirmedPaths.remove(toolName);
+  } on UnsupportedError {
+    _fallbackConfirmedPaths[toolName] = path;
+  }
+}
+
+String? _consumeConfirmedPath(Map<String, Object?> args, String toolName) {
+  final raw = args[_confirmedPathKey];
+  try {
+    if (raw != null) args.remove(_confirmedPathKey);
+  } on UnsupportedError {
+    // Immutable argument maps use the fallback snapshot instead.
+  }
+  if (raw is String) return raw;
+  return _fallbackConfirmedPaths.remove(toolName);
+}
 
 void _freezeTargets(
   Map<String, Object?> args,
@@ -608,7 +667,10 @@ Future<bool> _moveFile(File source, String target) async {
   } on FileSystemException {
     // rename ne traverse pas les volumes : copie puis suppression.
     try {
-      await source.copy(target);
+      final copy = await source.copy(target);
+      if (!await _sameFileBytes(source, copy)) {
+        throw const FileSystemException('Copie incomplète : source conservée');
+      }
       await source.delete();
       return true;
     } catch (e) {
@@ -835,6 +897,14 @@ class ChangeCoverTool extends AiTool {
     // Fige la cible confirmée : execute ne re-résoudra pas.
     _freezeTargets(args, name, [(song: target, guess: null)]);
     final image = reqString(args, 'image');
+    if (!await LibraryPathGuard.permits(
+      image, (await librarySongs(ctx.ref)).map((song) => song.filePath),
+    )) {
+      throw const AiToolArgError(
+        'Image hors des dossiers de la bibliothèque ou chemin non sûr.',
+      );
+    }
+    _freezeConfirmedPath(args, name, image);
     return 'Changer la pochette de ${_forPreview(songLabel(target))} '
         'avec l’image :\n${_forPreview(image)}';
   }
@@ -854,6 +924,17 @@ class ChangeCoverTool extends AiTool {
       return AiToolResult.fail('Morceau introuvable.');
     }
     final imagePath = reqString(args, 'image');
+    final confirmedPath = _consumeConfirmedPath(args, name);
+    if (confirmedPath != null && confirmedPath != imagePath) {
+      return AiToolResult.fail('Chemin modifié après confirmation.');
+    }
+    if (!await LibraryPathGuard.permits(
+      imagePath, (await librarySongs(ctx.ref)).map((song) => song.filePath),
+    )) {
+      return AiToolResult.fail(
+        'Image hors des dossiers de la bibliothèque ou chemin non sûr.',
+      );
+    }
     Uint8List bytes;
     try {
       final imageFile = File(imagePath);
@@ -958,11 +1039,19 @@ class MoveSongsTool extends AiTool {
     if (songs.isEmpty) {
       throw const AiToolArgError('Aucun morceau visé.');
     }
+    if (!await LibraryPathGuard.permits(
+      folder, (await librarySongs(ctx.ref)).map((song) => song.filePath),
+    )) {
+      throw const AiToolArgError(
+        'Destination hors des dossiers de la bibliothèque ou chemin non sûr.',
+      );
+    }
     // Fige la liste confirmée : execute ne relira pas la bibliothèque ni le
     // morceau en cours.
     _freezeTargets(args, name, [
       for (final song in songs) (song: song, guess: null),
     ]);
+    _freezeConfirmedPath(args, name, folder);
     if (songs.length == 1) {
       return 'Déplacer ${_forPreview(songLabel(songs.first))} vers :\n${_forPreview(folder)}';
     }
@@ -986,6 +1075,17 @@ class MoveSongsTool extends AiTool {
     if (songs.isEmpty) {
       return AiToolResult.fail('Aucun morceau visé.');
     }
+    final confirmedPath = _consumeConfirmedPath(args, name);
+    if (confirmedPath != null && confirmedPath != folder) {
+      return AiToolResult.fail('Destination modifiée après confirmation.');
+    }
+    if (!await LibraryPathGuard.permits(
+      folder, (await librarySongs(ctx.ref)).map((song) => song.filePath),
+    )) {
+      return AiToolResult.fail(
+        'Destination hors des dossiers de la bibliothèque ou chemin non sûr.',
+      );
+    }
     final dir = Directory(folder);
     try {
       if (!await dir.exists()) await dir.create(recursive: true);
@@ -1001,6 +1101,11 @@ class MoveSongsTool extends AiTool {
     var skipped = 0;
     for (final song in songs) {
       final target = p.join(dir.path, p.basename(song.filePath));
+      if (await FileSystemEntity.type(song.filePath, followLinks: false) ==
+          FileSystemEntityType.link) {
+        skipped++;
+        continue;
+      }
       if (target == song.filePath) {
         skipped++;
         continue;
