@@ -144,6 +144,10 @@ class AiProviderStatusNotifier extends Notifier<Map<String, AiProviderStatus>> {
             'Le modèle ${provider.model} ne répond pas (réponse vide ou '
             'erreur). Vérifiez le quota ou le point d\'accès.',
       ),
+      AiModelPing.rateLimited => const AiProviderStatus(
+        ok: false,
+        detail: 'Limite atteinte (HTTP 429). Réessayez.',
+      ),
       AiModelPing.unknown => const AiProviderStatus(
         detail: 'Test impossible — pas de réseau.',
       ),
