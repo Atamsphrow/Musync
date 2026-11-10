@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:musync/features/settings/data/settings_export.dart';
+import 'package:musync/features/settings/data/ai_provider_config.dart';
 
 void main() {
   late Directory root;
@@ -93,6 +94,37 @@ void main() {
       expect(bundle['includesSecrets'], isTrue);
     });
 
+    test('secure vault keys export only after explicit opt-in', () async {
+      await put(
+        support,
+        'ai_providers.json',
+        jsonEncode({
+          'providers': [
+            {'id': 'p1', 'name': 'Gemini', 'apiKey': ''},
+          ],
+        }),
+      );
+      final configured = AiSettings(
+        providers: [
+          const AiProviderConfig(
+            id: 'p1',
+            name: 'Gemini',
+            kind: AiProviderKind.gemini,
+            baseUrl: 'https://example.test',
+            model: 'model',
+            apiKey: 'VAULT-ONLY-KEY',
+          ),
+        ],
+      );
+      final safe = await exporter.build(aiSettings: configured);
+      expect(jsonEncode(safe), isNot(contains('VAULT-ONLY-KEY')));
+      final portable = await exporter.build(
+        includeSecrets: true,
+        aiSettings: configured,
+      );
+      expect(jsonEncode(portable), contains('VAULT-ONLY-KEY'));
+    });
+
     test('a field only looks like a secret if it is a string', () {
       // "tokens" the number of tokens used, say, is not a credential.
       final out = SettingsExporter.redact({'maxTokens': 512, 'apiKey': 'k'});
@@ -114,6 +146,44 @@ void main() {
     final back = jsonDecode(await file.readAsString()) as Map;
     expect(back['preferences'], {'bubble_lines': 3});
     expect((back['files'] as Map)['playback_settings.json'], {'a': 1});
+  });
+
+  test('exportTo forwards vault keys only with explicit opt-in', () async {
+    await put(
+      support,
+      'ai_providers.json',
+      jsonEncode({
+        'providers': [
+          {'id': 'p1', 'apiKey': ''},
+        ],
+      }),
+    );
+    const configured = AiSettings(
+      providers: [
+        AiProviderConfig(
+          id: 'p1',
+          name: 'Test',
+          kind: AiProviderKind.gemini,
+          baseUrl: 'https://example.invalid',
+          model: 'model',
+          apiKey: 'VAULT-KEY',
+        ),
+      ],
+    );
+    final out = Directory('${root.path}/out');
+    final safe = await exporter.exportTo(
+      out,
+      aiSettings: configured,
+      now: DateTime(2026, 11, 10, 1),
+    );
+    expect(await safe.readAsString(), isNot(contains('VAULT-KEY')));
+    final portable = await exporter.exportTo(
+      out,
+      aiSettings: configured,
+      includeSecrets: true,
+      now: DateTime(2026, 11, 10, 2),
+    );
+    expect(await portable.readAsString(), contains('VAULT-KEY'));
   });
 
   test('two exports never replace each other', () async {
