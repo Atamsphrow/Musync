@@ -17,9 +17,6 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.provider.Settings
 import android.view.WindowManager
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.IntentSenderRequest
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.NotificationCompat
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -78,28 +75,14 @@ class MainActivity : AudioServiceActivity() {
     private val pendingScheduledActionIds = ArrayDeque<String>()
 
     /// Réponse du dialogue système « Autoriser Musync à modifier ce
-    /// fichier ? » (`MediaStore.createWriteRequest`), via l'Activity
-    /// Result API (I3 : `startIntentSenderForResult` / `onActivityResult`
-    /// dépréciés depuis API 30).
+    /// fichier ? » (`MediaStore.createWriteRequest`).
     ///
-    /// Enregistré comme initialisateur de champ — le pattern officiel
-    /// (`ComponentActivity.registerForActivityResult` : « typically as a
-    /// field initializer ») : l'enregistrement a lieu après le constructeur
-    /// de `ComponentActivity`, donc avec un registre prêt, et avant
-    /// `onCreate`. Le callback répond au `MethodChannel.Result` statique
-    /// ([pendingWriteAccessResult]) : une recréation d'Activity
-    /// ré-enregistre un launcher neuf, le registre lui remet le résultat,
-    /// et le statique survit — le Future Dart reçoit sa réponse.
-    private val writeAccessLauncher:
-        ActivityResultLauncher<IntentSenderRequest> =
-        registerForActivityResult(
-            ActivityResultContracts.StartIntentSenderForResult(),
-        ) { result ->
-            pendingWriteAccessResult?.success(
-                result.resultCode == Activity.RESULT_OK,
-            )
-            pendingWriteAccessResult = null
-        }
+    /// `AudioServiceActivity` hérite de `FlutterActivity` (pas de
+    /// `ComponentActivity`), donc `registerForActivityResult` n'est pas
+    /// disponible ici. On utilise le résultat natif `onActivityResult`
+    /// avec un code de requête dédié. Le `MethodChannel.Result` statique
+    /// ([pendingWriteAccessResult]) survit à une recréation de l'Activity
+    /// tant que le processus Android reste actif.
 
     /// Réessais de l'ouverture de la revue de lot (démarrage à froid par
     /// la notification de fin de lot). Voir [configureFlutterEngine].
@@ -156,6 +139,17 @@ class MainActivity : AudioServiceActivity() {
         // Démarrage à froid par une alarme setAlarmClock : l'id attendra que
         // Dart le draine dans AutomationRunner.init().
         handleScheduledActionIntent(intent)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        // Laisse Flutter et ses plugins recevoir leurs propres résultats.
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == WRITE_ACCESS_REQUEST_CODE) {
+            val pending = pendingWriteAccessResult
+            pendingWriteAccessResult = null
+            pending?.success(resultCode == Activity.RESULT_OK)
+        }
     }
 
     override fun onDestroy() {
@@ -713,7 +707,7 @@ class MainActivity : AudioServiceActivity() {
     /// does before writing tags.
     ///
     /// On Android 11+ (API 30+) this shows the system dialog "Allow Musync to
-    /// modify this file?". The answer arrives in [writeAccessLauncher]: true
+    /// modify this file?". The answer arrives in [onActivityResult]: true
     /// when the user allowed, false when they refused. A refusal is not an
     /// error — Dart aborts the save silently.
     ///
@@ -743,8 +737,9 @@ class MainActivity : AudioServiceActivity() {
         try {
             val request = MediaStore.createWriteRequest(contentResolver, listOf(uri))
             pendingWriteAccessResult = result
-            writeAccessLauncher.launch(
-                IntentSenderRequest.Builder(request.intentSender).build(),
+            startIntentSenderForResult(
+                request.intentSender, WRITE_ACCESS_REQUEST_CODE,
+                null, 0, 0, 0,
             )
         } catch (e: Exception) {
             // Clear the pending slot: leaving it set makes every later
@@ -938,6 +933,9 @@ class MainActivity : AudioServiceActivity() {
     }
 
     companion object {
+        // Identifiant stable réservé au dialogue d'autorisation MediaStore.
+        private const val WRITE_ACCESS_REQUEST_CODE = 0x4D53
+
         const val MEDIA_STORE_CHANNEL = "com.atamsphrow.musync/media_store"
 
         const val SCHEDULER_CHANNEL = "com.atamsphrow.musync/scheduler"
@@ -962,7 +960,7 @@ class MainActivity : AudioServiceActivity() {
         var schedulerChannel: MethodChannel? = null
 
         /// Pending result for the system write-access dialog, answered in
-        /// [writeAccessLauncher].
+        /// [onActivityResult].
         ///
         /// Static, pas un champ d'instance : une recréation d'Activity
         /// (« ne pas conserver les activités », destruction système — la
