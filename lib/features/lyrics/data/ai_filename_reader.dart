@@ -177,8 +177,14 @@ class AiFilenameReader {
   ///
   /// Complements [checkModel]: a model can be listed yet not answer (quota
   /// exhausted, model overloaded, wrong endpoint). Sends the smallest
-  /// possible prompt — "Réponds uniquement : OK" — and accepts any non-empty
-  /// reply as proof of life.
+  /// possible prompt — an instruction to answer with the JSON object
+  /// `{"ok": true}` — and accepts any non-empty reply as proof of life.
+  ///
+  /// The answer must be JSON: both call paths force a JSON response
+  /// (`responseMimeType: application/json` on Gemini, `response_format:
+  /// json_object` on OpenAI-compatible), so asking for a bare "OK" made
+  /// the API reject the call (HTTP 400) and the probe counted every
+  /// model as silent. `{"ok": true}` is the smallest valid JSON object.
   ///
   /// Never throws. A test that cannot be made answers [AiModelPing.unknown].
   Future<AiModelPing> pingModel(AiProviderConfig provider) async {
@@ -186,12 +192,12 @@ class AiFilenameReader {
       final answer = switch (provider.kind) {
         AiProviderKind.gemini => await _askGemini(
           provider,
-          'Réponds uniquement : OK',
+          'Réponds uniquement avec cet objet JSON : {"ok": true}',
           'ping',
         ),
         AiProviderKind.openAiCompatible => await _askOpenAi(
           provider,
-          'Réponds uniquement : OK',
+          'Réponds uniquement avec cet objet JSON : {"ok": true}',
           'ping',
         ),
       };
