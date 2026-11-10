@@ -13,6 +13,7 @@ import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/permission_service.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/lyrics/data/lyrics_confidence.dart';
+import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
 import 'package:musync/features/lyrics/data/lyrics_provenance.dart';
 import 'package:musync/features/lyrics/data/lyrics_query_resolver.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
@@ -98,6 +99,10 @@ class AiLyricsFinder {
   final LyricsProvenanceStore provenance;
   final TagBackupStore backups;
 
+  /// Morceaux marqués « non correspondant » : jamais de recherche ni
+  /// d'écriture automatique pour eux.
+  final LyricsMismatchStore mismatchStore;
+
   /// Appelé après une écriture (invalidation des caches). En production :
   /// `TagChangeService.fileChanged`.
   final void Function(String filePath) fileChanged;
@@ -110,6 +115,7 @@ class AiLyricsFinder {
     required this.resolver,
     required this.provenance,
     required this.backups,
+    required this.mismatchStore,
     required this.fileChanged,
     Future<bool> Function()? hasWriteAccess,
   }) : hasWriteAccess =
@@ -126,6 +132,22 @@ class AiLyricsFinder {
     bool dryRun = false,
     LyricsProvenanceOrigin origin = LyricsProvenanceOrigin.autoAi,
   }) async {
+    // Marqué « non correspondant » : plus aucun téléchargement
+    // automatique pour ce morceau — ni recherche (même pas la
+    // résolution d'identité, qui peut appeler l'IA), ni écriture.
+    if (await mismatchStore.isMismatched(
+      song.filePath,
+      title: song.title,
+      artist: song.artist,
+    )) {
+      _log('marqué non correspondant', song, 0, '');
+      return const LyricsFindResult(
+        verdict: LyricsFindVerdict.keptExisting,
+        note:
+            'Morceau marqué non correspondant : aucune recherche automatique.',
+      );
+    }
+
     final resolved = await resolver.resolve(song, aiFallback: aiFallback);
     if (resolved.queries.isEmpty) {
       _log('rien trouvé', song, 0, '');
@@ -716,6 +738,7 @@ class AiLyricsFinder {
 final aiLyricsFinderProvider = Provider<AiLyricsFinder>((ref) {
   final repository = ref.watch(lyricsRepositoryProvider);
   final provenance = ref.watch(lyricsProvenanceStoreProvider);
+  final mismatchStore = ref.watch(lyricsMismatchStoreProvider);
   final backups = ref.watch(tagBackupStoreProvider);
   final changes = ref.watch(tagChangeProvider);
   final settings = ref.watch(aiSettingsProvider).valueOrNull;
@@ -735,6 +758,7 @@ final aiLyricsFinderProvider = Provider<AiLyricsFinder>((ref) {
     ),
     provenance: provenance,
     backups: backups,
+    mismatchStore: mismatchStore,
     fileChanged: changes.fileChanged,
   );
 });
