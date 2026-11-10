@@ -25,6 +25,7 @@ class AutomationRunner {
 
   /// Anti-rebond du callback natif : le branchement peut flapper.
   DateTime? _lastHeadphoneFire;
+  final Set<String> _runningActionIds = <String>{};
 
   AutomationRunner(this._ref);
 
@@ -79,6 +80,17 @@ class AutomationRunner {
   /// Exécute l'action planifiée [id], puis l'avance (quotidienne) ou la
   /// supprime (unique).
   Future<void> runFired(String id) async {
+    // A native callback and the cold-start drain may report the same alarm
+    // concurrently. Never execute a destructive tool twice for one fire.
+    if (!_runningActionIds.add(id)) return;
+    try {
+      await _runFiredOnce(id);
+    } finally {
+      _runningActionIds.remove(id);
+    }
+  }
+
+  Future<void> _runFiredOnce(String id) async {
     final doc = await _ref.read(automationsProvider.future);
     final action = doc.actions.where((a) => a.id == id).firstOrNull;
     if (action == null || !action.enabled) {
@@ -132,12 +144,21 @@ class AutomationRunner {
     if (trigger == null) return;
     if (_ref.read(audioPlayerServiceProvider).isPlaying) return;
 
-    final result = await _ref
-        .read(assistantControllerProvider)
-        .runStoredTool(trigger.toolName, trigger.args);
-    DebugLog.instance.info(
-      'Automatisations',
-      'Écouteurs branchés → ${trigger.label} : ${result.message}',
-    );
+    try {
+      final result = await _ref
+          .read(assistantControllerProvider)
+          .runStoredTool(trigger.toolName, trigger.args);
+      DebugLog.instance.info(
+        'Automatisations',
+        'Écouteurs branchés → ${trigger.label} : ${result.message}',
+      );
+    } catch (error, stack) {
+      DebugLog.instance.error(
+        'Automatisations',
+        'Échec du déclencheur écouteurs ${trigger.label}',
+        error: error,
+        stackTrace: stack,
+      );
+    }
   }
 }
