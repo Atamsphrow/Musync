@@ -4,6 +4,7 @@ import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
+import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 
@@ -15,7 +16,12 @@ import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.
 class LyricsRepository {
   final List<LyricsSource> _sources;
 
-  LyricsRepository({List<LyricsSource>? sources})
+  /// Quand il est présent, une écriture de vraies paroles efface la
+  /// marque « non correspondant » du morceau. Null dans les tests qui
+  /// n'exercent que la recherche.
+  final LyricsMismatchStore? _mismatchStore;
+
+  LyricsRepository({List<LyricsSource>? sources, this._mismatchStore})
     : _sources = sources ?? [LrclibSource()];
 
   /// Queries every source in parallel and returns their results, best first.
@@ -120,6 +126,17 @@ class LyricsRepository {
   }) async {
     await Id3Writer.writeLyrics(filePath, synced: synced, unsynced: unsynced);
     await MediaStore.rescan(filePath);
+    // De vraies paroles viennent d'être enregistrées : le morceau a
+    // trouvé ses paroles, la marque « non correspondant » tombe.
+    // Jamais sur suppression (les deux nulls) — sinon le bouton
+    // « Paroles incorrectes » s'auto-annulerait.
+    final hasLyrics =
+        (synced != null && synced.isNotEmpty) ||
+        (unsynced != null && unsynced.text.trim().isNotEmpty);
+    if (hasLyrics) {
+      await _mismatchStore?.unmark(filePath);
+      await _mismatchStore?.save();
+    }
   }
 
   Future<LyricsPair> readLyrics(String filePath) =>
