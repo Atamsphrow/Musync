@@ -29,7 +29,7 @@ String _geminiOk() => jsonEncode({
     {
       'content': {
         'parts': [
-          {'text': 'OK'},
+          {'text': '{"ok": true}'},
         ],
       },
     },
@@ -39,14 +39,14 @@ String _geminiOk() => jsonEncode({
 String _openAiOk() => jsonEncode({
   'choices': [
     {
-      'message': {'content': 'OK'},
+      'message': {'content': '{"ok": true}'},
     },
   ],
 });
 
 void main() {
   group('pingModel', () {
-    test('gemini answers OK', () async {
+    test('gemini answers the JSON object', () async {
       final reader = _reader(() async => http.Response(_geminiOk(), 200));
       expect(
         await reader.pingModel(_provider(AiProviderKind.gemini)),
@@ -54,12 +54,53 @@ void main() {
       );
     });
 
-    test('openai-compatible answers OK', () async {
+    test('openai-compatible answers the JSON object', () async {
       final reader = _reader(() async => http.Response(_openAiOk(), 200));
       expect(
         await reader.pingModel(_provider(AiProviderKind.openAiCompatible)),
         AiModelPing.answered,
       );
+    });
+
+    test('gemini ping asks for a JSON object, not a bare OK', () async {
+      // The regression: the ping used to ask for a bare "OK" while the
+      // request forced a JSON response, so the API rejected the call
+      // (HTTP 400) and every model looked silent. The instruction must
+      // ask for the object the response format requires.
+      Map<String, Object?>? sent;
+      final reader = AiFilenameReader(
+        client: MockClient((request) async {
+          sent = jsonDecode(request.body) as Map<String, Object?>;
+          return http.Response(_geminiOk(), 200);
+        }),
+      );
+      expect(
+        await reader.pingModel(_provider(AiProviderKind.gemini)),
+        AiModelPing.answered,
+      );
+      final parts =
+          (sent!['systemInstruction'] as Map)['parts'] as List;
+      expect((parts.first as Map)['text'], contains('{"ok": true}'));
+    });
+
+    test('openai-compatible ping asks for a JSON object', () async {
+      Map<String, Object?>? sent;
+      final reader = AiFilenameReader(
+        client: MockClient((request) async {
+          sent = jsonDecode(request.body) as Map<String, Object?>;
+          return http.Response(_openAiOk(), 200);
+        }),
+      );
+      expect(
+        await reader.pingModel(_provider(AiProviderKind.openAiCompatible)),
+        AiModelPing.answered,
+      );
+      final messages = sent!['messages'] as List;
+      expect(
+        (messages.first as Map)['content'],
+        contains('{"ok": true}'),
+      );
+      expect(sent!['response_format'], {'type': 'json_object'});
     });
 
     test('401 and 403 mean the key was refused', () async {
@@ -85,7 +126,20 @@ void main() {
 
     test('whitespace-only reply is no answer', () async {
       final reader = _reader(
-        () async => http.Response(_geminiOk().replaceAll('OK', '   '), 200),
+        () async => http.Response(
+          jsonEncode({
+            'candidates': [
+              {
+                'content': {
+                  'parts': [
+                    {'text': '   '},
+                  ],
+                },
+              },
+            ],
+          }),
+          200,
+        ),
       );
       expect(
         await reader.pingModel(_provider(AiProviderKind.gemini)),
