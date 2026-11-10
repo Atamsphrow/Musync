@@ -11,6 +11,7 @@ import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/catalogue_provider.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
 import 'package:musync/features/lyrics/data/ai_lyrics_finder.dart';
+import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
 import 'package:musync/features/lyrics/data/lyrics_provenance.dart';
 import 'package:musync/features/lyrics/data/sweep_memory.dart';
 import 'package:musync/features/lyrics/providers/tag_change_provider.dart';
@@ -243,6 +244,17 @@ class BackgroundLyricsService {
       // the track was retagged since, in which case the old answer is
       // about a different identity.
       if (await _sweepMemory.recentlyMissed(
+        song.filePath,
+        title: song.title,
+        artist: song.artist,
+      )) {
+        continue;
+      }
+      // Marqué « non correspondant » : plus de téléchargement
+      // automatique pour ce morceau — comme un raté confirmé, mais
+      // sans expiration. Le finder le sauterait aussi ; ce test évite
+      // la tentative et l'attente entre deux recherches.
+      if (await _ref.read(lyricsMismatchStoreProvider).isMismatched(
         song.filePath,
         title: song.title,
         artist: song.artist,
