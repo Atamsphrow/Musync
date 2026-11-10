@@ -79,6 +79,34 @@ void main() {
     });
   });
 
+  group('AudioPlayerService.shouldCorrectIndexAnchor', () {
+    final now = DateTime(2026, 11, 10);
+    bool check({
+      int? before = 0, int? after = 1,
+      Duration old = const Duration(seconds: 72),
+      Duration next = const Duration(seconds: 72),
+      bool playing = true, DateTime? lastSeek,
+    }) => AudioPlayerService.shouldCorrectIndexAnchor(
+      previousIndex: before, currentIndex: after,
+      previousPosition: old, currentPosition: next,
+      playing: playing, lastServiceSeekAt: lastSeek, now: now,
+    );
+
+    test('reanchors a carried position on index change', () {
+      expect(check(), isTrue);
+    });
+    test('new track starting at zero is never re-seeked', () {
+      expect(check(next: Duration.zero), isFalse);
+    });
+    test('manual cross-track seek is trusted', () {
+      expect(check(lastSeek: now), isFalse);
+    });
+    test('same index and paused transitions are ignored', () {
+      expect(check(after: 0), isFalse);
+      expect(check(playing: false), isFalse);
+    });
+  });
+
   group('AudioPlayerService.shouldCorrectLoopAnchor', () {
     final now = DateTime(2026, 10, 30, 1, 0, 0);
     const duration = Duration(minutes: 3);
