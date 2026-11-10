@@ -237,6 +237,26 @@ void main() {
       expect(entry.origin, LyricsProvenanceOrigin.autoAi);
       expect(changed, contains(path));
     });
+
+    test('morceau marqué + demande explicite → la recherche tourne', () async {
+      final path = await realFile('1.mp3');
+      player.current = _song(filePath: path);
+      repo.fallback = [_hit(trackId: 7)];
+      // Marque persistée avant la construction du conteneur : le
+      // finder du conteneur la charge depuis le disque.
+      final marks = LyricsMismatchStore(root: root);
+      await marks.markMismatched(path, title: 'Titre', artist: 'Artiste');
+      await marks.save();
+      final c = container();
+      final result = await const FetchLyricsTool().execute(
+        _ctx(c.read(_refProbe)),
+        const {},
+      );
+
+      expect(result.ok, isTrue);
+      expect(result.message, contains('85 %'));
+      expect(repo.embedded, hasLength(1));
+    });
   });
 
   group('verify_current_lyrics — lecture seule', () {
@@ -258,6 +278,23 @@ void main() {
 
       expect(result.ok, isTrue);
       expect(result.message, contains('plausibles'));
+      expect(repo.embedded, isEmpty);
+      expect(await backups.list(), isEmpty);
+      expect(await provenance.forPath(path), isNull);
+    });
+
+    test('pas de paroles dans le fichier → le candidat est présenté', () async {
+      final path = await realFile('1.mp3');
+      player.current = _song(filePath: path);
+      repo.fallback = [_hit(trackId: 7)];
+      final c = container();
+      final result = await const VerifyCurrentLyricsTool().execute(
+        _ctx(c.read(_refProbe)),
+        const {},
+      );
+
+      expect(result.ok, isTrue);
+      expect(result.message, contains('Trouvé en ligne'));
       expect(repo.embedded, isEmpty);
       expect(await backups.list(), isEmpty);
       expect(await provenance.forPath(path), isNull);
