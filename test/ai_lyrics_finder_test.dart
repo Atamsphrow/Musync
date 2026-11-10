@@ -365,6 +365,60 @@ void main() {
       expect(verdict.verdict, LyricsVerifyVerdict.protected);
       expect(repo.embedded, isEmpty);
     });
+
+    test('pas de paroles dans le fichier + candidat sûr → trouvé en ligne, rien écrit', () async {
+      final path = await realFile('1.mp3');
+      repo.fallback = [_hit(trackId: 7)];
+      final verdict = await finder().verifyFor(_song(filePath: path));
+      expect(verdict.verdict, LyricsVerifyVerdict.unknown);
+      expect(verdict.message, contains('Trouvé en ligne'));
+      expect(verdict.message, contains('« Titre »'));
+      expect(repo.embedded, isEmpty);
+    });
+
+    test('pas de paroles dans le fichier + rien trouvé → « rien trouvé en ligne »', () async {
+      final path = await realFile('1.mp3');
+      repo.fallback = [];
+      final verdict = await finder().verifyFor(_song(filePath: path));
+      expect(verdict.verdict, LyricsVerifyVerdict.unknown);
+      expect(
+        verdict.message,
+        contains('Aucune parole trouvée en ligne'),
+      );
+      expect(repo.embedded, isEmpty);
+    });
+
+    test('pas de paroles + candidat à 0,65 → la liste est présentée', () async {
+      final path = await realFile('1.mp3');
+      // Titre partiel 0,15 + artiste 0,30 + durée 0,15 + synchro 0,05.
+      repo.fallback = [_hit(title: 'Autre titre')];
+      final verdict = await finder().verifyFor(_song(filePath: path));
+      expect(verdict.verdict, LyricsVerifyVerdict.unknown);
+      expect(verdict.message, contains('Plusieurs candidats possibles'));
+      expect(verdict.message, contains('1. « Autre titre »'));
+      expect(repo.embedded, isEmpty);
+    });
+
+    test('pas de paroles + morceau marqué → la recherche tourne quand même', () async {
+      final path = await realFile('1.mp3');
+      final marked = LyricsMismatchStore(root: root);
+      await marked.markMismatched(path, title: 'Titre', artist: 'Artiste');
+      await marked.save();
+      final markedFinder = AiLyricsFinder(
+        repository: repo,
+        resolver: const LyricsQueryResolver(parseFilename: _noGuess),
+        provenance: provenance,
+        backups: backups,
+        mismatchStore: marked,
+        fileChanged: changed.add,
+        hasWriteAccess: () async => true,
+      );
+      repo.fallback = [_hit(trackId: 7)];
+      final verdict = await markedFinder.verifyFor(_song(filePath: path));
+      expect(verdict.verdict, LyricsVerifyVerdict.unknown);
+      expect(verdict.message, contains('Trouvé en ligne'));
+      expect(repo.embedded, isEmpty);
+    });
   });
 
   test('sources injoignables → notFound avec searchesFailed, rien mémorisé', () async {
