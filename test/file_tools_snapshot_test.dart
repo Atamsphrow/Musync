@@ -308,6 +308,43 @@ void main() {
       expect(hasPngSignature(bytesB), isFalse, reason: 'rien dans B');
     });
 
+    test('move_songs refuse un dossier changé après confirmation', () async {
+      final path = await makeTrack('confirm.mp3');
+      final confirmed = Directory('${tempDir.path}/confirme');
+      final changed = Directory('${tempDir.path}/autre');
+      final source = song(20, 'Confirme', 'Artiste', path);
+      library.songs = [source];
+      player.current = source;
+      final ctx = _ctx(container().read(_refProbe));
+      const tool = MoveSongsTool();
+      final args = <String, Object?>{'folder': confirmed.path};
+      await tool.describeAction(ctx, args);
+      args['folder'] = changed.path;
+      final result = await tool.execute(ctx, args);
+      expect(result.ok, isFalse);
+      expect(await File(path).exists(), isTrue);
+      expect(await changed.exists(), isFalse);
+    });
+
+    test('change_cover refuse une image changée après confirmation', () async {
+      final path = await makeTrack('cover_confirm.mp3');
+      final original = File('${tempDir.path}/source.png');
+      final altered = File('${tempDir.path}/altered.png');
+      await original.writeAsBytes([0x89, 0x50, 0x4E, 0x47, 1, 2, 3]);
+      await altered.writeAsBytes([0x89, 0x50, 0x4E, 0x47, 9, 8, 7]);
+      final source = song(21, 'Pochette', 'Artiste', path);
+      library.songs = [source];
+      player.current = source;
+      final ctx = _ctx(container().read(_refProbe));
+      const tool = ChangeCoverTool();
+      final args = <String, Object?>{'image': original.path};
+      await tool.describeAction(ctx, args);
+      args['image'] = altered.path;
+      final result = await tool.execute(ctx, args);
+      expect(result.ok, isFalse);
+      expect((await Id3Reader.readFullMetadata(path)).artwork, isNull);
+    });
+
     test('move_songs déplace le morceau confirmé, pas le nouveau courant',
         () async {
       final pathA = await makeTrack('a.mp3');
