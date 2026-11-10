@@ -16,6 +16,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:musync/core/app_info.dart';
+import 'package:musync/features/settings/data/ai_provider_config.dart';
 import 'package:musync/core/id3/tag_backup.dart';
 import 'package:musync/features/settings/data/lyrics_source_config.dart';
 import 'package:musync/core/utils/atomic_file.dart';
@@ -173,10 +174,13 @@ class SettingsImporter {
   /// Where the lyrics-source list is kept (`getApplicationDocumentsDirectory`).
   final Directory documentsDir;
 
-  const SettingsImporter({
+  final AiSettingsStore _aiStore;
+
+  SettingsImporter({
     required this.supportDir,
     required this.documentsDir,
-  });
+    AiSettingsStore? aiStore,
+  }) : _aiStore = aiStore ?? AiSettingsStore(supportDir: supportDir);
 
   /// Reads [file] and validates it, without writing anything.
   ///
@@ -204,11 +208,15 @@ class SettingsImporter {
     }
 
     if (decoded is! Map) {
-      throw const ImportFormatException("Ce fichier n'est pas un export Musync.");
+      throw const ImportFormatException(
+        "Ce fichier n'est pas un export Musync.",
+      );
     }
     final bundle = Map<String, Object?>.from(decoded);
     if (bundle['app'] != AppInfo.name) {
-      throw const ImportFormatException("Ce fichier n'est pas un export Musync.");
+      throw const ImportFormatException(
+        "Ce fichier n'est pas un export Musync.",
+      );
     }
 
     final rawFiles = bundle['files'];
@@ -350,7 +358,20 @@ class SettingsImporter {
   /// first, and if any write fails the ones already replaced are restored,
   /// so a failed import never leaves half the settings from the bundle and
   /// half from before.
-  Future<ImportReport> apply(ImportBundle bundle, SharedPreferences prefs) async {
+  Future<ImportReport> apply(ImportBundle bundle, SharedPreferences prefs) {
+    if (bundle.files.containsKey(_aiProvidersFile)) {
+      return _aiStore.importTransaction(
+        (transaction) => _apply(bundle, prefs, transaction),
+      );
+    }
+    return _apply(bundle, prefs, null);
+  }
+
+  Future<ImportReport> _apply(
+    ImportBundle bundle,
+    SharedPreferences prefs,
+    AiSettingsImport? aiImport,
+  ) async {
     final appliedFiles = <String>[];
     var secretsKept = 0;
     var secretsApplied = 0;
@@ -361,13 +382,16 @@ class SettingsImporter {
     for (final entry in bundle.files.entries) {
       final dir = _knownFiles[entry.key]! ? documentsDir : supportDir;
       var content = entry.value;
+      _validateSettingsFile(entry.key, content);
       if (entry.key == _aiProvidersFile) {
-        final merged = await _mergeSecrets(entry.key, dir, content);
+        final merged = _mergeSecrets(content, aiImport!.currentJson);
         content = merged.node;
         secretsKept += merged.kept;
         secretsApplied += merged.applied;
       }
-      _validateSettingsFile(entry.key, content);
+      if (entry.key == _aiProvidersFile) {
+        content = await aiImport!.prepare(content as Map);
+      }
       pending.add((
         file: File('${dir.path}${Platform.pathSeparator}${entry.key}'),
         content: const JsonEncoder.withIndent('  ').convert(content),
@@ -383,8 +407,9 @@ class SettingsImporter {
     final unreadableBackups = <File>{};
     for (final p in pending) {
       try {
-        backups[p.file] =
-            await p.file.exists() ? await p.file.readAsString() : null;
+        backups[p.file] = await p.file.exists()
+            ? await p.file.readAsString()
+            : null;
       } catch (_) {
         backups[p.file] = null;
         unreadableBackups.add(p.file);
@@ -394,12 +419,32 @@ class SettingsImporter {
     // The history replaces the phone's tag backups as part of the same atomic
     // unit: it runs inside this try so that a failure also rolls back the
     // settings files above (_applyTagBackups rolls the history back itself).
+    final appliedPrefs = <String>[];
+    final previousPrefs = {
+      for (final key in bundle.preferences.keys) key: prefs.get(key),
+    };
     int restoredBackups = 0;
     try {
       for (final p in pending) {
         await AtomicFile.writeString(p.file, p.content);
         appliedFiles.add(p.name);
       }
+      for (final entry in bundle.preferences.entries) {
+        final value = entry.value;
+        appliedPrefs.add(entry.key);
+        if (value is int) {
+          if (!await prefs.setInt(entry.key, value)) {
+            throw StateError('Préférence non enregistrée.');
+          }
+        } else if (value is String) {
+          if (!await prefs.setString(entry.key, value)) {
+            throw StateError('Préférence non enregistrée.');
+          }
+        } else {
+          continue;
+        }
+      }
+
       final tagBackups = bundle.tagBackups;
       if (tagBackups != null) {
         restoredBackups = await _applyTagBackups(tagBackups);
@@ -412,6 +457,30 @@ class SettingsImporter {
       // incomplete, and the error below says so explicitly instead of
       // claiming a restore that did not happen.
       var rollbackIncomplete = false;
+      for (final key in appliedPrefs) {
+        try {
+          final value = previousPrefs[key];
+          final bool restored;
+          if (value == null) {
+            restored = await prefs.remove(key);
+          } else if (value is int) {
+            restored = await prefs.setInt(key, value);
+          } else if (value is String) {
+            restored = await prefs.setString(key, value);
+          } else if (value is bool) {
+            restored = await prefs.setBool(key, value);
+          } else if (value is double) {
+            restored = await prefs.setDouble(key, value);
+          } else if (value is List<String>) {
+            restored = await prefs.setStringList(key, value);
+          } else {
+            restored = false;
+          }
+          if (!restored) rollbackIncomplete = true;
+        } catch (_) {
+          rollbackIncomplete = true;
+        }
+      }
       for (final entry in backups.entries) {
         try {
           final previous = entry.value;
@@ -444,19 +513,6 @@ class SettingsImporter {
       );
     }
 
-    final appliedPrefs = <String>[];
-    for (final entry in bundle.preferences.entries) {
-      final value = entry.value;
-      if (value is int) {
-        await prefs.setInt(entry.key, value);
-      } else if (value is String) {
-        await prefs.setString(entry.key, value);
-      } else {
-        continue;
-      }
-      appliedPrefs.add(entry.key);
-    }
-
     return ImportReport(
       appliedFiles: appliedFiles,
       appliedPreferences: appliedPrefs,
@@ -478,9 +534,7 @@ class SettingsImporter {
       '${supportDir.path}${Platform.pathSeparator}tag_backups',
     );
     await dir.create(recursive: true);
-    final indexFile = File(
-      '${dir.path}${Platform.pathSeparator}index.json',
-    );
+    final indexFile = File('${dir.path}${Platform.pathSeparator}index.json');
 
     // Snapshot what is there now for the rollback.
     //
@@ -491,8 +545,9 @@ class SettingsImporter {
     String? previousIndex;
     var indexUnreadable = false;
     try {
-      previousIndex =
-          await indexFile.exists() ? await indexFile.readAsString() : null;
+      previousIndex = await indexFile.exists()
+          ? await indexFile.readAsString()
+          : null;
     } catch (_) {
       previousIndex = null;
       indexUnreadable = true;
@@ -539,9 +594,8 @@ class SettingsImporter {
       }
       await AtomicFile.writeString(
         indexFile,
-        const JsonEncoder.withIndent('  ').convert(
-          [for (final entry in history.entries) entry.toJson()],
-        ),
+        const JsonEncoder.withIndent('  ')
+            .convert([for (final entry in history.entries) entry.toJson()]),
       );
       return history.entries.length;
     } catch (_) {
@@ -550,9 +604,7 @@ class SettingsImporter {
       for (final name in written) {
         if (before.contains(name)) continue;
         try {
-          final file = File(
-            '${dir.path}${Platform.pathSeparator}$name',
-          );
+          final file = File('${dir.path}${Platform.pathSeparator}$name');
           if (await file.exists()) await file.delete();
         } catch (_) {
           // Best effort — the original error is the one that matters,
@@ -633,6 +685,7 @@ class SettingsImporter {
         );
       }
       const validKinds = {'gemini', 'openAiCompatible'};
+      final ids = <String>{};
       for (final p in providers) {
         if (p is! Map) {
           throw const ImportFormatException(
@@ -644,6 +697,7 @@ class SettingsImporter {
         final kind = p['kind'];
         if (id is! String ||
             id.isEmpty ||
+            !ids.add(id) ||
             providerName is! String ||
             providerName.isEmpty ||
             kind is! String ||
@@ -661,32 +715,20 @@ class SettingsImporter {
   ///
   /// Providers are matched by `id`; a provider the stored file does not know
   /// keeps the bundle's values as-is.
-  Future<({Object? node, int kept, int applied})> _mergeSecrets(
-    String fileName,
-    Directory dir,
+  ({Object? node, int kept, int applied}) _mergeSecrets(
     Object? imported,
-  ) async {
-    Object? current;
-    try {
-      final file = File('${dir.path}${Platform.pathSeparator}$fileName');
-      if (await file.exists()) {
-        current = jsonDecode(await file.readAsString());
-      }
-    } catch (_) {
-      // Unreadable stored file: nothing to merge with, the bundle wins.
-      current = null;
-    }
-
+    Object? current,
+  ) {
     var kept = 0;
     var applied = 0;
 
     Object? merge(Object? imp, Object? cur) {
-      if (imp is Map && cur is Map) {
+      if (imp is Map) {
         final out = <String, Object?>{};
         for (final entry in imp.entries) {
           final key = '${entry.key}';
           final impValue = entry.value;
-          final curValue = cur[entry.key];
+          final curValue = cur is Map ? cur[entry.key] : null;
           if (secretFieldName.hasMatch(key) && impValue is String) {
             if (impValue.isEmpty && curValue is String && curValue.isNotEmpty) {
               kept++;
@@ -701,8 +743,11 @@ class SettingsImporter {
         }
         return out;
       }
-      if (imp is List && cur is List) {
-        return [for (final item in imp) merge(item, _matchById(item, cur))];
+      if (imp is List) {
+        return [
+          for (final item in imp)
+            merge(item, cur is List ? _matchById(item, cur) : null),
+        ];
       }
       return imp;
     }
