@@ -8,6 +8,7 @@ import 'package:musync/core/id3/tag_backup.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/lyrics/data/ai_lyrics_finder.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
+import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
 import 'package:musync/features/lyrics/data/lyrics_provenance.dart';
 import 'package:musync/features/lyrics/data/lyrics_query_resolver.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
@@ -109,6 +110,7 @@ void main() {
         const LyricsQueryResolver(parseFilename: _noGuess),
     provenance: provenance,
     backups: backups,
+    mismatchStore: LyricsMismatchStore(root: root),
     fileChanged: changed.add,
     hasWriteAccess: () async => true,
   );
@@ -373,6 +375,7 @@ void main() {
       resolver: const LyricsQueryResolver(parseFilename: _noGuess),
       provenance: provenance,
       backups: backups,
+      mismatchStore: LyricsMismatchStore(root: root),
       fileChanged: changed.add,
       hasWriteAccess: () async => true,
     );
