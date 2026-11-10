@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:musync/features/library/data/tag_mtime_store.dart';
+import 'package:musync/features/library/data/music_scanner.dart';
 
 void main() {
   late Directory dir;
@@ -39,6 +40,14 @@ void main() {
       // a "mtime:size" key and so forces exactly one re-read.
       '/music/b.mp3': '123456',
     });
+  });
+
+  test('le scanner purge les entrées de cache des morceaux disparus',
+      () async {
+    await store.save({'/ancien/a.mp3': '1:2'});
+    final scanner = MusicScanner(mtimeStore: store);
+    expect(await scanner.refreshMetadataFromFiles([]), isEmpty);
+    expect(await store.load(), isEmpty);
   });
 
   test('a missing or corrupt file reads as empty, not an error', () async {
