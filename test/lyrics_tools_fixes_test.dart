@@ -15,6 +15,7 @@ import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/catalogue_provider.dart';
 import 'package:musync/features/lyrics/data/ai_lyrics_finder.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
+import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
 import 'package:musync/features/lyrics/data/lyrics_provenance.dart';
 import 'package:musync/features/lyrics/data/lyrics_query_resolver.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
@@ -142,6 +143,7 @@ void main() {
               ),
               provenance: LyricsProvenanceStore(root: support),
               backups: TagBackupStore(root: support),
+              mismatchStore: LyricsMismatchStore(root: support),
               fileChanged: (_) {},
               hasWriteAccess: () async => true,
             ),
