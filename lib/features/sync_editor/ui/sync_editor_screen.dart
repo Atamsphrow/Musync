@@ -410,6 +410,13 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
         _editor.nudgeLine(index, const Duration(milliseconds: -kLineNudgeMs));
       case LyricLineAction.nudgeForward:
         _editor.nudgeLine(index, const Duration(milliseconds: kLineNudgeMs));
+      // This line and everything after it; earlier lines stay put. The
+      // middle case between the line's own nudge (one line) and the global
+      // offset (all lines) — a track that drifts from a point.
+      case LyricLineAction.nudgeFromBack:
+        _editor.nudgeFrom(index, const Duration(milliseconds: -kLineNudgeMs));
+      case LyricLineAction.nudgeFromForward:
+        _editor.nudgeFrom(index, const Duration(milliseconds: kLineNudgeMs));
       case LyricLineAction.retime:
         _editor.resetLineTiming(index);
       case LyricLineAction.clearTimestamp:
