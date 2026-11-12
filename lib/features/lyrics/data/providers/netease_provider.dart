@@ -15,9 +15,9 @@ import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.
 /// Two steps, both verified live 2026-11-12: `search/get` returns
 /// songs with a name, artists, a duration in milliseconds and an id;
 /// `song/lyric` returns the lyrics as LRC — line-synced, with a
-/// Chinese translation (`tlyric`) and a romanization (`romalrc`) that
-/// this source ignores (translation was refused by the user on
-/// 2026-11-12; romanization was never asked for).
+/// Chinese translation (`tlyric`), which this source ignores
+/// (translation was refused by the user on 2026-11-12), and a
+/// romanization (`romalrc`), attached to its line by timestamp.
 ///
 /// Each candidate must pass the strict `_sameSong` check (our title
 /// and one of our artists, folded equal, duration within 4 s when
@@ -234,7 +234,30 @@ class NetEaseSource extends LyricsSource {
         if (!line.text.contains(' : ')) line,
     ];
     if (lines.isEmpty) return null;
-    final synced = lines.any(
+    // Romanization (`romalrc`): the same LRC shape, matched to its line
+    // by timestamp. A line with no romanization keeps none. Empty on
+    // every song probed live so far, but the field is there when NetEase
+    // has it.
+    final romalrc = json['romalrc'];
+    final romalrcRaw =
+        romalrc is Map<String, dynamic> ? romalrc['lyric'] : null;
+    final romanized = <int, String>{};
+    if (romalrcRaw is String && romalrcRaw.trim().isNotEmpty) {
+      for (final line in LrcParser.parse(romalrcRaw).lines) {
+        if (line.timestamp != null && line.text.trim().isNotEmpty) {
+          romanized[line.timestamp!.inMilliseconds] = line.text.trim();
+        }
+      }
+    }
+    final withRomanization = [
+      for (final line in lines)
+        line.timestamp == null
+            ? line
+            : line.copyWith(
+                romanization: romanized[line.timestamp!.inMilliseconds],
+              ),
+    ];
+    final synced = withRomanization.any(
       (l) => l.timestamp != null && l.timestamp! > Duration.zero,
     );
     final confidence = scoreLyricsCandidate(
@@ -254,10 +277,10 @@ class NetEaseSource extends LyricsSource {
       title: queryTitle,
       artist: queryArtist,
       album: queryAlbum,
-      syncedLyrics: synced ? SyncedLyrics(lines) : null,
+      syncedLyrics: synced ? SyncedLyrics(withRomanization) : null,
       unsyncedLyrics: synced
           ? null
-          : UnsyncedLyrics(lines.map((l) => l.text).join('\n')),
+          : UnsyncedLyrics(withRomanization.map((l) => l.text).join('\n')),
       confidence: confidence,
       trackId: hit.id,
       durationMs: hit.durationMs,
