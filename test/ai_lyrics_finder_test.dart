@@ -36,6 +36,7 @@ LyricsSearchResult _hit({
   int? trackId,
   int? durationMs = 180000,
   bool synced = true,
+  bool wordTimed = false,
   String text = 'Vraies paroles',
 }) => LyricsSearchResult(
   source: source,
@@ -43,7 +44,19 @@ LyricsSearchResult _hit({
   artist: artist,
   syncedLyrics: synced
       ? SyncedLyrics([
-          LyricLine(timestamp: const Duration(seconds: 1), text: text),
+          LyricLine(
+            timestamp: const Duration(seconds: 1),
+            text: text,
+            words: wordTimed
+                ? const [
+                    LyricWord(
+                      start: Duration(seconds: 1),
+                      duration: Duration(milliseconds: 500),
+                      text: 'Vraies',
+                    ),
+                  ]
+                : const [],
+          ),
         ])
       : null,
   unsyncedLyrics: synced ? null : UnsyncedLyrics(text),
@@ -240,7 +253,9 @@ void main() {
     expect(repo.embedded, isEmpty);
   });
 
-  test('paroles calées auto basse confiance → réécrites quand mieux', () async {
+  test('paroles calées auto basse confiance + candidat ligne à ligne → gardées', () async {
+    // Un calé ligne à ligne ne réécrit plus un calé existant : seul du
+    // mot à mot le remplace.
     final path = await realFile('1.mp3');
     repo.files[path] = (
       synced: SyncedLyrics([
@@ -264,6 +279,35 @@ void main() {
       ),
     );
     repo.fallback = [_hit(trackId: 7)];
+    final result = await finder().findFor(_song(filePath: path));
+    expect(result.verdict, LyricsFindVerdict.keptExisting);
+    expect(repo.embedded, isEmpty);
+  });
+
+  test('paroles calées auto basse confiance + candidat mot à mot → réécrites', () async {
+    final path = await realFile('1.mp3');
+    repo.files[path] = (
+      synced: SyncedLyrics([
+        const LyricLine(timestamp: Duration(seconds: 1), text: 'Fausses'),
+      ]),
+      unsynced: null,
+    );
+    await provenance.record(
+      path,
+      LyricsProvenance(
+        source: 'LRCLIB',
+        trackId: 1,
+        title: 'Titre',
+        artist: 'Artiste',
+        confidence: 0.40,
+        queryTitle: 'Titre',
+        queryArtist: 'Artiste',
+        viaFilename: false,
+        origin: LyricsProvenanceOrigin.autoBackground,
+        embeddedAt: DateTime.now(),
+      ),
+    );
+    repo.fallback = [_hit(trackId: 7, wordTimed: true)];
     final result = await finder().findFor(_song(filePath: path));
     expect(result.verdict, LyricsFindVerdict.integrated);
     expect(result.replacedPrevious, isTrue);
