@@ -47,7 +47,7 @@ void main() {
     test('with no file at all, the bundled sources are returned', () async {
       final loaded = await storeFor('lyrics_sources.json').load();
 
-      expect(idsOf(loaded), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou']);
+      expect(idsOf(loaded), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou', 'genius']);
       expect(loaded.every((config) => config.enabled), isTrue);
     });
 
@@ -63,7 +63,7 @@ void main() {
 
       final loaded = await storeFor('lyrics_sources.json').load();
 
-      expect(idsOf(loaded), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou']);
+      expect(idsOf(loaded), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou', 'genius']);
     });
 
     test('a non-list payload falls back to the bundled sources', () async {
@@ -74,7 +74,7 @@ void main() {
 
       final loaded = await storeFor('lyrics_sources.json').load();
 
-      expect(idsOf(loaded), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou']);
+      expect(idsOf(loaded), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou', 'genius']);
     });
 
     test(
@@ -102,7 +102,7 @@ void main() {
 
         final loaded = await storeFor('lyrics_sources.json').load();
 
-        expect(idsOf(loaded), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou']);
+        expect(idsOf(loaded), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou', 'genius']);
       },
     );
 
@@ -132,12 +132,12 @@ void main() {
 
         final loaded = await storeFor('lyrics_sources.json').load();
 
-        expect(idsOf(loaded), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou']);
+        expect(idsOf(loaded), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou', 'genius']);
       },
     );
 
-    test('builtInSources is LRCLIB + LyricsPlus + lrc.red + Kugou', () {
-      expect(idsOf(builtInSources), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou']);
+    test('builtInSources is LRCLIB + LyricsPlus + lrc.red + Kugou + Genius', () {
+      expect(idsOf(builtInSources), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou', 'genius']);
     });
 
     test('every fallback returns a fresh, mutable copy — not the const',
@@ -168,7 +168,7 @@ void main() {
           () => loaded.add(lrclibDefault.copyWith(enabled: false)),
           returnsNormally,
         );
-        expect(builtInSources, hasLength(4));
+        expect(builtInSources, hasLength(5));
         await File(
           '${tempDir.path}${Platform.pathSeparator}lyrics_sources.json',
         ).writeAsString('');
