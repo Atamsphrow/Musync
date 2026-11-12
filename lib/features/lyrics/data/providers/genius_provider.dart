@@ -17,14 +17,23 @@ import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.
 /// re-implemented in Dart from the idea (GPL-3.0 — no Kotlin was
 /// copied).
 ///
-/// A browser User-Agent on both requests: the page is served to
-/// browsers, and the search is the site's own internal API.
+/// Un User-Agent honnête sur les deux requêtes (voir [_userAgent]) : se faire passer pour Chrome se fait bloquer, se présenter comme Musync passe.
 class GeniusSource implements LyricsSource {
   static const String defaultBaseUrl = 'https://genius.com/api';
 
+  /// Un User-Agent honnête, comme myspoti (« Myspoti (https://github.com/) »).
+  ///
+  /// Le faux UA Chrome 130 se faisait bloquer (403, puis connexion coupée) :
+  /// l'anti-bot voit un UA Chrome sur une pile TLS Dart — l'incohérence même
+  /// qui déclenche le blocage. Avec cet UA et un Accept simple, la même
+  /// requête passe en 200 (vérifié live le 2026-11-12, recherche et page).
   static const String _userAgent =
-      'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36';
+      'Musync/1.0.0 (https://github.com/atamsphrow/musync)';
+
+  static const Map<String, String> _headers = {
+    'User-Agent': _userAgent,
+    'Accept': 'application/json, text/html;q=0.9, */*;q=0.8',
+  };
 
   static const Duration _timeout = Duration(seconds: 12);
 
@@ -152,9 +161,8 @@ class GeniusSource implements LyricsSource {
     }
   }
 
-  Future<http.Response> _send(Uri uri) => _client
-      .get(uri, headers: const {'User-Agent': _userAgent})
-      .timeout(_timeout);
+  Future<http.Response> _send(Uri uri) =>
+      _client.get(uri, headers: _headers).timeout(_timeout);
 
   Future<http.Response> _retryOnce(Uri uri) async {
     await Future<void>.delayed(_retryDelay);
