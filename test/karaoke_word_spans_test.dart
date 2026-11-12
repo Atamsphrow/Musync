@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
+import 'package:musync/features/player/ui/widgets/karaoke_separators.dart';
 import 'package:musync/features/player/ui/widgets/synced_lyrics_view.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
 
@@ -354,4 +355,54 @@ void main() {
       expect(unknown.hasDuet, isFalse);
     });
   });
+
+  LyricWord w(int s, int d, String t) =>
+      LyricWord(start: Duration(milliseconds: s), duration: Duration(milliseconds: d), text: t);
+
+  final syllables = LyricLine(
+    timestamp: const Duration(milliseconds: 14870),
+    text: 'would never try',
+    words: [w(17055, 342, 'would'), w(17397, 294, 'nev'),
+            w(17691, 242, 'er'), w(17933, 323, 'try')],
+  );
+
+  group('karaokeWordSeparators', () {
+    test('syllabes : séparateur vide', () {
+      expect(karaokeWordSeparators(syllables), [' ', '', ' ']);
+    });
+    test('ligne normale : espaces', () {
+      final l = LyricLine(timestamp: Duration.zero, text: 'a b c',
+          words: [w(0, 1, 'a'), w(1, 1, 'b'), w(2, 1, 'c')]);
+      expect(karaokeWordSeparators(l), [' ', ' ']);
+    });
+    test("ponctuation : I'll et virgule", () {
+      final l = LyricLine(timestamp: Duration.zero, text: "I'll go, now",
+          words: [w(0, 1, "I'll"), w(1, 1, 'go,'), w(2, 1, 'now')]);
+      expect(karaokeWordSeparators(l), [' ', ' ']);
+    });
+    test('mots ≠ texte → null', () {
+      final l = LyricLine(timestamp: Duration.zero, text: 'hello world',
+          words: [w(0, 1, 'hello'), w(1, 1, 'there')]);
+      expect(karaokeWordSeparators(l), isNull);
+    });
+    test('mots ne couvrant pas tout le texte → null', () {
+      final l = LyricLine(timestamp: Duration.zero, text: 'a b c',
+          words: [w(0, 1, 'a'), w(1, 1, 'b')]);
+      expect(karaokeWordSeparators(l), isNull);
+    });
+  });
+
+  test('karaokeWordSpans : « never » sans espace parasite + tap par syllabe', () {
+    Duration? seeked;
+    final spans = karaokeWordSpans(
+      line: syllables, wordIndex: 1,
+      sungStyle: const TextStyle(), unsungStyle: const TextStyle(),
+      onWordTap: (p) => seeked = p,
+    );
+    expect(spans.map((s) => s.text).join(), 'would never try');
+    final er = spans.firstWhere((s) => s.text == 'er');
+    (er.recognizer! as TapGestureRecognizer).onTap!();
+    expect(seeked, const Duration(milliseconds: 17691));
+  });
+
 }
