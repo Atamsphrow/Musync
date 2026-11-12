@@ -4,6 +4,7 @@ import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
+import 'package:musync/features/lyrics/data/lyrics_align.dart';
 import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
 import 'package:musync/features/lyrics/data/lyrics_word_timings_store.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
@@ -132,15 +133,40 @@ class LyricsRepository {
     String filePath, {
     SyncedLyrics? synced,
     UnsyncedLyrics? unsynced,
+
+    /// When true, timed [synced] lyrics are re-timed to the file's own
+    /// timed lyrics before writing (see [alignLyrics]). Callers set this
+    /// when the result comes from another recording (LyricsPlus, lrc.red):
+    /// the file's timings are the trusted reference. False everywhere
+    /// else — LRCLIB times the file's own cut, the editor is authoritative
+    /// about its track, and a plain write has nothing to align.
+    bool alignToExisting = false,
   }) async {
-    await Id3Writer.writeLyrics(filePath, synced: synced, unsynced: unsynced);
+    // Aligned before anything is written, so the tag, the mismatch store
+    // and the word-timings store all see the same (shifted) lyrics.
+    var toWrite = synced;
+    if (alignToExisting && synced != null && synced.isNotEmpty) {
+      final current = await Id3Reader.readLyricsFrames(filePath);
+      final existing = current.synced;
+      if (existing != null && existing.isNotEmpty) {
+        final aligned = alignLyrics(incoming: synced, reference: existing);
+        toWrite = aligned.lyrics;
+        DebugLog.instance.info(
+          'Paroles',
+          aligned.aligned
+              ? 'Timings décalés de ${aligned.shiftMs} ms pour $filePath'
+              : 'Pas d’alignement fiable pour $filePath : écrits tels quels',
+        );
+      }
+    }
+    await Id3Writer.writeLyrics(filePath, synced: toWrite, unsynced: unsynced);
     await MediaStore.rescan(filePath);
     // De vraies paroles viennent d'être enregistrées : le morceau a
     // trouvé ses paroles, la marque « non correspondant » tombe.
     // Jamais sur suppression (les deux nulls) — sinon le bouton
     // « Paroles incorrectes » s'auto-annulerait.
     final hasLyrics =
-        (synced != null && synced.isNotEmpty) ||
+        (toWrite != null && toWrite.isNotEmpty) ||
         (unsynced != null && unsynced.text.trim().isNotEmpty);
     if (hasLyrics) {
       await _mismatchStore?.unmark(filePath);
@@ -150,8 +176,8 @@ class LyricsRepository {
     // (SYLT/USLT/LRC sont au niveau ligne). Une écriture sans mots ne
     // touche pas au store — l'éditeur et le décalage sauvent sans mots,
     // et leurs sauves ne doivent pas tuer le karaoké.
-    if (synced != null && synced.hasWordTimings) {
-      await _wordTimingsStore?.saveWords(filePath, synced);
+    if (toWrite != null && toWrite.hasWordTimings) {
+      await _wordTimingsStore?.saveWords(filePath, toWrite);
       await _wordTimingsStore?.save();
     }
   }
