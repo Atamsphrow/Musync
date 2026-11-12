@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/features/lyrics/data/providers/genius_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 
@@ -83,7 +84,7 @@ void main() {
   Future<List<LyricsSearchResult>> search(GeniusSource source) =>
       source.search(title: queryTitle, artist: queryArtist);
 
-  test('nominal : parole simple, score 0,65, marqueur gardé', () async {
+  test('nominal : parole simple, score 0,80, marqueur gardé', () async {
     final source = GeniusSource(
       client: _mockGenius(
         hits: [_hit()],
@@ -104,8 +105,9 @@ void main() {
       "Yeah, I'm in the city\n"
       "You don't even have to do too much",
     );
-    // 0,35 (titre) + 0,30 (artiste) + 0 (durée inconnue).
-    expect(result.confidence, closeTo(0.65, 0.001));
+    // 0,80 fixe : le seuil d'auto-intégration, pas plus (voir le
+    // commentaire dans GeniusSource).
+    expect(result.confidence, 0.80);
   });
 
   test('premier hit non correspondant : le deuxième est pris', () async {
@@ -204,5 +206,38 @@ void main() {
 
   test('est une source de repli', () {
     expect(GeniusSource().isFallback, isTrue);
+  });
+
+  test('seul résultat : le mode IA l’intègre (bestAutoMatch)', () async {
+    final source = GeniusSource(
+      client: _mockGenius(
+        hits: [_hit()],
+        pages: {'/The-weeknd-blinding-lights-lyrics': _page},
+      ),
+    );
+
+    final results = await search(source);
+
+    expect(bestAutoMatch(results), results.single);
+  });
+
+  test('un résultat plus fort le devance (0,80, pas plus)', () async {
+    final source = GeniusSource(
+      client: _mockGenius(
+        hits: [_hit()],
+        pages: {'/The-weeknd-blinding-lights-lyrics': _page},
+      ),
+    );
+
+    final results = await search(source);
+    final stronger = LyricsSearchResult(
+      source: 'LRCLIB',
+      title: queryTitle,
+      artist: queryArtist,
+      unsyncedLyrics: const UnsyncedLyrics('Paroles'),
+      confidence: 0.85,
+    );
+
+    expect(bestAutoMatch([stronger, ...results]), stronger);
   });
 }
