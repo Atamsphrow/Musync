@@ -30,6 +30,11 @@ enum LyricsSourceKind {
   /// A single fixed endpoint, not self-hostable — the bundled entry is
   /// the only one there is.
   lrcRed,
+
+  /// Kugou (KRC lyrics): word timings when the catalogue has them.
+  /// A single fixed endpoint, not self-hostable — the bundled entry is
+  /// the only one there is.
+  kugou,
 }
 
 /// One entry in the sources list.
@@ -160,11 +165,21 @@ const LyricsSourceConfig lrcRedDefault = LyricsSourceConfig(
   kind: LyricsSourceKind.lrcRed,
 );
 
+/// The bundled KRC source. Always present, after lrc.red.
+const LyricsSourceConfig kugouDefault = LyricsSourceConfig(
+  id: 'kugou',
+  name: 'Kugou',
+  baseUrl: 'https://lyrics.kugou.com',
+  isBuiltIn: true,
+  kind: LyricsSourceKind.kugou,
+);
+
 /// Every bundled entry, in the order they are shown.
 const List<LyricsSourceConfig> builtInSources = [
   lrclibDefault,
   lyricsPlusDefault,
   lrcRedDefault,
+  kugouDefault,
 ];
 
 /// Reads and writes the sources list as JSON in the app's documents directory.
