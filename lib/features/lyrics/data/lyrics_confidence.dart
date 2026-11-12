@@ -4,7 +4,7 @@
 /// fait plus que trier, elle filtre. Voir DESIGN.md §3.
 ///
 /// Poids : titre 0,35 + artiste 0,30 + album 0,05 + durée 0,15 + synchro
-/// 0,05 + accord nom de fichier 0,10 − pénalité placeholder 0,30.
+/// 0,05 + timings mot à mot 0,05 + accord nom de fichier 0,10 − pénalité placeholder 0,30.
 /// Aucun plancher : sans aucun champ concordant, le score est 0 (plus le
 /// bonus synchro seul) — le plancher 0,30 de l'ancien `_score` couronnait
 /// des faux hits à 0,35.
@@ -29,6 +29,11 @@ abstract final class LyricsConfidence {
   static const double _durationClose = 0.15;
   static const double _durationLoose = 0.07;
   static const double _syncedBonus = 0.05;
+
+  /// A word-timed candidate outranks a line-timed one at equal match
+  /// quality — the same size as the synced bonus, so the word timings
+  /// break the tie without ever outscoring a better match.
+  static const double _wordTimingsBonus = 0.05;
   static const double _filenameAgreement = 0.10;
   static const double _placeholderPenalty = 0.30;
 
@@ -45,6 +50,7 @@ class LyricsConfidenceScore {
   final double album;
   final double duration;
   final double synced;
+  final double wordTimings;
   final double filenameAgreement;
   final double placeholderPenalty;
 
@@ -55,6 +61,7 @@ class LyricsConfidenceScore {
     required this.album,
     required this.duration,
     required this.synced,
+    this.wordTimings = 0.0,
     required this.filenameAgreement,
     required this.placeholderPenalty,
   });
@@ -150,6 +157,7 @@ LyricsConfidenceScore scoreLyricsCandidate({
   String? candidateAlbum,
   int? candidateDurationMs,
   required bool candidateHasSynced,
+  bool candidateHasWordTimings = false,
   required String queryTitle,
   required String queryArtist,
   String? queryAlbum,
@@ -197,6 +205,14 @@ LyricsConfidenceScore scoreLyricsCandidate({
   final synced =
       candidateHasSynced ? LyricsConfidence._syncedBonus : 0.0;
 
+  // Word timings refine synced lyrics; on their own (no synced lines)
+  // they are nothing — a plain-text candidate must never earn this
+  // bonus by passing the flag alone.
+  final wordTimings =
+      candidateHasSynced && candidateHasWordTimings
+          ? LyricsConfidence._wordTimingsBonus
+          : 0.0;
+
   var filenameAgreement = 0.0;
   final guess = filenameGuess;
   if (guess != null) {
@@ -222,6 +238,7 @@ LyricsConfidenceScore scoreLyricsCandidate({
                   album +
                   duration +
                   synced +
+                  wordTimings +
                   filenameAgreement +
                   placeholderPenalty)
               .clamp(0.0, 1.0) *
@@ -236,6 +253,7 @@ LyricsConfidenceScore scoreLyricsCandidate({
     album: album,
     duration: duration,
     synced: synced,
+    wordTimings: wordTimings,
     filenameAgreement: filenameAgreement,
     placeholderPenalty: placeholderPenalty,
   );
