@@ -231,8 +231,6 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                         synced: widget.lyrics,
                         unsynced: widget.unsynced,
                         index: index,
-                        title: widget.song!.title,
-                        artist: widget.song!.artist,
                       ),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
