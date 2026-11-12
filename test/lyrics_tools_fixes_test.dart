@@ -47,10 +47,22 @@ class _FakeRepo extends LyricsRepository {
 
   int embeds = 0;
 
+  /// Paroles « écrites » par le dernier `embedLyrics`, comme le ferait
+  /// un vrai fichier : la relecture après écriture les retrouve.
+  SyncedLyrics? writtenSynced;
+  UnsyncedLyrics? writtenUnsynced;
+  bool _written = false;
+
   /// Texte du hit rendu : 'Une' par défaut, comme les paroles déjà dans
-  /// le fichier — le test G55 le change pour que le finder intègre au
-  /// lieu de garder l'existant identique (idempotence).
+  /// le fichier — l'idempotence garde l'existant identique.
   String hitText = 'Une';
+
+  /// Paroles déjà dans le fichier, lues par `readLyrics`. Vrai par
+  /// défaut ('Une' calée) ; le test G55 le met à faux — un candidat
+  /// ligne à ligne ne remplace plus des paroles calées existantes
+  /// (règle du 2026-11-12 : seul le mot à mot réécrit), donc l'écriture
+  /// que G55 vérifie n'a lieu que sans paroles existantes.
+  bool hasExisting = true;
 
   @override
   Future<List<LyricsSearchResult>> searchAll({
@@ -83,15 +95,27 @@ class _FakeRepo extends LyricsRepository {
     bool alignToExisting = false,
   }) async {
     embeds++;
+    writtenSynced = synced;
+    writtenUnsynced = unsynced;
+    _written = true;
   }
 
   @override
-  Future<LyricsPair> readLyrics(String filePath) async => (
-    synced: SyncedLyrics([
-      const LyricLine(timestamp: Duration(seconds: 1), text: 'Une'),
-    ]),
-    unsynced: null,
-  );
+  Future<LyricsPair> readLyrics(String filePath) async {
+    // Après une écriture, la relecture retrouve ce qui vient d'être
+    // écrit — comme un vrai fichier.
+    if (_written) {
+      return (synced: writtenSynced, unsynced: writtenUnsynced);
+    }
+    return hasExisting
+        ? (
+            synced: SyncedLyrics([
+              const LyricLine(timestamp: Duration(seconds: 1), text: 'Une'),
+            ]),
+            unsynced: null,
+          )
+        : (synced: null, unsynced: null);
+  }
 }
 
 FilenameGuess _noGuess(String _) => (artist: '', title: '');
@@ -128,7 +152,9 @@ void main() {
         filePath: file.path,
       );
       final player = _FakePlayer()..current = song;
-      final repo = _FakeRepo()..hitText = 'Deux';
+      final repo = _FakeRepo()
+        ..hitText = 'Deux'
+        ..hasExisting = false;
       final support = Directory('${dir.path}/support')..createSync();
       var statusBuilds = 0;
       var groupingBuilds = 0;
