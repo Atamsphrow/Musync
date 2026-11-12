@@ -16,6 +16,7 @@ import 'package:musync/features/lyrics/data/lyrics_confidence.dart';
 import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
 import 'package:musync/features/lyrics/data/lyrics_provenance.dart';
 import 'package:musync/features/lyrics/data/lyrics_query_resolver.dart';
+import 'package:musync/features/lyrics/data/lyrics_align.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 import 'package:musync/features/lyrics/providers/search_provider.dart';
@@ -685,6 +686,9 @@ class AiLyricsFinder {
         song.filePath,
         synced: best.syncedLyrics,
         unsynced: best.unsyncedLyrics,
+        // LyricsPlus and lrc.red time another recording: re-time them to
+        // the file's own timings before writing.
+        alignToExisting: isOtherRecordingSource(best.source),
       );
     } catch (e, stack) {
       DebugLog.instance.error(
