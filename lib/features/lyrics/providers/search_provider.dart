@@ -3,6 +3,7 @@ import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/shared_http_client.dart';
 import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
+import 'package:musync/features/lyrics/data/lyrics_word_timings_store.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lrcred_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lyricsplus_provider.dart';
@@ -20,15 +21,18 @@ final lyricsRepositoryProvider = Provider<LyricsRepository>((ref) {
   final configs = ref.watch(lyricsSourcesProvider).valueOrNull;
   final client = ref.watch(sharedHttpClientProvider);
   final mismatchStore = ref.watch(lyricsMismatchStoreProvider);
+  final wordTimingsStore = ref.watch(lyricsWordTimingsStoreProvider);
   if (configs == null) {
     return LyricsRepository(
       sources: [LrclibSource(client: client)],
       mismatchStore: mismatchStore,
+      wordTimingsStore: wordTimingsStore,
     );
   }
 
   return LyricsRepository(
     mismatchStore: mismatchStore,
+    wordTimingsStore: wordTimingsStore,
     sources: [
       for (final config in configs.where((c) => c.enabled))
         switch (config.kind) {
