@@ -97,24 +97,38 @@ class LyricsSearchResult {
 }
 
 /// The one pick every « apply the best hit » path shares — the sweep,
-/// the batch, the AI assistant: a synced hit first, in the order the
-/// repository ranked them, since synced lyrics are the point of the
-/// app; and only when NO hit carries synced lyrics, the best
-/// plain-text one. Plain is the fallback, never a dead end — a track
-/// LRCLIB only knows in plain form still gets its words.
+/// the batch, the AI assistant: a word-timed synced hit first, then a
+/// line-level synced hit, and only when NO hit carries synced lyrics,
+/// the best plain-text one. Word-by-word is the first choice,
+/// line-by-line the second — a line-level hit never outranks a
+/// word-timed one that is sure enough. Plain is the fallback, never a
+/// dead end — a track LRCLIB only knows in plain form still gets its
+/// words.
 ///
 /// Confidence alone does not make this pick: an exact plain-only hit
 /// (LRCLIB `/get`, confidence 1.0) would otherwise outrank a synced
-/// hit that exists further down the list.
+/// hit that exists further down the list. And a word-timed hit below
+/// the auto bar (0.80) never outranks a line-level hit: a word-timed
+/// miss is usually another recording, and the bar is what keeps the
+/// wrong words out.
 ///
 /// [results] must already be ranked best-first (the repository's
 /// `searchAll` does that). Null when the list is empty.
-LyricsSearchResult? bestLyricsMatch(List<LyricsSearchResult> results) =>
-    results.where((r) => r.hasSyncedLyrics).firstOrNull ??
-    results.where((r) => r.hasUnsyncedLyrics).firstOrNull;
+LyricsSearchResult? bestLyricsMatch(List<LyricsSearchResult> results) {
+  final wordTimed = results
+      .where(
+        (r) =>
+            r.hasWordTimings &&
+            r.confidence >= LyricsConfidence.autoIntegrateConfidence,
+      )
+      .firstOrNull;
+  if (wordTimed != null) return wordTimed;
+  return results.where((r) => r.hasSyncedLyrics).firstOrNull ??
+      results.where((r) => r.hasUnsyncedLyrics).firstOrNull;
+}
 
 /// The pick every *automatic* path shares — the AI assistant, the
-/// background sweep, the batch pre-selection: the same synced-first
+/// background sweep, the batch pre-selection: the same word-first
 /// preference as [bestLyricsMatch], but only among hits at or above
 /// [minConfidence] (0.80 by default, the shared threshold).
 ///
@@ -128,6 +142,7 @@ LyricsSearchResult? bestAutoMatch(
   double minConfidence = LyricsConfidence.autoIntegrateConfidence,
 }) {
   final above = results.where((r) => r.confidence >= minConfidence);
-  return above.where((r) => r.hasSyncedLyrics).firstOrNull ??
+  return above.where((r) => r.hasWordTimings).firstOrNull ??
+      above.where((r) => r.hasSyncedLyrics).firstOrNull ??
       above.where((r) => r.hasUnsyncedLyrics).firstOrNull;
 }
