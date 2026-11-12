@@ -19,10 +19,15 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Version épinglée, pas `channel: stable` : le 2026-11-12, stable
+      # est passé à Flutter 3.50, qui déprécie `package:flutter/material.dart`
+      # (49 infos `deprecated_member_use`) et casse `analyze --fatal-infos`
+      # alors que le code n'a pas changé. Le projet est développé et testé
+      # contre 3.47.6 : la CI doit compiler avec la même version.
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: "3.47.6"
           cache: true
 
       - name: Make gradlew executable
