@@ -45,6 +45,14 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
     text: widget.initialArtist ?? widget.song.artist,
   );
 
+  /// Valeurs de départ des champs (tags du fichier) : la vérification
+  /// avant recherche ne remplace un champ que s'il n'a pas été retouché
+  /// à la main — une correction tapée par l'utilisateur prime sur le deviné.
+  late final String _initialTitle =
+      widget.initialTitle ?? widget.song.title;
+  late final String _initialArtist =
+      widget.initialArtist ?? widget.song.artist;
+
   /// True while a model is being asked. It can take a few seconds, and a
   /// button that looks idle invites a second press.
   bool _guessing = false;
@@ -169,6 +177,31 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
   }
 
   void _search({bool autoRetry = true, bool explicit = false}) {
+    // Assurer l'artiste et le titre AVANT de chercher : le nom du fichier
+    // dit souvent mieux que les tags qui est l'artiste et quel est le titre
+    // (artiste « Unknown », titre = nom du fichier entier). L'heuristique
+    // locale suffit ici — instantanée, sans réseau — et le deviné complet
+    // (heuristique puis IA) reste sur le bouton Deviner et sur le 2e essai
+    // automatique. Seuls les champs encore à leur valeur d'origine sont
+    // remplacés : une correction tapée à la main n'est jamais écrasée.
+    final filenameGuess = FilenameParser.parse(widget.song.filePath);
+    if (filenameGuess.title.isNotEmpty ||
+        filenameGuess.artist.isNotEmpty) {
+      var changed = false;
+      if (_titleController.text == _initialTitle &&
+          filenameGuess.title.isNotEmpty &&
+          filenameGuess.title != _titleController.text) {
+        _titleController.text = filenameGuess.title;
+        changed = true;
+      }
+      if (_artistController.text == _initialArtist &&
+          filenameGuess.artist.isNotEmpty &&
+          filenameGuess.artist != _artistController.text) {
+        _artistController.text = filenameGuess.artist;
+        changed = true;
+      }
+      if (changed) setState(() {});
+    }
     final title = _titleController.text;
     final artist = _artistController.text;
     performLyricsSearch(
