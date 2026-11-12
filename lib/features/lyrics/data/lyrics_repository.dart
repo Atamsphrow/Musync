@@ -6,6 +6,7 @@ import 'package:musync/core/services/media_store.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/lyrics/data/lyrics_align.dart';
 import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
+import 'package:musync/features/lyrics/data/lyrics_source_health.dart';
 import 'package:musync/features/lyrics/data/lyrics_word_timings_store.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
@@ -28,11 +29,26 @@ class LyricsRepository {
   /// les tests qui n'exercent que la recherche.
   final LyricsWordTimingsStore? _wordTimingsStore;
 
+  /// The health of the sources: which are set aside, and which already
+  /// said "no lyrics" for a query. One instance per repository by default;
+  /// the app injects the shared one so it survives settings rebuilds.
+  final LyricsSourceHealth _health;
+
   LyricsRepository({
     List<LyricsSource>? sources,
     this._mismatchStore,
     this._wordTimingsStore,
-  }) : _sources = sources ?? [LrclibSource()];
+    LyricsSourceHealth? health,
+  }) : _sources = sources ?? [LrclibSource()],
+       _health = health ?? LyricsSourceHealth();
+
+  /// The names of the sources this repository asks, in order. The source
+  /// picker sheet lists these: only enabled sources are ever built.
+  List<String> get sourceNames =>
+      List.unmodifiable(_sources.map((s) => s.name));
+
+  /// The health of the sources, for the picker sheet's states.
+  LyricsSourceHealth get health => _health;
 
   /// Queries every source in parallel and returns their results, best first.
   ///
@@ -40,6 +56,13 @@ class LyricsRepository {
   /// it — that is the point of having several. Only when *every* source fails
   /// does this throw, since then there is nothing to show and the user needs to
   /// know why.
+  ///
+  /// Health: a source set aside by [LyricsSourceHealth] is not asked, and a
+  /// source that already said "no lyrics" for this query is not asked again
+  /// either — both are skipped silently, and the other sources answer. The
+  /// outcome of every source that IS asked feeds the health: an exception
+  /// counts towards the three-in-a-row, an empty list is remembered as "no
+  /// lyrics", a non-empty list resets the streak.
   Future<List<LyricsSearchResult>> searchAll({
     required String title,
     required String artist,
@@ -48,18 +71,38 @@ class LyricsRepository {
     FilenameGuess? filenameGuess,
   }) async {
     if (title.trim().isEmpty && artist.trim().isEmpty) return const [];
+    if (_sources.isEmpty) return const [];
+
+    final trackKey = lyricsHealthTrackKey(title, artist);
+    var setAsideSkipped = 0;
 
     final outcomes = await Future.wait(
       _sources.map((source) async {
+        if (_health.isSetAside(source.name)) {
+          setAsideSkipped++;
+          return null;
+        }
+        if (_health.isMissing(trackKey, source.name)) {
+          return null;
+        }
         try {
-          return await source.search(
+          final found = await source.search(
             title: title,
             artist: artist,
             album: album,
             durationMs: durationMs,
             filenameGuess: filenameGuess,
           );
+          final kept = found.where((r) => !r.isEmpty).toList();
+          if (kept.isEmpty) {
+            _health.answered(source.name);
+            _health.noteMissing(trackKey, source.name);
+          } else {
+            _health.answered(source.name);
+          }
+          return kept;
         } on LyricsSourceException catch (e) {
+          _health.failed(source.name);
           return e;
         } catch (error, stack) {
           // Anything at all, not just the exception the sources mean to throw.
@@ -76,6 +119,7 @@ class LyricsRepository {
             error: error,
             stackTrace: stack,
           );
+          _health.failed(source.name);
           return LyricsSourceException(
             source.name,
             '${source.name} a renvoyé une réponse inattendue.',
@@ -91,7 +135,7 @@ class LyricsRepository {
       if (outcome is LyricsSourceException) {
         failures.add(outcome);
       } else if (outcome is List<LyricsSearchResult>) {
-        results.addAll(outcome.where((r) => !r.isEmpty));
+        results.addAll(outcome);
       }
     }
 
@@ -103,6 +147,19 @@ class LyricsRepository {
     // nothing.)
     if (results.isEmpty && failures.length == _sources.length) {
       throw failures.first;
+    }
+
+    // Every source was set aside and none was asked: "no results" would be
+    // a lie — nothing was asked. Say so, so the screen can show it instead.
+    // (All-memo is different: the sources WERE asked recently and said
+    // nothing, so an empty list is the honest answer there.)
+    if (results.isEmpty && setAsideSkipped == _sources.length) {
+      throw const LyricsSourceException(
+        'recherche',
+        'Toutes les sources sont momentanément mises de côté. '
+        'Réessayez dans quelques minutes, ou forcez une source avec '
+        '« Essayer une autre source ».',
+      );
     }
 
     // Stable: `List.sort` is not, and two sources returning equally confident
@@ -120,6 +177,67 @@ class LyricsRepository {
           return byConfidence != 0 ? byConfidence : a.index.compareTo(b.index);
         });
     return [for (final entry in ranked) entry.result];
+  }
+
+  /// Queries one source only, by name — the "try another source" bypass.
+  ///
+  /// A set-aside source is asked anyway (that is the point of the manual
+  /// choice: the user may know it is back), and a "no lyrics" memo is
+  /// ignored for the same reason. The outcome still feeds the health: a
+  /// manual success clears the streak and the cooldown, a manual failure
+  /// counts towards the three-in-a-row.
+  ///
+  /// Throws [LyricsSourceException] when the source is unknown or fails.
+  Future<List<LyricsSearchResult>> searchOne({
+    required String sourceName,
+    required String title,
+    required String artist,
+    String? album,
+    int? durationMs,
+    FilenameGuess? filenameGuess,
+  }) async {
+    final source = _sources.where((s) => s.name == sourceName).firstOrNull;
+    if (source == null) {
+      throw LyricsSourceException(
+        sourceName,
+        'Source inconnue : $sourceName.',
+      );
+    }
+    if (title.trim().isEmpty && artist.trim().isEmpty) return const [];
+    final trackKey = lyricsHealthTrackKey(title, artist);
+    try {
+      final found = await source.search(
+        title: title,
+        artist: artist,
+        album: album,
+        durationMs: durationMs,
+        filenameGuess: filenameGuess,
+      );
+      final kept = found.where((r) => !r.isEmpty).toList();
+      if (kept.isEmpty) {
+        _health.answered(source.name);
+        _health.noteMissing(trackKey, source.name);
+      } else {
+        _health.answered(source.name);
+      }
+      return kept;
+    } on LyricsSourceException {
+      _health.failed(source.name);
+      rethrow;
+    } catch (error, stack) {
+      DebugLog.instance.error(
+        'Recherche',
+        'Échec inattendu de la source ${source.name}',
+        error: error,
+        stackTrace: stack,
+      );
+      _health.failed(source.name);
+      throw LyricsSourceException(
+        source.name,
+        '${source.name} a renvoyé une réponse inattendue.',
+        error,
+      );
+    }
   }
 
   /// Throws [Id3WriteException] when the file can't be written.
