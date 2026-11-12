@@ -23,7 +23,7 @@ import 'package:musync/core/utils/text_search.dart';
 /// rather than from the file's own cut (LRCLIB, which times the file's
 /// recording). Only their results are aligned before integration.
 bool isOtherRecordingSource(String source) =>
-    source == 'LyricsPlus' || source == 'lrc.red';
+    source == 'LyricsPlus' || source == 'lrc.red' || source == 'Kugou';
 
 /// How far two lines may sit from the median gap and still agree with it.
 /// A line that disagrees by more than this is a different cut's line, not
