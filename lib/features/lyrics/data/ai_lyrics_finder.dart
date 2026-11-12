@@ -624,9 +624,13 @@ class AiLyricsFinder {
       return LyricsFindVerdict.keptExisting;
     }
     if (hasSynced && best.hasSyncedLyrics) {
-      // Calé existant : on ne réécrit que ce que l'app a elle-même écrit
-      // à basse confiance, ou ce qui date d'avant la provenance.
-      if (currentProvenance == null || currentProvenance.isLowConfidenceAuto) {
+      // Calé existant : on ne réécrit que par du mot à mot — un calé
+      // ligne à ligne ne vaut pas une réécriture — et seulement ce que
+      // l'app a elle-même écrit à basse confiance, ou ce qui date
+      // d'avant la provenance.
+      if (best.hasWordTimings &&
+          (currentProvenance == null ||
+              currentProvenance.isLowConfidenceAuto)) {
         return null;
       }
       return LyricsFindVerdict.keptExisting;
@@ -737,7 +741,8 @@ class AiLyricsFinder {
 
   Future<LyricsPair> _readCurrent(String filePath) async {
     try {
-      return await repository.readLyrics(filePath);
+      final pair = await repository.readLyrics(filePath);
+      return pair;
     } catch (_) {
       // Illisible : on agit comme s'il n'y avait rien — l'écriture
       // tranchera, avec sa sauvegarde.
