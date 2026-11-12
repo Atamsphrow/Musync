@@ -13,6 +13,12 @@ abstract class LyricsSource {
   /// Shown next to each result so the user can tell where it came from.
   String get name;
 
+  /// True when this source is a last resort: the repository only asks it
+  /// when no synced lyrics came back from the others. A plain hit never
+  /// blocks it, and a synced hit never needs it. False for every source
+  /// except Genius.
+  bool get isFallback => false;
+
   /// Throws [LyricsSourceException] when the source can't be reached or
   /// answers with something unusable. Returning an empty list means the source
   /// was reached and genuinely knows nothing — the two are not the same, and
