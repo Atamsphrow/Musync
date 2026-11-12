@@ -59,10 +59,17 @@ class LyricLine implements Comparable<LyricLine> {
   /// never silently drops them.
   final List<LyricWord> words;
 
+  /// Who sings this line — 1 the first singer, 2 the second, 0 several
+  /// together — or null when the source does not say. Only LyricsPlus
+  /// provides it today (`element.singer`); a null voice means "unknown",
+  /// never "no singer". Ignored by the LRC/SYLT writers, like [words].
+  final int? voice;
+
   const LyricLine({
     required this.timestamp,
     required this.text,
     this.words = const [],
+    this.voice,
   });
 
   bool get isTimed => timestamp != null;
@@ -74,10 +81,12 @@ class LyricLine implements Comparable<LyricLine> {
     Duration? timestamp,
     String? text,
     List<LyricWord>? words,
+    int? voice,
   }) => LyricLine(
     timestamp: timestamp ?? this.timestamp,
     text: text ?? this.text,
     words: words ?? this.words,
+    voice: voice ?? this.voice,
   );
 
   /// Drops the time and keeps the words.
@@ -86,7 +95,7 @@ class LyricLine implements Comparable<LyricLine> {
   /// alone" by the convention every other copyWith in this codebase follows;
   /// overloading it to mean "clear it" would make the two indistinguishable.
   LyricLine withoutTimestamp() =>
-      LyricLine(timestamp: null, text: text, words: words);
+      LyricLine(timestamp: null, text: text, words: words, voice: voice);
 
   /// Untimed lines sort last. They never reach SYLT, so this only decides where
   /// they sit in a list that still holds them — the editor's, in practice.
@@ -104,11 +113,13 @@ class LyricLine implements Comparable<LyricLine> {
     return other is LyricLine &&
         other.timestamp == timestamp &&
         other.text == text &&
+        other.voice == voice &&
         listEquals(other.words, words);
   }
 
   @override
-  int get hashCode => Object.hash(timestamp, text, Object.hashAll(words));
+  int get hashCode =>
+      Object.hash(timestamp, text, voice, Object.hashAll(words));
 
   @override
   String toString() => timestamp == null
@@ -158,6 +169,17 @@ class SyncedLyrics {
   factory SyncedLyrics.fromLrc(String lrc) => LrcParser.parse(lrc);
 
   factory SyncedLyrics.empty() => SyncedLyrics(const []);
+
+  /// True when at least two singers share the song — worth showing who
+  /// sings what. A voice of 0 (several together) is not a singer of its
+  /// own, and a null voice is no information at all.
+  bool get hasDuet {
+    final singers = {
+      for (final line in lines)
+        if (line.voice != null && line.voice! > 0) line.voice!,
+    };
+    return singers.length > 1;
+  }
 
   /// Index of the line active at [position] — the last one already started —
   /// or null before the first line.
