@@ -38,14 +38,16 @@ String _searchPayload(List<Map<String, Object?>> songs) => jsonEncode({
   'result': {'songCount': songs.length, 'songs': songs},
 });
 
-String _lyricPayload(String lrc) => jsonEncode({
+String _lyricPayload(String lrc, {String? romalrc}) => jsonEncode({
   'lrc': {'version': 1, 'lyric': lrc},
+  if (romalrc != null) 'romalrc': {'version': 1, 'lyric': romalrc},
 });
 
 MockClient _mockNetEase({
   List<Map<String, Object?>> songs = const [],
   int searchStatus = 200,
   Map<int, String> lyrics = const {},
+  Map<int, String> romalrc = const {},
   Map<int, int> lyricStatuses = const {},
 }) {
   return MockClient((request) async {
@@ -59,7 +61,9 @@ MockClient _mockNetEase({
       final id = int.tryParse(request.url.queryParameters['id'] ?? '');
       final status = lyricStatuses[id] ?? 200;
       return http.Response.bytes(
-        utf8.encode(_lyricPayload(lyrics[id] ?? '')),
+        utf8.encode(
+          _lyricPayload(lyrics[id] ?? '', romalrc: romalrc[id]),
+        ),
         status,
       );
     }
@@ -97,6 +101,29 @@ void main() {
     expect(result.durationMs, 171000);
     // 0,35 (titre) + 0,30 (artiste) + 0,15 (durée) + 0,05 (synchro).
     expect(result.confidence, closeTo(0.85, 0.001));
+  });
+
+  test('romalrc : rattachée à sa ligne par horodatage', () async {
+    const romalrc = '[00:03.50]Ooh, ooh, woah\n'
+        '[00:09.70]Ai never been scared\n'
+        '[00:99.99]Sans ligne\n';
+    final source = NetEaseSource(
+      client: _mockNetEase(
+        songs: [_song()],
+        lyrics: {566254178: _lrc},
+        romalrc: {566254178: romalrc},
+      ),
+    );
+
+    final results = await search(source);
+
+    expect(results, hasLength(1));
+    final lines = results.single.syncedLyrics!.lines;
+    // La romanisation est sur sa ligne, par horodatage exact.
+    expect(lines[0].romanization, 'Ooh, ooh, woah');
+    expect(lines[1].romanization, 'Ai never been scared');
+    // Pas de ligne à 99,99 s : la romanisation orpheline est ignorée.
+    expect(lines[2].romanization, isNull);
   });
 
   test('doublon : le même morceau sous deux ids ne donne qu’un résultat',
