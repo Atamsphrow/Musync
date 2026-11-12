@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
+import 'package:musync/features/player/ui/widgets/karaoke_animated_line.dart';
 import 'package:musync/features/player/ui/widgets/karaoke_separators.dart';
 import 'package:musync/features/player/ui/widgets/synced_lyrics_view.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
@@ -403,6 +404,88 @@ void main() {
     final er = spans.firstWhere((s) => s.text == 'er');
     (er.recognizer! as TapGestureRecognizer).onTap!();
     expect(seeked, const Duration(milliseconds: 17691));
+  });
+
+
+  group('animatedKaraokeSpans', () {
+    // Position avant la ligne + wordIndex -1 : aucun mot courant, aucun
+    // en croissance, lift 0 partout — tous les mots sont des TextSpan.
+    // (Hypothèse de Claude vérifiée par ces tests : à 1000 ms, tous les
+    // mots de `syllables` commencent à 17055 ms ou après, donc
+    // wordLiftFraction vaut 0 pour chacun.)
+    List<TextSpan> plainSpans({
+      required LyricLine line,
+      int wordIndex = -1,
+      Duration position = const Duration(milliseconds: 1000),
+      void Function(Duration position)? onWordTap,
+    }) {
+      final spans = animatedKaraokeSpans(
+        line: line,
+        wordIndex: wordIndex,
+        position: position,
+        sungStyle: sung,
+        unsungStyle: unsung,
+        onWordTap: onWordTap ?? (_) {},
+      );
+      return spans.whereType<TextSpan>().toList();
+    }
+
+    test('« never » sans espace parasite', () {
+      final spans = plainSpans(line: syllables);
+      expect(spans.map((s) => s.text).join(), 'would never try');
+    });
+
+    test('ligne normale : espaces', () {
+      final spans = plainSpans(line: line(), position: Duration.zero);
+      expect(spans.map((s) => s.text).join(), 'Une ligne ici');
+      expect(spans, hasLength(5));
+      expect(spans[1].text, ' ');
+      expect(spans[3].text, ' ');
+    });
+
+    test('tap par syllabe : « nev » et « er » cherchent à leur début', () {
+      final tapped = <Duration>[];
+      final spans = plainSpans(line: syllables, onWordTap: tapped.add);
+      final nev = spans.firstWhere((s) => s.text == 'nev');
+      final er = spans.firstWhere((s) => s.text == 'er');
+      (nev.recognizer! as TapGestureRecognizer).onTap!();
+      (er.recognizer! as TapGestureRecognizer).onTap!();
+      expect(tapped, [
+        const Duration(milliseconds: 17397),
+        const Duration(milliseconds: 17691),
+      ]);
+    });
+
+    test('tap sur un espace : début du mot précédent', () {
+      final tapped = <Duration>[];
+      final spans = plainSpans(line: syllables, onWordTap: tapped.add);
+      // spans : would, ' ', nev, er, ' ', try
+      (spans[1].recognizer! as TapGestureRecognizer).onTap!();
+      (spans[4].recognizer! as TapGestureRecognizer).onTap!();
+      expect(tapped, [
+        const Duration(milliseconds: 17055),
+        const Duration(milliseconds: 17691),
+      ]);
+    });
+
+    test('mot courant : WidgetSpan (balayage), les autres en TextSpan', () {
+      final spans = animatedKaraokeSpans(
+        line: syllables,
+        wordIndex: 1,
+        position: const Duration(milliseconds: 17400),
+        sungStyle: sung,
+        unsungStyle: unsung,
+        onWordTap: (_) {},
+      );
+      // 'would' vient de finir (retombe encore) et 'nev' est chanté :
+      // les deux sont des WidgetSpan ; 'er' et 'try' restent du texte.
+      expect(spans[2], isA<WidgetSpan>());
+      expect(spans.whereType<WidgetSpan>(), hasLength(2));
+      expect(
+        spans.whereType<TextSpan>().map((s) => s.text).join(),
+        ' er try',
+      );
+    });
   });
 
 }
