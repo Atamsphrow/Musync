@@ -10,6 +10,7 @@ import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/lyrics/providers/batch_provider.dart';
 import 'package:musync/core/services/permission_service.dart';
 import 'package:musync/core/utils/snackbar.dart';
+import 'package:musync/features/lyrics/data/lyrics_align.dart';
 import 'package:musync/features/lyrics/ui/embed_lyrics_action.dart';
 
 /// What the batch route is given: the tracks, and whether to read the file
@@ -189,6 +190,9 @@ class _BatchScreenState extends ConsumerState<BatchScreen> with RouteAware {
           filePath: candidate.song.filePath,
           synced: match.syncedLyrics,
           unsynced: match.unsyncedLyrics,
+          // LyricsPlus and lrc.red time another recording: re-time them
+          // to the file's own timings before writing.
+          alignToExisting: isOtherRecordingSource(match.source),
           // Skip rather than ask: a dialog per file is not a review, and the
           // answer would be the same every time. A track that already has timed
           // lyrics is left exactly as it was, and counted. Plain results only
