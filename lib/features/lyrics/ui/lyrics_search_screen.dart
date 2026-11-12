@@ -332,19 +332,35 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
-            trailing: Chip(
-              label: Text(result.hasSyncedLyrics ? 'Synchro' : 'Texte'),
-              // Synced results are what the app is for, so they are the ones
-              // that get the accent.
-              backgroundColor: result.hasSyncedLyrics
-                  ? scheme.primaryContainer
-                  : scheme.surfaceContainerHighest,
-              labelStyle: textTheme.labelSmall?.copyWith(
-                color: result.hasSyncedLyrics
-                    ? scheme.onPrimaryContainer
-                    : scheme.onSurfaceVariant,
-              ),
-              side: BorderSide.none,
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (result.hasWordTimings) ...[
+                  Chip(
+                    label: const Text('Mot à mot'),
+                    backgroundColor: scheme.tertiaryContainer,
+                    labelStyle: textTheme.labelSmall?.copyWith(
+                      color: scheme.onTertiaryContainer,
+                    ),
+                    side: BorderSide.none,
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                Chip(
+                  label: Text(result.hasSyncedLyrics ? 'Synchro' : 'Texte'),
+                  // Synced results are what the app is for, so they are the ones
+                  // that get the accent.
+                  backgroundColor: result.hasSyncedLyrics
+                      ? scheme.primaryContainer
+                      : scheme.surfaceContainerHighest,
+                  labelStyle: textTheme.labelSmall?.copyWith(
+                    color: result.hasSyncedLyrics
+                        ? scheme.onPrimaryContainer
+                        : scheme.onSurfaceVariant,
+                  ),
+                  side: BorderSide.none,
+                ),
+              ],
             ),
             onTap: () => _preview(result),
           ),
