@@ -63,6 +63,10 @@ class LyricsRepository {
   /// outcome of every source that IS asked feeds the health: an exception
   /// counts towards the three-in-a-row, an empty list is remembered as "no
   /// lyrics", a non-empty list resets the streak.
+  ///
+  /// Fallback sources ([LyricsSource.isFallback], Genius today) run in a
+  /// second pass, only when the first pass brought back no synced lyrics.
+  /// A plain hit never blocks them, and a synced hit never needs them.
   Future<List<LyricsSearchResult>> searchAll({
     required String title,
     required String artist,
@@ -74,10 +78,99 @@ class LyricsRepository {
     if (_sources.isEmpty) return const [];
 
     final trackKey = lyricsHealthTrackKey(title, artist);
+    final primary = _sources.where((s) => !s.isFallback).toList();
+    final fallback = _sources.where((s) => s.isFallback).toList();
+
+    var pass = await _searchPass(
+      primary,
+      title: title,
+      artist: artist,
+      album: album,
+      durationMs: durationMs,
+      filenameGuess: filenameGuess,
+      trackKey: trackKey,
+    );
+    var results = pass.results;
+    var failures = pass.failures;
+    var setAsideSkipped = pass.setAsideSkipped;
+
+    if (!results.any((r) => r.hasSyncedLyrics) && fallback.isNotEmpty) {
+      final second = await _searchPass(
+        fallback,
+        title: title,
+        artist: artist,
+        album: album,
+        durationMs: durationMs,
+        filenameGuess: filenameGuess,
+        trackKey: trackKey,
+      );
+      results = [...results, ...second.results];
+      failures = [...failures, ...second.failures];
+      setAsideSkipped += second.setAsideSkipped;
+    }
+
+    // Only when every source failed is there nothing to show and the user
+    // needs to know why. If at least one source answered — even with an empty
+    // list — the honest outcome is "no results", not the failure of the
+    // source that happened to break. (A 403 from LRCLIB on one search must
+    // not masquerade as "nothing exists" when lyrics.ovh simply found
+    // nothing.)
+    if (results.isEmpty && failures.length == _sources.length) {
+      throw failures.first;
+    }
+
+    // Every source was set aside and none was asked: "no results" would be
+    // a lie — nothing was asked. Say so, so the screen can show it instead.
+    // (All-memo is different: the sources WERE asked recently and said
+    // nothing, so an empty list is the honest answer there.)
+    if (results.isEmpty && setAsideSkipped == _sources.length) {
+      throw const LyricsSourceException(
+        'recherche',
+        'Toutes les sources sont momentanément mises de côté. '
+        'Réessayez dans quelques minutes, ou forcez une source avec '
+        '« Essayer une autre source ».',
+      );
+    }
+
+    // Stable: `List.sort` is not, and two sources returning equally confident
+    // hits would otherwise swap places between one search and the next for no
+    // reason the user could see.
+    final ranked =
+        List<({int index, LyricsSearchResult result})>.generate(
+          results.length,
+          (i) => (index: i, result: results[i]),
+          growable: false,
+        )..sort((a, b) {
+          final byConfidence = b.result.confidence.compareTo(
+            a.result.confidence,
+          );
+          return byConfidence != 0 ? byConfidence : a.index.compareTo(b.index);
+        });
+    return [for (final entry in ranked) entry.result];
+  }
+
+  /// One pass of [searchAll]: every source in [sources] in parallel,
+  /// with the health rules applied. The caller merges the passes.
+  Future<
+    ({
+      List<LyricsSearchResult> results,
+      List<LyricsSourceException> failures,
+      int setAsideSkipped,
+    })
+  >
+  _searchPass(
+    List<LyricsSource> sources, {
+    required String title,
+    required String artist,
+    String? album,
+    int? durationMs,
+    FilenameGuess? filenameGuess,
+    required String trackKey,
+  }) async {
     var setAsideSkipped = 0;
 
     final outcomes = await Future.wait(
-      _sources.map((source) async {
+      sources.map((source) async {
         if (_health.isSetAside(source.name)) {
           setAsideSkipped++;
           return null;
@@ -138,45 +231,11 @@ class LyricsRepository {
         results.addAll(outcome);
       }
     }
-
-    // Only when every source failed is there nothing to show and the user
-    // needs to know why. If at least one source answered — even with an empty
-    // list — the honest outcome is "no results", not the failure of the
-    // source that happened to break. (A 403 from LRCLIB on one search must
-    // not masquerade as "nothing exists" when lyrics.ovh simply found
-    // nothing.)
-    if (results.isEmpty && failures.length == _sources.length) {
-      throw failures.first;
-    }
-
-    // Every source was set aside and none was asked: "no results" would be
-    // a lie — nothing was asked. Say so, so the screen can show it instead.
-    // (All-memo is different: the sources WERE asked recently and said
-    // nothing, so an empty list is the honest answer there.)
-    if (results.isEmpty && setAsideSkipped == _sources.length) {
-      throw const LyricsSourceException(
-        'recherche',
-        'Toutes les sources sont momentanément mises de côté. '
-        'Réessayez dans quelques minutes, ou forcez une source avec '
-        '« Essayer une autre source ».',
-      );
-    }
-
-    // Stable: `List.sort` is not, and two sources returning equally confident
-    // hits would otherwise swap places between one search and the next for no
-    // reason the user could see.
-    final ranked =
-        List<({int index, LyricsSearchResult result})>.generate(
-          results.length,
-          (i) => (index: i, result: results[i]),
-          growable: false,
-        )..sort((a, b) {
-          final byConfidence = b.result.confidence.compareTo(
-            a.result.confidence,
-          );
-          return byConfidence != 0 ? byConfidence : a.index.compareTo(b.index);
-        });
-    return [for (final entry in ranked) entry.result];
+    return (
+      results: results,
+      failures: failures,
+      setAsideSkipped: setAsideSkipped,
+    );
   }
 
   /// Queries one source only, by name — the "try another source" bypass.
