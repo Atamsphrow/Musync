@@ -283,9 +283,10 @@ void main() {
   });
 
   group('isOtherRecordingSource', () {
-    test('LyricsPlus et lrc.red : oui, LRCLIB : non', () {
+    test('LyricsPlus, lrc.red et Kugou : oui, LRCLIB : non', () {
       expect(isOtherRecordingSource('LyricsPlus'), isTrue);
       expect(isOtherRecordingSource('lrc.red'), isTrue);
+      expect(isOtherRecordingSource('Kugou'), isTrue);
       expect(isOtherRecordingSource('LRCLIB'), isFalse);
       expect(isOtherRecordingSource(''), isFalse);
     });
