@@ -56,6 +56,11 @@ dependencies:
   # Networking
   http: ^1.3.0
 
+  # TTML parsing for the lrc.red source (step 2 of the myspoti plan).
+  # Already in the lock as a transitive dependency (7.1.0); this only
+  # makes it direct, so the resolved version does not move.
+  xml: ^7.1.0
+
   # Permissions
   permission_handler: ^11.4.0
 
