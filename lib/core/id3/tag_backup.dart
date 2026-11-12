@@ -44,12 +44,26 @@ class TagBackup {
   /// Name of the file holding the bytes, inside the backup directory.
   final String storedAs;
 
+  /// Name of the file holding the sidecar `.lrc` bytes, when the track
+  /// had one at capture time — null otherwise. A sidecar is another
+  /// app's file (Musicolet), never Musync's own writing: the backup
+  /// only matters when Musync deletes it, which only the
+  /// « Paroles incorrectes » tap does. Any other caller that restores
+  /// finds the sidecar still there and leaves it alone.
+  final String? sidecarStoredAs;
+
+  /// The sidecar's exact path at capture time, extension included
+  /// (`.lrc` or `.LRC`) — where the bytes go back on a restore.
+  final String? sidecarPath;
+
   const TagBackup({
     required this.filePath,
     required this.writtenAt,
     required this.tagBytes,
     required this.writtenMtime,
     required this.storedAs,
+    this.sidecarStoredAs,
+    this.sidecarPath,
   });
 
   /// Just the track's file name, for a list on a phone.
@@ -64,6 +78,8 @@ class TagBackup {
     'tagBytes': tagBytes,
     'writtenMtime': writtenMtime,
     'storedAs': storedAs,
+    if (sidecarStoredAs != null) 'sidecarStoredAs': sidecarStoredAs,
+    if (sidecarPath != null) 'sidecarPath': sidecarPath,
   };
 
   static TagBackup? fromJson(Object? raw) {
@@ -81,6 +97,13 @@ class TagBackup {
       tagBytes: raw['tagBytes'] is int ? raw['tagBytes'] as int : 0,
       writtenMtime: raw['writtenMtime'] is int ? raw['writtenMtime'] as int : 0,
       storedAs: storedAs,
+      // Added later: an older index simply has neither.
+      sidecarStoredAs: raw['sidecarStoredAs'] is String
+          ? raw['sidecarStoredAs'] as String
+          : null,
+      sidecarPath: raw['sidecarPath'] is String
+          ? raw['sidecarPath'] as String
+          : null,
     );
   }
 }
@@ -248,6 +271,13 @@ class TagBackupStore {
       final file = File(filePath);
       if (!await file.exists()) return false;
 
+      // The sidecar, if there is one, is backed up with the tag: it is
+      // the tap that deletes it, and « Annuler » must put it back. The
+      // blob is only ever used when the sidecar is gone at restore time,
+      // so the other callers (AI mode, batch, manual embed) pay a few
+      // kilobytes and nothing else — their sidecar is never deleted.
+      final sidecar = await _backupSidecar(filePath);
+
       // Only the head: the backup never keeps a byte past audioOffset,
       // and reading 8 MB of audio to copy 4 KB of tag was the batch's
       // first full read per track. Falls back to the whole file
@@ -266,7 +296,7 @@ class TagBackupStore {
       // here (all lyrics writers) the restore is exact.
       if (tag == null &&
           AudioContainerReader.detect(bytes) == AudioContainer.mp4) {
-        return await _captureM4aLyrics(filePath);
+        return await _captureM4aLyrics(filePath, sidecar: sidecar);
       }
 
       // A file with no tag backs up as an empty head, which restores correctly:
@@ -287,10 +317,13 @@ class TagBackupStore {
         TagBackup(
           filePath: filePath,
           writtenAt: DateTime.now(),
-          tagBytes: head.length,
+          // The sidecar blob counts toward the size cap with the tag.
+          tagBytes: head.length + (sidecar?.bytes ?? 0),
           // Filled in by [markWritten] once the write has landed.
           writtenMtime: 0,
           storedAs: storedAs,
+          sidecarStoredAs: sidecar?.storedAs,
+          sidecarPath: sidecar?.path,
         ),
       );
       return true;
@@ -341,7 +374,10 @@ class TagBackupStore {
   /// True when the backup was recorded. Never throws: like [capture], a
   /// failure is reported as false so the caller can refuse a write it
   /// could not undo. An empty blob means the file had no ©lyr.
-  Future<bool> _captureM4aLyrics(String filePath) async {
+  Future<bool> _captureM4aLyrics(
+    String filePath, {
+    _SidecarBackup? sidecar,
+  }) async {
     try {
       final text = await M4aWriter.readLrc(filePath);
       final blob = utf8.encode(text ?? '');
@@ -356,10 +392,12 @@ class TagBackupStore {
         TagBackup(
           filePath: filePath,
           writtenAt: DateTime.now(),
-          tagBytes: blob.length,
+          tagBytes: blob.length + (sidecar?.bytes ?? 0),
           // Filled in by [markWritten] once the write has landed.
           writtenMtime: 0,
           storedAs: storedAs,
+          sidecarStoredAs: sidecar?.storedAs,
+          sidecarPath: sidecar?.path,
         ),
       );
       return true;
@@ -395,6 +433,8 @@ class TagBackupStore {
               tagBytes: e.tagBytes,
               writtenMtime: mtime,
               storedAs: e.storedAs,
+              sidecarStoredAs: e.sidecarStoredAs,
+              sidecarPath: e.sidecarPath,
             )
           else
             e,
@@ -489,7 +529,66 @@ class TagBackupStore {
       );
     }
 
+    await _restoreSidecar(entry);
     await _consume(entry, filePath);
+  }
+
+  /// The sidecar `.lrc` next to [filePath], if there is one — `.lrc`
+  /// then `.LRC`, as the reader does (Android's filesystems are
+  /// case-sensitive, and some taggers write uppercase).
+  Future<File?> _sidecarFile(String filePath) async {
+    final dot = filePath.lastIndexOf('.');
+    if (dot < 0) return null;
+    final base = filePath.substring(0, dot);
+    for (final ext in ['.lrc', '.LRC']) {
+      final candidate = File('$base$ext');
+      try {
+        if (await candidate.exists()) return candidate;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// Backs up the sidecar next to [filePath], if there is one. Never
+  /// throws: a sidecar that cannot be backed up must not stop the tag
+  /// backup — the caller is told by the null, and the write goes ahead
+  /// without an undo for the sidecar.
+  Future<_SidecarBackup?> _backupSidecar(String filePath) async {
+    try {
+      final sidecar = await _sidecarFile(filePath);
+      if (sidecar == null) return null;
+      final bytes = await sidecar.readAsBytes();
+      final dir = await _dir();
+      final storedAs =
+          '${_keyFor(filePath)}-${DateTime.now().microsecondsSinceEpoch}.lrc';
+      await File(
+        '${dir.path}${Platform.pathSeparator}$storedAs',
+      ).writeAsBytes(bytes, flush: true);
+      return _SidecarBackup(
+        storedAs: storedAs,
+        path: sidecar.path,
+        bytes: bytes.length,
+      );
+    } catch (error) {
+      DebugLog.instance.warning(
+        'Sauvegarde',
+        'Sidecar non sauvegardé : $filePath',
+        error: error,
+      );
+      return null;
+    }
+  }
+
+  /// Deletes the sidecar `.lrc` next to [filePath], if there is one.
+  ///
+  /// Returns the deleted path, or null when no sidecar existed. Throws
+  /// [FileSystemException] when the file exists but cannot be deleted —
+  /// the caller reports it, since the lyrics would come back through it.
+  Future<String?> deleteSidecar(String filePath) async {
+    final sidecar = await _sidecarFile(filePath);
+    if (sidecar == null) return null;
+    await sidecar.delete();
+    return sidecar.path;
   }
 
   /// Puts a saved ©lyr text back into an M4A file (P8).
@@ -511,7 +610,52 @@ class TagBackupStore {
     } on M4aWriteException catch (e) {
       throw TagRestoreException('Restauration impossible : ${e.message}');
     }
+    await _restoreSidecar(entry);
     await _consume(entry, filePath);
+  }
+
+  /// Puts a saved sidecar `.lrc` back — but only when none is there.
+  ///
+  /// The sidecar was deleted by us, so any file at that path now is
+  /// someone else's work (Musicolet re-syncing, another tagger), and
+  /// overwriting it would destroy theirs to restore ours. When the
+  /// sidecar is simply gone, the bytes go back where they were.
+  /// Never throws: the audio restore is the main event, and a sidecar
+  /// that cannot come back must not turn it into a failure.
+  Future<void> _restoreSidecar(TagBackup entry) async {
+    final sidecarPath = entry.sidecarPath;
+    final storedAs = entry.sidecarStoredAs;
+    if (sidecarPath == null || storedAs == null) return;
+    try {
+      if (await File(sidecarPath).exists()) {
+        DebugLog.instance.info(
+          'Sauvegarde',
+          'Sidecar présent, non restauré : $sidecarPath',
+        );
+        return;
+      }
+      final dir = await _dir();
+      final stored = File(
+        '${dir.path}${Platform.pathSeparator}$storedAs',
+      );
+      if (!await stored.exists()) {
+        DebugLog.instance.warning(
+          'Sauvegarde',
+          'Sauvegarde du sidecar introuvable : $storedAs',
+        );
+        return;
+      }
+      await AtomicFile.writeBytes(
+        File(sidecarPath),
+        await stored.readAsBytes(),
+      );
+    } catch (error) {
+      DebugLog.instance.warning(
+        'Sauvegarde',
+        'Sidecar non restauré : $sidecarPath',
+        error: error,
+      );
+    }
   }
 
   /// Drops the step that was just restored, leaving the older ones so the next
@@ -539,6 +683,8 @@ class TagBackupStore {
             tagBytes: e.tagBytes,
             writtenMtime: now,
             storedAs: e.storedAs,
+            sidecarStoredAs: e.sidecarStoredAs,
+            sidecarPath: e.sidecarPath,
           )
         else
           e,
@@ -582,6 +728,13 @@ class TagBackupStore {
         '${dir.path}${Platform.pathSeparator}${entry.storedAs}',
       );
       if (await file.exists()) await file.delete();
+      final sidecarStoredAs = entry.sidecarStoredAs;
+      if (sidecarStoredAs != null) {
+        final sidecarFile = File(
+          '${dir.path}${Platform.pathSeparator}$sidecarStoredAs',
+        );
+        if (await sidecarFile.exists()) await sidecarFile.delete();
+      }
     } catch (error) {
       // An orphaned blob costs disk, not correctness; the index is what counts.
       // Once per session: if the directory has become unwritable, every entry
@@ -627,4 +780,18 @@ class TagBackupStore {
     }
     return hash.toRadixString(16).padLeft(8, '0');
   }
+}
+
+/// A backed-up sidecar: where its bytes live, where they came from, and
+/// how many there are (for the size cap).
+class _SidecarBackup {
+  final String storedAs;
+  final String path;
+  final int bytes;
+
+  const _SidecarBackup({
+    required this.storedAs,
+    required this.path,
+    required this.bytes,
+  });
 }
