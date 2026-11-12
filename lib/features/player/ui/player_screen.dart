@@ -1492,6 +1492,7 @@ Future<void> _markLyricsMismatch(
       (current.unsynced != null && current.unsynced!.text.trim().isNotEmpty);
 
   var canUndo = false;
+  var sidecarKept = false;
   if (hasAny) {
     if (!await PermissionService.hasWriteAccess()) {
       messenger.showOnly(
@@ -1516,6 +1517,15 @@ Future<void> _markLyricsMismatch(
       );
       return;
     }
+    // Le sidecar .lrc (Musicolet) survit à l'effacement du fichier
+    // audio, et l'écran le relit en repli : sans ça, les paroles
+    // reviennent à la lecture suivante. Il est sauvegardé par
+    // `capture`, donc « Annuler » le restaure avec le tag.
+    try {
+      await backups.deleteSidecar(song.filePath);
+    } on FileSystemException {
+      sidecarKept = true;
+    }
     if (canUndo) await backups.markWritten(song.filePath);
     changes.fileChanged(song.filePath);
   }
@@ -1529,9 +1539,11 @@ Future<void> _markLyricsMismatch(
   messenger.showOnly(
     SnackBar(
       content: Text(
-        hasAny
-            ? 'Paroles supprimées. Morceau marqué « non correspondant » : plus de téléchargement automatique.'
-            : 'Morceau marqué « non correspondant » : plus de téléchargement automatique.',
+        sidecarKept
+            ? 'Paroles supprimées du fichier et morceau marqué, mais le .lrc à côté n’a pas pu être supprimé : elles peuvent revenir.'
+            : hasAny
+                ? 'Paroles supprimées. Morceau marqué « non correspondant » : plus de téléchargement automatique.'
+                : 'Morceau marqué « non correspondant » : plus de téléchargement automatique.',
       ),
       duration: const Duration(seconds: 6),
       action: hasAny && canUndo
