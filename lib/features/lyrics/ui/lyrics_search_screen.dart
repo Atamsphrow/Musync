@@ -176,6 +176,12 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
     });
   }
 
+  /// Interrompt la recherche en cours (le × dans le cercle de chargement).
+  /// Les résultats déjà arrivés restent affichés : ils sont valides.
+  void _cancelSearch() {
+    cancelLyricsSearch(ref);
+  }
+
   void _search({bool autoRetry = true, bool explicit = false}) {
     // Assurer l'artiste et le titre AVANT de chercher : le nom du fichier
     // dit souvent mieux que les tags qui est l'artiste et quel est le titre
@@ -232,6 +238,9 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
   /// recherche est relancée une fois si le deviné diffère de la requête
   /// utilisée — jamais deux fois la même requête.
   Future<void> _autoRetryWithGuess(String usedTitle, String usedArtist) async {
+    // Annulée par l'utilisateur : le × arrête la recherche, il ne doit pas
+    // en relancer une autre derrière.
+    if (ref.read(lyricsSearchCancelledProvider)) return;
     // L'utilisateur a relancé une recherche entre-temps : ne pas marcher
     // sur ses plates-bandes.
     if (ref.read(lyricsSearchLoadingProvider)) return;
@@ -346,7 +355,21 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
 
-    if (isLoading) return const Center(child: CircularProgressIndicator());
+    if (isLoading) {
+      return Center(
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            const CircularProgressIndicator(),
+            IconButton(
+              onPressed: _cancelSearch,
+              tooltip: 'Annuler la recherche',
+              icon: const Icon(Icons.close),
+            ),
+          ],
+        ),
+      );
+    }
 
     if (error != null) {
       return _Message(
