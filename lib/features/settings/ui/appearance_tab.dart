@@ -102,6 +102,26 @@ class AppearanceTab extends ConsumerWidget {
           title: const Text('Italique'),
           contentPadding: EdgeInsets.zero,
         ),
+        SwitchListTile(
+          value: appearance.showRomanization,
+          onChanged: (v) =>
+              update(appearance.copyWith(showRomanization: v)),
+          title: const Text('Romanisation'),
+          subtitle: const Text(
+            'Prononciation en lettres latines sous les paroles non latines.',
+          ),
+          contentPadding: EdgeInsets.zero,
+        ),
+        SwitchListTile(
+          value: appearance.karaokeAnimations,
+          onChanged: (v) =>
+              update(appearance.copyWith(karaokeAnimations: v)),
+          title: const Text('Animations karaoké'),
+          subtitle: const Text(
+            'Balayage et soulèvement des mots sur la ligne en cours.',
+          ),
+          contentPadding: EdgeInsets.zero,
+        ),
         const Divider(height: 32),
         Text('Couleur des paroles', style: textTheme.titleSmall),
         const SizedBox(height: 4),
