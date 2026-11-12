@@ -24,6 +24,12 @@ enum LyricsSourceKind {
   /// has them, line-by-line otherwise. A single fixed endpoint, not
   /// self-hostable — the bundled entry is the only one there is.
   lyricsPlus,
+
+  /// lrc.red (TTML lyrics): line timings when the catalogue has them,
+  /// plain text otherwise, word timings as `<span>` when it has those.
+  /// A single fixed endpoint, not self-hostable — the bundled entry is
+  /// the only one there is.
+  lrcRed,
 }
 
 /// One entry in the sources list.
@@ -37,7 +43,8 @@ class LyricsSourceConfig {
 
   /// Base URL of the source's API, without a trailing slash: an
   /// LRCLIB-shaped API for [LyricsSourceKind.lrclib], the `/get`
-  /// endpoint root for [LyricsSourceKind.lyricsPlus].
+  /// endpoint root for [LyricsSourceKind.lyricsPlus], the root of
+  /// `search.json` and `/s/` for [LyricsSourceKind.lrcRed].
   final String baseUrl;
 
   final bool enabled;
@@ -144,10 +151,20 @@ const LyricsSourceConfig lyricsPlusDefault = LyricsSourceConfig(
   kind: LyricsSourceKind.lyricsPlus,
 );
 
+/// The bundled TTML source. Always present, after LyricsPlus.
+const LyricsSourceConfig lrcRedDefault = LyricsSourceConfig(
+  id: 'lrc-red',
+  name: 'lrc.red',
+  baseUrl: 'https://lrc.red',
+  isBuiltIn: true,
+  kind: LyricsSourceKind.lrcRed,
+);
+
 /// Every bundled entry, in the order they are shown.
 const List<LyricsSourceConfig> builtInSources = [
   lrclibDefault,
   lyricsPlusDefault,
+  lrcRedDefault,
 ];
 
 /// Reads and writes the sources list as JSON in the app's documents directory.
