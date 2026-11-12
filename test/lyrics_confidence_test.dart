@@ -10,6 +10,7 @@ LyricsSearchResult _hit({
   String? album,
   int? durationMs,
   bool synced = true,
+  bool wordTimed = false,
   double confidence = 0.0,
 }) => LyricsSearchResult(
   source: 'LRCLIB',
@@ -18,7 +19,19 @@ LyricsSearchResult _hit({
   album: album,
   syncedLyrics: synced
       ? SyncedLyrics([
-          const LyricLine(timestamp: Duration(seconds: 1), text: 'Une'),
+          LyricLine(
+            timestamp: const Duration(seconds: 1),
+            text: 'Une',
+            words: wordTimed
+                ? const [
+                    LyricWord(
+                      start: Duration(seconds: 1),
+                      duration: Duration(milliseconds: 500),
+                      text: 'Une',
+                    ),
+                  ]
+                : const [],
+          ),
         ])
       : null,
   unsyncedLyrics: synced ? null : const UnsyncedLyrics('Des paroles'),
@@ -311,6 +324,60 @@ void main() {
         )?.confidence,
         0.60,
       );
+    });
+
+    test('mot à mot 0,82 gagne contre ligne à ligne 0,95', () {
+      final best = bestAutoMatch([
+        _hit(synced: true, confidence: 0.95),
+        _hit(synced: true, wordTimed: true, confidence: 0.82),
+      ]);
+      expect(best?.hasWordTimings, isTrue);
+      expect(best?.confidence, 0.82);
+    });
+
+    test('mot à mot 0,60 ne gagne pas contre ligne à ligne 0,90', () {
+      final best = bestAutoMatch([
+        _hit(synced: true, wordTimed: true, confidence: 0.60),
+        _hit(synced: true, confidence: 0.90),
+      ]);
+      expect(best?.hasWordTimings, isFalse);
+      expect(best?.confidence, 0.90);
+    });
+  });
+
+  group('bestLyricsMatch', () {
+    test('mot à mot 0,82 gagne contre ligne à ligne 0,95', () {
+      final best = bestLyricsMatch([
+        _hit(synced: true, confidence: 0.95),
+        _hit(synced: true, wordTimed: true, confidence: 0.82),
+      ]);
+      expect(best?.hasWordTimings, isTrue);
+    });
+
+    test('mot à mot 0,60 ne gagne pas contre ligne à ligne 0,95', () {
+      final best = bestLyricsMatch([
+        _hit(synced: true, confidence: 0.95),
+        _hit(synced: true, wordTimed: true, confidence: 0.60),
+      ]);
+      expect(best?.hasWordTimings, isFalse);
+      expect(best?.confidence, 0.95);
+    });
+
+    test('ligne à ligne gagne contre texte seul 1,0', () {
+      final best = bestLyricsMatch([
+        _hit(synced: false, confidence: 1.0),
+        _hit(synced: true, confidence: 0.85),
+      ]);
+      expect(best?.hasSyncedLyrics, isTrue);
+    });
+
+    test('texte seul quand rien de calé', () {
+      final best = bestLyricsMatch([_hit(synced: false, confidence: 0.9)]);
+      expect(best?.hasUnsyncedLyrics, isTrue);
+    });
+
+    test('liste vide → null', () {
+      expect(bestLyricsMatch([]), isNull);
     });
   });
 }
