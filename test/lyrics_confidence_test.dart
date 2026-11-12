@@ -67,6 +67,40 @@ void main() {
       expect(score.filenameAgreement, 0.10);
     });
 
+    test('match exact + mot à mot = 0,95', () {
+      final score = scoreLyricsCandidate(
+        candidateTitle: 'Titre',
+        candidateArtist: 'Artiste',
+        candidateAlbum: 'Album',
+        candidateDurationMs: 180000,
+        candidateHasSynced: true,
+        candidateHasWordTimings: true,
+        queryTitle: 'Titre',
+        queryArtist: 'Artiste',
+        queryAlbum: 'Album',
+        queryDurationMs: 180000,
+      );
+      expect(score.total, closeTo(0.95, 0.001));
+      expect(score.wordTimings, 0.05);
+    });
+
+    test('mot à mot sans synchro = pas de bonus', () {
+      final score = scoreLyricsCandidate(
+        candidateTitle: 'Titre',
+        candidateArtist: 'Artiste',
+        candidateDurationMs: 180000,
+        candidateHasSynced: false,
+        candidateHasWordTimings: true,
+        queryTitle: 'Titre',
+        queryArtist: 'Artiste',
+        queryDurationMs: 180000,
+      );
+      // 0,35 + 0,30 + 0,15 = 0,80 : le bonus mot à mot ne compte pas
+      // sans lignes calées — c'est un raffinement de la synchro.
+      expect(score.total, closeTo(0.80, 0.001));
+      expect(score.wordTimings, 0.0);
+    });
+
     test('titre seul concordant, artiste différent = sous 0,80', () {
       final score = scoreLyricsCandidate(
         candidateTitle: 'Titre',
