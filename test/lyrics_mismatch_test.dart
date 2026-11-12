@@ -87,6 +87,7 @@ class _CountingRepo extends LyricsRepository {
     String filePath, {
     SyncedLyrics? synced,
     UnsyncedLyrics? unsynced,
+    bool alignToExisting = false,
   }) async {
     embeds++;
     files[filePath] = (synced: synced, unsynced: unsynced);
