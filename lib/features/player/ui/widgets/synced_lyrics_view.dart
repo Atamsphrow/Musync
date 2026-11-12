@@ -8,6 +8,42 @@ import 'package:musync/features/settings/data/lyrics_appearance.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 import 'package:musync/features/library/data/models/song.dart';
 
+/// The spans for a word-timed current line: words already sung (including
+/// the current one) in [sungStyle], words still to come in [unsungStyle] —
+/// the classic karaoke sweep.
+///
+/// Spaces between words take the style of the word before them; they carry
+/// no glyph, so the choice is invisible either way. The styles are explicit
+/// on every span, so a word change switches instantly — the 120 ms
+/// cross-fade of the line around it does not apply here, on purpose: a
+/// fade per word would blur the timing on fast lyrics.
+@visibleForTesting
+List<TextSpan> karaokeWordSpans({
+  required LyricLine line,
+  required int wordIndex,
+  required TextStyle sungStyle,
+  required TextStyle unsungStyle,
+}) {
+  final spans = <TextSpan>[];
+  for (var i = 0; i < line.words.length; i++) {
+    if (i > 0) {
+      spans.add(
+        TextSpan(
+          text: ' ',
+          style: i - 1 <= wordIndex ? sungStyle : unsungStyle,
+        ),
+      );
+    }
+    spans.add(
+      TextSpan(
+        text: line.words[i].text,
+        style: i <= wordIndex ? sungStyle : unsungStyle,
+      ),
+    );
+  }
+  return spans;
+}
+
 /// Karaoke-style lyrics: the active line is highlighted and kept centered
 /// while the track plays. Tapping a line seeks to it.
 class SyncedLyricsView extends ConsumerStatefulWidget {
@@ -105,6 +141,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
     final currentIndex = ref.watch(currentLineIndexProvider).valueOrNull;
+    final currentWord = ref.watch(currentWordIndexProvider).valueOrNull;
     final appearance = ref.watch(lyricsAppearanceProvider);
     final textAlign = switch (appearance.textAlign) {
       LyricsTextAlign.left => TextAlign.left,
@@ -141,6 +178,27 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
             final Color color = isCurrent
                 ? lyricsActiveColor(context, appearance)
                 : scheme.onSurfaceVariant.withValues(alpha: 0.55);
+            final dimColor =
+                scheme.onSurfaceVariant.withValues(alpha: 0.55);
+
+            // Karaoke: when the current line carries word timings, the
+            // words already sung (including the current one) take the
+            // line's active style and the rest stay dim. The word's line
+            // must be the current line — the two providers sample
+            // independently, and a one-frame disagreement must light
+            // nothing, not the wrong line's word.
+            //
+            // Guarded on the join: the words rendered must read exactly
+            // like the line's text. A source whose syllabus disagrees
+            // with its line text (punctuation in one, not the other)
+            // falls back to the plain line — no karaoke is better than
+            // karaoke showing different words.
+            final wordIndex = isCurrent && currentWord?.lineIndex == index
+                ? currentWord?.wordIndex
+                : null;
+            final showWords =
+                wordIndex != null &&
+                line.words.map((w) => w.text).join(' ') == line.text;
 
             return InkWell(
               // Non-null: this view renders SyncedLyrics, which is timed-only.
@@ -177,12 +235,38 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                           isCurrent ? FontWeight.w700 : FontWeight.w400,
                     ),
                     textAlign: textAlign,
-                    child: Text(
-                      line.text,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: textAlign,
-                    ),
+                    child: showWords
+                        ? Text.rich(
+                            TextSpan(
+                              children: karaokeWordSpans(
+                                line: line,
+                                wordIndex: wordIndex,
+                                sungStyle: _lyricsTextStyle(
+                                  textTheme.bodyLarge,
+                                  appearance,
+                                ).copyWith(
+                                  color: color,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                                unsungStyle: _lyricsTextStyle(
+                                  textTheme.bodyLarge,
+                                  appearance,
+                                ).copyWith(
+                                  color: dimColor,
+                                  fontWeight: FontWeight.w400,
+                                ),
+                              ),
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: textAlign,
+                          )
+                        : Text(
+                            line.text,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: textAlign,
+                          ),
                   ),
                 ),
               ),
