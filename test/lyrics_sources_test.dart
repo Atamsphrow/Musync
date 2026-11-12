@@ -39,8 +39,8 @@ void main() {
   });
 
   group('bundled sources', () {
-    test('LRCLIB, LyricsPlus and lrc.red are bundled', () {
-      expect(builtInSources.map((s) => s.id), ['lrclib', 'lyrics-plus', 'lrc-red']);
+    test('LRCLIB, LyricsPlus, lrc.red and Kugou are bundled', () {
+      expect(builtInSources.map((s) => s.id), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou']);
       expect(builtInSources.every((s) => s.isBuiltIn), isTrue);
     });
 
@@ -81,7 +81,7 @@ void main() {
         baseUrl: 'https://miroir.example/api',
       );
       final loaded = LyricsSourceStore.withBuiltInForTest([reused]);
-      expect(loaded.map((s) => s.id), ['lrclib', 'lyrics-plus', 'lrc-red']);
+      expect(loaded.map((s) => s.id), ['lrclib', 'lyrics-plus', 'lrc-red', 'kugou']);
     });
 
     test(
