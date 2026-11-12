@@ -6,6 +6,7 @@ import 'package:musync/features/lyrics/data/lyrics_repository.dart';
 import 'package:musync/features/lyrics/data/lyrics_source_health.dart';
 import 'package:musync/features/lyrics/data/lyrics_word_timings_store.dart';
 import 'package:musync/features/lyrics/data/providers/genius_provider.dart';
+import 'package:musync/features/lyrics/data/providers/netease_provider.dart';
 import 'package:musync/features/lyrics/data/providers/kugou_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lrcred_provider.dart';
@@ -83,6 +84,13 @@ final lyricsRepositoryProvider = Provider<LyricsRepository>((ref) {
           // Same shape again: the bundled entry is the only one, with
           // the fixed default URL and name.
           LyricsSourceKind.genius => GeniusSource(
+            client: client,
+            baseUrl: config.baseUrl,
+            name: config.name,
+          ),
+          // Same shape again: the bundled entry is the only one, with
+          // the fixed default URL and name.
+          LyricsSourceKind.netEase => NetEaseSource(
             client: client,
             baseUrl: config.baseUrl,
             name: config.name,
