@@ -1,6 +1,45 @@
 import 'package:flutter/foundation.dart';
 import 'package:musync/core/id3/lrc_parser.dart';
 
+/// One word of a line, with its own timing — the karaoke unit.
+///
+/// Comes from word-timed sources (LyricsPlus); the file formats the app
+/// writes (SYLT/USLT/LRC) are line-level only, so words live in memory
+/// only until a persistence step decides where they belong. [start] is
+/// absolute (from the start of the track), like the line timestamp.
+@immutable
+class LyricWord {
+  final Duration start;
+  final Duration duration;
+  final String text;
+
+  /// A backing vocal / choir word, sung under the lead line.
+  final bool isBackground;
+
+  const LyricWord({
+    required this.start,
+    required this.duration,
+    required this.text,
+    this.isBackground = false,
+  });
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is LyricWord &&
+        other.start == start &&
+        other.duration == duration &&
+        other.text == text &&
+        other.isBackground == isBackground;
+  }
+
+  @override
+  int get hashCode => Object.hash(start, duration, text, isBackground);
+
+  @override
+  String toString() => 'LyricWord(${start.inMilliseconds}ms, "$text")';
+}
+
 /// One line of a song, timed or not.
 ///
 /// A null [timestamp] means the line deliberately has no time of its own.
@@ -13,13 +52,32 @@ class LyricLine implements Comparable<LyricLine> {
   final Duration? timestamp;
   final String text;
 
-  const LyricLine({required this.timestamp, required this.text});
+  /// Word timings inside this line, in order. Empty for every line that
+  /// comes from a line-level source (LRCLIB, the file, the editor) — only
+  /// word-timed sources fill it. Ignored by the LRC/SYLT writers and by
+  /// the sort; carried by [copyWith] and [withoutTimestamp] so a nudge
+  /// never silently drops them.
+  final List<LyricWord> words;
+
+  const LyricLine({
+    required this.timestamp,
+    required this.text,
+    this.words = const [],
+  });
 
   bool get isTimed => timestamp != null;
 
-  LyricLine copyWith({Duration? timestamp, String? text}) => LyricLine(
+  /// True when this line carries word timings.
+  bool get hasWordTimings => words.isNotEmpty;
+
+  LyricLine copyWith({
+    Duration? timestamp,
+    String? text,
+    List<LyricWord>? words,
+  }) => LyricLine(
     timestamp: timestamp ?? this.timestamp,
     text: text ?? this.text,
+    words: words ?? this.words,
   );
 
   /// Drops the time and keeps the words.
@@ -27,7 +85,8 @@ class LyricLine implements Comparable<LyricLine> {
   /// A separate method because `copyWith(timestamp: null)` means "leave it
   /// alone" by the convention every other copyWith in this codebase follows;
   /// overloading it to mean "clear it" would make the two indistinguishable.
-  LyricLine withoutTimestamp() => LyricLine(timestamp: null, text: text);
+  LyricLine withoutTimestamp() =>
+      LyricLine(timestamp: null, text: text, words: words);
 
   /// Untimed lines sort last. They never reach SYLT, so this only decides where
   /// they sit in a list that still holds them — the editor's, in practice.
@@ -44,11 +103,12 @@ class LyricLine implements Comparable<LyricLine> {
     if (identical(this, other)) return true;
     return other is LyricLine &&
         other.timestamp == timestamp &&
-        other.text == text;
+        other.text == text &&
+        listEquals(other.words, words);
   }
 
   @override
-  int get hashCode => Object.hash(timestamp, text);
+  int get hashCode => Object.hash(timestamp, text, Object.hashAll(words));
 
   @override
   String toString() => timestamp == null
@@ -163,6 +223,9 @@ class SyncedLyrics {
   bool get isEmpty => lines.isEmpty;
   bool get isNotEmpty => lines.isNotEmpty;
   int get length => lines.length;
+
+  /// True when at least one line carries word timings.
+  bool get hasWordTimings => lines.any((line) => line.hasWordTimings);
 
   /// Value equality, on purpose: these are used as Riverpod family keys and as
   /// comparison targets in tests. Identity semantics would hand out a fresh
