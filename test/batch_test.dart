@@ -21,6 +21,9 @@ class _FakeSource implements LyricsSource {
   final Map<String, double?> confidenceByTitle;
   final Set<String> failing;
 
+  @override
+  bool get isFallback => false;
+
   /// Every title looked up, in order. Proves whether a search actually ran —
   /// checking the resulting state cannot tell a fresh search from a kept one.
   final List<String> queried = [];
