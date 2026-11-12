@@ -5,6 +5,7 @@ import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
 import 'package:musync/features/lyrics/data/lyrics_source_health.dart';
 import 'package:musync/features/lyrics/data/lyrics_word_timings_store.dart';
+import 'package:musync/features/lyrics/data/providers/kugou_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lrcred_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lyricsplus_provider.dart';
@@ -67,6 +68,13 @@ final lyricsRepositoryProvider = Provider<LyricsRepository>((ref) {
           // Same shape as LyricsPlus: the bundled entry is the only one,
           // with the fixed default URL and name.
           LyricsSourceKind.lrcRed => LrcRedSource(
+            client: client,
+            baseUrl: config.baseUrl,
+            name: config.name,
+          ),
+          // Same shape again: the bundled entry is the only one, with
+          // the fixed default URL and name.
+          LyricsSourceKind.kugou => KugouSource(
             client: client,
             baseUrl: config.baseUrl,
             name: config.name,
