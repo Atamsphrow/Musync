@@ -102,6 +102,7 @@ class _FakeRepo extends LyricsRepository {
     String filePath, {
     SyncedLyrics? synced,
     UnsyncedLyrics? unsynced,
+    bool alignToExisting = false,
   }) async {
     embedded.add(
       LyricsSearchResult(
