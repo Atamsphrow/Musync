@@ -5,6 +5,7 @@ import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/player/ui/widgets/karaoke_animated_line.dart';
+import 'package:musync/features/player/ui/widgets/karaoke_separators.dart';
 import 'package:musync/features/player/ui/widgets/nudge_line_sheet.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
@@ -35,18 +36,22 @@ List<TextSpan> karaokeWordSpans({
   void Function(Duration position)? onWordTap,
 }) {
   final spans = <TextSpan>[];
+  final seps = karaokeWordSeparators(line);
   for (var i = 0; i < line.words.length; i++) {
     if (i > 0) {
-      spans.add(
-        TextSpan(
-          text: ' ',
-          style: i - 1 <= wordIndex ? sungStyle : unsungStyle,
-          recognizer: onWordTap == null
-              ? null
-              : (TapGestureRecognizer()
-                ..onTap = () => onWordTap(line.words[i - 1].start)),
-        ),
-      );
+      final sep = seps == null ? ' ' : seps[i - 1];
+      if (sep.isNotEmpty) {
+        spans.add(
+          TextSpan(
+            text: sep,
+            style: i - 1 <= wordIndex ? sungStyle : unsungStyle,
+            recognizer: onWordTap == null
+                ? null
+                : (TapGestureRecognizer()
+                  ..onTap = () => onWordTap(line.words[i - 1].start)),
+          ),
+        );
+      }
     }
     final word = line.words[i];
     var style = i <= wordIndex ? sungStyle : unsungStyle;
@@ -248,17 +253,17 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
             // independently, and a one-frame disagreement must light
             // nothing, not the wrong line's word.
             //
-            // Guarded on the join: the words rendered must read exactly
-            // like the line's text. A source whose syllabus disagrees
-            // with its line text (punctuation in one, not the other)
+            // Guarded on the coverage: the words must cover the line's
+            // text exactly — a syllable split (« nev » + « er » for
+            // « never ») is fine, the separators come from the text
+            // itself. A source whose words disagree with its line text
             // falls back to the plain line — no karaoke is better than
             // karaoke showing different words.
             final wordIndex = isCurrent && currentWord?.lineIndex == index
                 ? currentWord?.wordIndex ?? -1
                 : -1;
             final showWords =
-                line.hasWordTimings &&
-                line.words.map((w) => w.text).join(' ') == line.text;
+                line.hasWordTimings && karaokeWordSeparators(line) != null;
             // In a duet, the second singer's lines carry a small marker.
             final prefix = voicePrefix(line, widget.lyrics.hasDuet);
             // The romanization under the line, when the line has one.
