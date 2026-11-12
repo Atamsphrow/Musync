@@ -5,6 +5,7 @@ import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 
 import 'karaoke_math.dart';
+import 'karaoke_separators.dart';
 
 /// The current line, animated — the word being sung sweeps bright left
 /// to right, words lift a couple of pixels as they land and settle back,
@@ -86,19 +87,23 @@ List<InlineSpan> animatedKaraokeSpans({
   required void Function(Duration position) onWordTap,
 }) {
   final spans = <InlineSpan>[];
+  final seps = karaokeWordSeparators(line);
   for (var i = 0; i < line.words.length; i++) {
     if (i > 0) {
-      // The space between two words takes the style of the word before
-      // it; a tap between two words seeks to the start of the word
-      // before it — the word just read.
-      spans.add(
-        TextSpan(
-          text: ' ',
-          style: i - 1 <= wordIndex ? sungStyle : unsungStyle,
-          recognizer: TapGestureRecognizer()
-            ..onTap = () => onWordTap(line.words[i - 1].start),
-        ),
-      );
+      final sep = seps == null ? ' ' : seps[i - 1];
+      if (sep.isNotEmpty) {
+        // The space between two words takes the style of the word before
+        // it; a tap between two words seeks to the start of the word
+        // before it — the word just read.
+        spans.add(
+          TextSpan(
+            text: sep,
+            style: i - 1 <= wordIndex ? sungStyle : unsungStyle,
+            recognizer: TapGestureRecognizer()
+              ..onTap = () => onWordTap(line.words[i - 1].start),
+          ),
+        );
+      }
     }
     final word = line.words[i];
     final isCurrent = i == wordIndex;
