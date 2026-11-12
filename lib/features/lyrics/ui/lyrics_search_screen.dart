@@ -9,6 +9,7 @@ import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/lyrics/providers/search_provider.dart';
 import 'package:musync/features/lyrics/data/lyrics_align.dart';
 import 'package:musync/features/lyrics/ui/embed_lyrics_action.dart';
+import 'package:musync/features/lyrics/ui/source_picker_sheet.dart';
 
 /// Online lyrics lookup (plan §3.4).
 ///
@@ -167,7 +168,7 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
     });
   }
 
-  void _search({bool autoRetry = true}) {
+  void _search({bool autoRetry = true, bool explicit = false}) {
     final title = _titleController.text;
     final artist = _artistController.text;
     performLyricsSearch(
@@ -176,9 +177,21 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
       artist: artist,
       album: widget.song.album,
       durationMs: widget.song.duration,
+      explicit: explicit,
     ).then((_) {
       if (mounted && autoRetry) _autoRetryWithGuess(title, artist);
     });
+  }
+
+  /// Opens the "try another source" sheet for the current query.
+  void _openSourcePicker() {
+    showSourcePickerSheet(
+      context: context,
+      title: _titleController.text,
+      artist: _artistController.text,
+      album: widget.song.album,
+      durationMs: widget.song.duration,
+    );
   }
 
   /// 2e essai automatique : quand la recherche ne donne rien, Deviner
@@ -243,7 +256,7 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
                   label: 'Artiste',
                   icon: Icons.person_outline,
                   textInputAction: TextInputAction.search,
-                  onSubmitted: (_) => _search(),
+                  onSubmitted: (_) => _search(explicit: true),
                 ),
                 Align(
                   alignment: Alignment.centerRight,
@@ -267,9 +280,19 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
-                    onPressed: isLoading ? null : _search,
+                    onPressed: isLoading
+                        ? null
+                        : () => _search(explicit: true),
                     icon: const Icon(Icons.search, size: 18),
                     label: Text(isLoading ? 'Recherche…' : 'Rechercher'),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: isLoading ? null : _openSourcePicker,
+                    icon: const Icon(Icons.swap_horiz, size: 18),
+                    label: const Text('Essayer une autre source'),
                   ),
                 ),
               ],
