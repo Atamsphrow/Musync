@@ -193,6 +193,16 @@ class AudioPlayerService {
   List<Song> get queue => _queue;
   int get currentIndex => _player.currentIndex ?? 0;
 
+  /// The song the player will play after the current one — shuffle and
+  /// repeat included, via just_audio's own [AudioPlayer.nextIndex].
+  /// Null at the end of the queue (repeat off). Under repeat-one it is
+  /// the current track itself, so a caller that prefetches must skip it.
+  Song? get nextSong {
+    final index = _player.nextIndex;
+    if (index == null || index < 0 || index >= _queue.length) return null;
+    return _queue[index];
+  }
+
   /// Persists the queue, the current index in it and the shuffle/repeat
   /// modes, so the next launch restores the whole playback state — not just
   /// the track. Fire-and-forget: the store never throws, and playback must
