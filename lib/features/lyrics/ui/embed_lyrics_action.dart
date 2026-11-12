@@ -84,6 +84,11 @@ Future<EmbedOutcome> embedLyrics(
   /// not progress.
   bool skipPlainOverPlain = false,
 
+  /// When true, timed lyrics from another recording are re-timed to the
+  /// file's own timed lyrics before writing (see `LyricsRepository`).
+  /// Callers set this when the result comes from LyricsPlus or lrc.red.
+  bool alignToExisting = false,
+
   /// Shown with the undo action once the write lands. Callers pass their own
   /// wording — "76 lignes calées", "12 lignes importées" — because only they
   /// know what just happened.
@@ -193,7 +198,12 @@ Future<EmbedOutcome> embedLyrics(
   }
 
   try {
-    await repository.embedLyrics(filePath, synced: synced, unsynced: unsynced);
+    await repository.embedLyrics(
+      filePath,
+      synced: synced,
+      unsynced: unsynced,
+      alignToExisting: alignToExisting,
+    );
   } on Id3WriteException catch (e, stack) {
     // Logged as well as shown: a snackbar is gone in four seconds, and this is
     // the failure the debug panel exists for.
