@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/id3/id3_writer.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
@@ -73,6 +75,88 @@ class LyricsRepository {
     String? album,
     int? durationMs,
     FilenameGuess? filenameGuess,
+  }) =>
+      _searchAllShared(
+        title: title,
+        artist: artist,
+        album: album,
+        durationMs: durationMs,
+        filenameGuess: filenameGuess,
+      );
+
+  /// The stable ranking every search path shares: best confidence first,
+  /// ties in source order. `List.sort` is not stable, and two sources
+  /// returning equally confident hits would otherwise swap places
+  /// between one search and the next for no reason the user could see.
+  static List<LyricsSearchResult> _ranked(List<LyricsSearchResult> results) {
+    final ranked =
+        List<({int index, LyricsSearchResult result})>.generate(
+          results.length,
+          (i) => (index: i, result: results[i]),
+          growable: false,
+        )..sort((a, b) {
+          final byConfidence = b.result.confidence.compareTo(
+            a.result.confidence,
+          );
+          return byConfidence != 0 ? byConfidence : a.index.compareTo(b.index);
+        });
+    return [for (final entry in ranked) entry.result];
+  }
+
+  /// Like [searchAll], but yields the ranked results as each source
+  /// answers, so a screen can show the first hit while the slower
+  /// sources are still being asked. The last emission is the same list
+  /// [searchAll] returns. The fallback pass still only runs when the
+  /// first pass brought back no synced lyrics — it starts after the
+  /// first pass finishes, so an early emission never promises a
+  /// fallback hit. Errors follow [searchAll]: when every source fails,
+  /// or every source is set aside, the stream ends in error instead of
+  /// an empty list.
+  Stream<List<LyricsSearchResult>> searchAllStream({
+    required String title,
+    required String artist,
+    String? album,
+    int? durationMs,
+    FilenameGuess? filenameGuess,
+  }) {
+    final controller = StreamController<List<LyricsSearchResult>>();
+    unawaited(() async {
+      try {
+        await _searchAllShared(
+          title: title,
+          artist: artist,
+          album: album,
+          durationMs: durationMs,
+          filenameGuess: filenameGuess,
+          onProgress: (ranked) {
+            if (!controller.isClosed && controller.hasListener) {
+              controller.add(ranked);
+            }
+          },
+        );
+      } catch (e) {
+        if (!controller.isClosed && controller.hasListener) {
+          controller.addError(e);
+        }
+      } finally {
+        if (!controller.isClosed) await controller.close();
+      }
+    }());
+    return controller.stream;
+  }
+
+  /// The search both [searchAll] and [searchAllStream] run: two passes
+  /// (primary, then the fallback when the first brought back no synced
+  /// lyrics), the same failure rules, the same ranking. With
+  /// [onProgress], the ranked list is reported after every source
+  /// answers instead of only at the end.
+  Future<List<LyricsSearchResult>> _searchAllShared({
+    required String title,
+    required String artist,
+    String? album,
+    int? durationMs,
+    FilenameGuess? filenameGuess,
+    void Function(List<LyricsSearchResult> ranked)? onProgress,
   }) async {
     if (title.trim().isEmpty && artist.trim().isEmpty) return const [];
     if (_sources.isEmpty) return const [];
@@ -89,6 +173,7 @@ class LyricsRepository {
       durationMs: durationMs,
       filenameGuess: filenameGuess,
       trackKey: trackKey,
+      onProgress: onProgress,
     );
     var results = pass.results;
     var failures = pass.failures;
@@ -103,6 +188,11 @@ class LyricsRepository {
         durationMs: durationMs,
         filenameGuess: filenameGuess,
         trackKey: trackKey,
+        // The fallback reports the merged list, not its own alone:
+        // an emission must never drop the first pass's hits.
+        onProgress: onProgress == null
+            ? null
+            : (ranked) => onProgress(_ranked([...results, ...ranked])),
       );
       results = [...results, ...second.results];
       failures = [...failures, ...second.failures];
@@ -132,25 +222,16 @@ class LyricsRepository {
       );
     }
 
-    // Stable: `List.sort` is not, and two sources returning equally confident
-    // hits would otherwise swap places between one search and the next for no
-    // reason the user could see.
-    final ranked =
-        List<({int index, LyricsSearchResult result})>.generate(
-          results.length,
-          (i) => (index: i, result: results[i]),
-          growable: false,
-        )..sort((a, b) {
-          final byConfidence = b.result.confidence.compareTo(
-            a.result.confidence,
-          );
-          return byConfidence != 0 ? byConfidence : a.index.compareTo(b.index);
-        });
-    return [for (final entry in ranked) entry.result];
+    return _ranked(results);
   }
 
   /// One pass of [searchAll]: every source in [sources] in parallel,
   /// with the health rules applied. The caller merges the passes.
+  ///
+  /// With [onProgress], the ranked results so far are reported after
+  /// every source answers — the streamed search's early lyrics. Each
+  /// source writes its own slot, so the ranking keeps ties in source
+  /// order no matter which source answered first.
   Future<
     ({
       List<LyricsSearchResult> results,
@@ -166,17 +247,34 @@ class LyricsRepository {
     int? durationMs,
     FilenameGuess? filenameGuess,
     required String trackKey,
+    void Function(List<LyricsSearchResult> ranked)? onProgress,
   }) async {
     var setAsideSkipped = 0;
+    final slots = List<List<LyricsSearchResult>?>.filled(
+      sources.length,
+      null,
+    );
+    final failures = <LyricsSourceException>[];
 
-    final outcomes = await Future.wait(
-      sources.map((source) async {
+    void report() {
+      if (onProgress == null) return;
+      final soFar = [
+        for (final slot in slots)
+          ...?slot,
+      ];
+      if (soFar.isNotEmpty) onProgress(_ranked(soFar));
+    }
+
+    await Future.wait(
+      sources.indexed.map((entry) async {
+        final index = entry.$1;
+        final source = entry.$2;
         if (_health.isSetAside(source.name)) {
           setAsideSkipped++;
-          return null;
+          return;
         }
         if (_health.isMissing(trackKey, source.name)) {
-          return null;
+          return;
         }
         try {
           final found = await source.search(
@@ -192,11 +290,12 @@ class LyricsRepository {
             _health.noteMissing(trackKey, source.name);
           } else {
             _health.answered(source.name);
+            slots[index] = kept;
+            report();
           }
-          return kept;
         } on LyricsSourceException catch (e) {
           _health.failed(source.name);
-          return e;
+          failures.add(e);
         } catch (error, stack) {
           // Anything at all, not just the exception the sources mean to throw.
           //
@@ -213,31 +312,27 @@ class LyricsRepository {
             stackTrace: stack,
           );
           _health.failed(source.name);
-          return LyricsSourceException(
-            source.name,
-            '${source.name} a renvoyé une réponse inattendue.',
-            error,
+          failures.add(
+            LyricsSourceException(
+              source.name,
+              '${source.name} a renvoyé une réponse inattendue.',
+              error,
+            ),
           );
         }
       }),
     );
 
-    final results = <LyricsSearchResult>[];
-    final failures = <LyricsSourceException>[];
-    for (final outcome in outcomes) {
-      if (outcome is LyricsSourceException) {
-        failures.add(outcome);
-      } else if (outcome is List<LyricsSearchResult>) {
-        results.addAll(outcome);
-      }
-    }
+    final results = <LyricsSearchResult>[
+      for (final slot in slots)
+        ...?slot,
+    ];
     return (
       results: results,
       failures: failures,
       setAsideSkipped: setAsideSkipped,
     );
   }
-
   /// Queries one source only, by name — the "try another source" bypass.
   ///
   /// A set-aside source is asked anyway (that is the point of the manual
