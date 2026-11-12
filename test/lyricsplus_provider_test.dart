@@ -139,6 +139,37 @@ void main() {
       expect(result.durationMs, 200000);
     });
 
+    test('voix : v1, v2, ensemble, absente', () async {
+      Map<String, dynamic> voicedLine(String singer) => {
+        'time': 1000,
+        'duration': 500,
+        'text': 'Une ligne',
+        'syllabus': [],
+        'element': {'singer': singer},
+      };
+      final source = LyricsPlusSource(
+        client: mockLyricsPlus(
+          payload: lpPayload(
+            lyrics: [
+              voicedLine('v1'),
+              voicedLine('v2'),
+              voicedLine('v1+v2'),
+              voicedLine(''),
+            ],
+          ),
+        ),
+      );
+      final results = await source.search(
+        title: query.title,
+        artist: query.artist,
+        durationMs: query.durationMs,
+      );
+      expect(results, hasLength(1));
+      final lines = results.single.syncedLyrics!.lines;
+      expect(lines.map((l) => l.voice), [1, 2, 0, null]);
+      expect(results.single.syncedLyrics!.hasDuet, isTrue);
+    });
+
     test('lignes calées sans mots : synchro, pas de mot à mot, 0,85', () async {
       final source = LyricsPlusSource(
         client: mockLyricsPlus(
