@@ -473,6 +473,39 @@ class _PreviewSheet extends StatelessWidget {
                     color: scheme.onSurfaceVariant,
                   ),
                 ),
+                // Les mêmes pastilles que dans la liste : la feuille
+                // n'affichait que le texte LRC (lignes seules), donc un
+                // résultat mot à mot y ressemblait trait pour trait à un
+                // résultat calé ligne à ligne — alors que les mots sont
+                // bien là, et bien enregistrés par le bouton ci-dessous.
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  children: [
+                    if (result.hasWordTimings)
+                      Chip(
+                        label: const Text('Mot à mot'),
+                        backgroundColor: scheme.tertiaryContainer,
+                        labelStyle: textTheme.labelSmall?.copyWith(
+                          color: scheme.onTertiaryContainer,
+                        ),
+                        side: BorderSide.none,
+                      ),
+                    Chip(
+                      label:
+                          Text(result.hasSyncedLyrics ? 'Synchro' : 'Texte'),
+                      backgroundColor: result.hasSyncedLyrics
+                          ? scheme.primaryContainer
+                          : scheme.surfaceContainerHighest,
+                      labelStyle: textTheme.labelSmall?.copyWith(
+                        color: result.hasSyncedLyrics
+                            ? scheme.onPrimaryContainer
+                            : scheme.onSurfaceVariant,
+                      ),
+                      side: BorderSide.none,
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
