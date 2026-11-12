@@ -7,6 +7,7 @@ import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/lyrics/providers/search_provider.dart';
+import 'package:musync/features/lyrics/data/lyrics_align.dart';
 import 'package:musync/features/lyrics/ui/embed_lyrics_action.dart';
 
 /// Online lyrics lookup (plan §3.4).
@@ -401,6 +402,9 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
       filePath: widget.song.filePath,
       synced: result.syncedLyrics,
       unsynced: result.unsyncedLyrics,
+      // LyricsPlus and lrc.red time another recording: re-time them to
+      // the file's own timings before writing.
+      alignToExisting: isOtherRecordingSource(result.source),
       successMessage: result.hasSyncedLyrics
           ? '${result.syncedLyrics!.length} lignes calées enregistrées.'
           : 'Paroles enregistrées dans le fichier.',
