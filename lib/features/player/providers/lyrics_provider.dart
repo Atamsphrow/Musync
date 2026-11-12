@@ -269,6 +269,28 @@ final currentWordIndexProvider = StreamProvider.autoDispose<
     },
   ).distinct();
 });
+
+/// The clocked lyric position, sampled every frame while playing.
+///
+/// Unlike [currentWordIndexProvider], which emits only when the word
+/// changes, this emits on every position change — the karaoke
+/// animations (the sweep across the word being sung, the lift as it
+/// lands) need the position itself, every frame, not just the index.
+/// Only the animated current line watches it, so the rest of the view
+/// does not rebuild sixty times a second; a frozen position emits
+/// nothing, so nothing rebuilds while paused either.
+final lyricPositionProvider = StreamProvider.autoDispose<Duration>((ref) {
+  final service = ref.watch(audioPlayerServiceProvider);
+  // Watched, not read: dragging the compensation slider has to move the
+  // animation as it is dragged, like it moves the lines.
+  final offset = ref.watch(lyricsOffsetProvider);
+  final clock = LyricClock();
+  return Stream<Duration>.periodic(
+    lineRefreshInterval,
+    (_) => clock.tick(service.position) + offset,
+  ).distinct();
+});
+
 ///
 /// Emits only when the index actually changes, so the sixty samples a second
 /// cost one binary search each while playing — and none at all while paused:
