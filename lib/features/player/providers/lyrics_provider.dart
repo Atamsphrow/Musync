@@ -5,6 +5,7 @@ import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/features/lyrics/data/lyrics_word_timings_store.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/player/data/lyric_clock.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/settings/providers/playback_settings_provider.dart';
 
@@ -252,10 +253,16 @@ final currentWordIndexProvider = StreamProvider.autoDispose<
 
   ({int lineIndex, int wordIndex})? last;
   Duration? lastPosition;
+  // One clock per provider, fresh on every rebuild (song change): the raw
+  // position never steps back except on a seek, so a jittered anchor
+  // cannot un-light a word that is already sung. The compensation offset
+  // is added after the clock — dragging the slider must move the words
+  // at once, not be absorbed as jitter.
+  final clock = LyricClock();
   return Stream<({int lineIndex, int wordIndex})?>.periodic(
     lineRefreshInterval,
     (_) {
-      final position = service.position + offset;
+      final position = clock.tick(service.position) + offset;
       if (position == lastPosition) return last;
       lastPosition = position;
       return last = currentWordAt(synced, position);
@@ -287,8 +294,15 @@ final currentLineIndexProvider = StreamProvider.autoDispose<int?>((ref) {
   // A seek while paused still recomputes once, because the position did move.
   Duration? lastPosition;
   int? lastIndex;
+  // One clock per provider, fresh on every rebuild (song change): the raw
+  // position never steps back except on a seek, so a jittered anchor
+  // cannot flick the current line back for a frame. The compensation
+  // offset is added after the clock — dragging the slider must move the
+  // lines at once, not be absorbed as jitter. The bubble and the
+  // mini-player read this provider, so they get the clocked position too.
+  final clock = LyricClock();
   return Stream<int?>.periodic(lineRefreshInterval, (_) {
-    final position = service.position + offset;
+    final position = clock.tick(service.position) + offset;
     if (position == lastPosition) return lastIndex;
     lastPosition = position;
     return lastIndex = synced.getLineAt(position);
