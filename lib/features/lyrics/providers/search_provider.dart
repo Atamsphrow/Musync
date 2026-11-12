@@ -106,6 +106,15 @@ final lyricsSearchResultsProvider = StateProvider<List<LyricsSearchResult>>(
 final lyricsSearchLoadingProvider = StateProvider<bool>((ref) => false);
 final lyricsSearchErrorProvider = StateProvider<String?>((ref) => null);
 
+/// Set when the user cancels the search in flight. Cleared when a new
+/// search starts, so the auto-retry of the *next* search is unaffected.
+///
+/// The auto-retry (search screen) fires from the cancelled search's own
+/// completion: without this, cancelling a search with no results yet would
+/// immediately relaunch one with the guessed title/artist — the × would
+/// start a search instead of stopping it.
+final lyricsSearchCancelledProvider = StateProvider<bool>((ref) => false);
+
 /// Which search is the latest one. Two searches launched in quick succession
 /// (a corrected query, a double tap) overlap in flight, and the older one may
 /// finish last — without this, its stale results would overwrite the newer
@@ -149,12 +158,14 @@ Future<List<LyricsSearchResult>> performLyricsSearch(
   final loading = ref.read(lyricsSearchLoadingProvider.notifier);
   final error = ref.read(lyricsSearchErrorProvider.notifier);
   final results = ref.read(lyricsSearchResultsProvider.notifier);
+  final cancelled = ref.read(lyricsSearchCancelledProvider.notifier);
   final repository = ref.read(lyricsRepositoryProvider);
 
   final generation = ++_searchGeneration;
   loading.state = true;
   error.state = null;
   results.state = [];
+  cancelled.state = false;
 
   if (explicit) {
     ref
@@ -211,4 +222,19 @@ Future<List<LyricsSearchResult>> performLyricsSearch(
   } finally {
     if (!isStale()) loading.state = false;
   }
+}
+
+/// Cancels the search in flight, if any.
+///
+/// Bumps the generation, so the running [performLyricsSearch] treats its
+/// late results as stale and breaks out of the stream on the next emission
+/// — the subscription is cancelled and no late emission reaches the
+/// screen. The loading flag drops at once instead of waiting for that next
+/// emission: a search whose remaining sources all hang would otherwise spin
+/// forever. Results already written to state stay: they are valid hits from
+/// sources that already answered.
+void cancelLyricsSearch(WidgetRef ref) {
+  ++_searchGeneration;
+  ref.read(lyricsSearchCancelledProvider.notifier).state = true;
+  ref.read(lyricsSearchLoadingProvider.notifier).state = false;
 }
