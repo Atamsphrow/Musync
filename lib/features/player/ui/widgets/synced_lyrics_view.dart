@@ -34,15 +34,27 @@ List<TextSpan> karaokeWordSpans({
         ),
       );
     }
-    spans.add(
-      TextSpan(
-        text: line.words[i].text,
-        style: i <= wordIndex ? sungStyle : unsungStyle,
-      ),
-    );
+    final word = line.words[i];
+    var style = i <= wordIndex ? sungStyle : unsungStyle;
+    // A backing vocal word, sung under the lead line: dimmed and
+    // slanted, so the eye reads it as a choir, not as the lead.
+    if (word.isBackground) {
+      style = style.copyWith(
+        color: style.color?.withValues(alpha: 0.6),
+        fontStyle: FontStyle.italic,
+      );
+    }
+    spans.add(TextSpan(text: word.text, style: style));
   }
   return spans;
 }
+
+/// The voice label for a line in a duet, or null when the song is not a
+/// duet or the line's singer is unknown. Only the second singer is
+/// marked — the first is the default voice, and a line sung together
+/// needs no label either.
+String? voicePrefix(LyricLine line, bool hasDuet) =>
+    hasDuet && line.voice == 2 ? 'V2' : null;
 
 /// Karaoke-style lyrics: the active line is highlighted and kept centered
 /// while the track plays. Tapping a line seeks to it.
@@ -199,6 +211,8 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
             final showWords =
                 wordIndex != null &&
                 line.words.map((w) => w.text).join(' ') == line.text;
+            // In a duet, the second singer's lines carry a small marker.
+            final prefix = voicePrefix(line, widget.lyrics.hasDuet);
 
             return InkWell(
               // Non-null: this view renders SyncedLyrics, which is timed-only.
@@ -217,6 +231,8 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                         synced: widget.lyrics,
                         unsynced: widget.unsynced,
                         index: index,
+                        title: widget.song!.title,
+                        artist: widget.song!.artist,
                       ),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -238,31 +254,55 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                     child: showWords
                         ? Text.rich(
                             TextSpan(
-                              children: karaokeWordSpans(
-                                line: line,
-                                wordIndex: wordIndex,
-                                sungStyle: _lyricsTextStyle(
-                                  textTheme.bodyLarge,
-                                  appearance,
-                                ).copyWith(
-                                  color: color,
-                                  fontWeight: FontWeight.w700,
+                              children: [
+                                if (prefix != null)
+                                  TextSpan(
+                                    text: '$prefix · ',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: dimColor,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ...karaokeWordSpans(
+                                  line: line,
+                                  wordIndex: wordIndex,
+                                  sungStyle: _lyricsTextStyle(
+                                    textTheme.bodyLarge,
+                                    appearance,
+                                  ).copyWith(
+                                    color: color,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                  unsungStyle: _lyricsTextStyle(
+                                    textTheme.bodyLarge,
+                                    appearance,
+                                  ).copyWith(
+                                    color: dimColor,
+                                    fontWeight: FontWeight.w400,
+                                  ),
                                 ),
-                                unsungStyle: _lyricsTextStyle(
-                                  textTheme.bodyLarge,
-                                  appearance,
-                                ).copyWith(
-                                  color: dimColor,
-                                  fontWeight: FontWeight.w400,
-                                ),
-                              ),
+                              ],
                             ),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             textAlign: textAlign,
                           )
-                        : Text(
-                            line.text,
+                        : Text.rich(
+                            TextSpan(
+                              children: [
+                                if (prefix != null)
+                                  TextSpan(
+                                    text: '$prefix · ',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: dimColor,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                TextSpan(text: line.text),
+                              ],
+                            ),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             textAlign: textAlign,
