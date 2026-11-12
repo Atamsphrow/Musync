@@ -35,6 +35,11 @@ enum LyricsSourceKind {
   /// A single fixed endpoint, not self-hostable — the bundled entry is
   /// the only one there is.
   kugou,
+
+  /// Genius (plain text, scraped from the song page): the last resort.
+  /// A single fixed endpoint, not self-hostable — the bundled entry is
+  /// the only one there is.
+  genius,
 }
 
 /// One entry in the sources list.
@@ -174,12 +179,23 @@ const LyricsSourceConfig kugouDefault = LyricsSourceConfig(
   kind: LyricsSourceKind.kugou,
 );
 
+/// The bundled Genius source. Always present, last: it is only asked
+/// when no synced lyrics came back.
+const LyricsSourceConfig geniusDefault = LyricsSourceConfig(
+  id: 'genius',
+  name: 'Genius',
+  baseUrl: 'https://genius.com/api',
+  isBuiltIn: true,
+  kind: LyricsSourceKind.genius,
+);
+
 /// Every bundled entry, in the order they are shown.
 const List<LyricsSourceConfig> builtInSources = [
   lrclibDefault,
   lyricsPlusDefault,
   lrcRedDefault,
   kugouDefault,
+  geniusDefault,
 ];
 
 /// Reads and writes the sources list as JSON in the app's documents directory.
