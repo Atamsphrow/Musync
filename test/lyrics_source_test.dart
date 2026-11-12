@@ -459,6 +459,9 @@ class _ExplodingSource implements LyricsSource {
   String get name => 'explosive';
 
   @override
+  bool get isFallback => false;
+
+  @override
   Future<List<LyricsSearchResult>> search({
     required String title,
     required String artist,
@@ -472,6 +475,9 @@ class _ExplodingSource implements LyricsSource {
 class _FixedSource implements LyricsSource {
   @override
   final String name;
+
+  @override
+  bool get isFallback => false;
 
   _FixedSource({this.name = 'fiable'});
 
