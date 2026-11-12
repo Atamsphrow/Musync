@@ -4,6 +4,7 @@ import 'package:musync/core/services/shared_http_client.dart';
 import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
+import 'package:musync/features/lyrics/data/providers/lyricsplus_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 import 'package:musync/features/settings/data/lyrics_source_config.dart';
 import 'package:musync/features/settings/providers/settings_provider.dart';
@@ -38,6 +39,14 @@ final lyricsRepositoryProvider = Provider<LyricsRepository>((ref) {
                     baseUrl: config.baseUrl,
                     client: client,
                   ),
+          // The bundled entry carries the fixed default URL and name, so
+          // passing the config through is the same as the defaults — and
+          // a stored non-built-in entry keeps its own values.
+          LyricsSourceKind.lyricsPlus => LyricsPlusSource(
+            client: client,
+            baseUrl: config.baseUrl,
+            name: config.name,
+          ),
         },
     ],
   );
