@@ -2,18 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/id3/lrc_parser.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
-import 'package:musync/core/services/media_store.dart';
-import 'package:musync/features/lyrics/data/genius_meaning.dart';
 import 'package:musync/features/lyrics/ui/embed_lyrics_action.dart';
-import 'package:musync/features/lyrics/ui/meaning_sheet.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
-
-/// The text shared for a line: the line quoted, with its song.
-String shareQuote({
-  required String line,
-  required String artist,
-  required String title,
-}) => '« ${line.trim()} » — $artist – $title';
 
 /// Opens the quick ±100 ms timing sheet for one synced line.
 ///
@@ -33,9 +23,6 @@ Future<void> showNudgeLineSheet(
   required SyncedLyrics synced,
   required UnsyncedLyrics? unsynced,
   required int index,
-  required String title,
-  required String artist,
-  GeniusMeaningService? meaningService,
 }) async {
   final session = _NudgeSession(initialSynced: synced);
   await showModalBottomSheet<void>(
@@ -45,9 +32,6 @@ Future<void> showNudgeLineSheet(
       unsynced: unsynced,
       index: index,
       session: session,
-      title: title,
-      artist: artist,
-      meaningService: meaningService,
     ),
   );
   if (!session.dirty) return;
@@ -166,23 +150,12 @@ class _NudgeLineSheet extends ConsumerStatefulWidget {
     required this.unsynced,
     required this.index,
     required this.session,
-    required this.title,
-    required this.artist,
-    this.meaningService,
   });
 
   final String filePath;
   final UnsyncedLyrics? unsynced;
   final int index;
   final _NudgeSession session;
-
-  /// The song's title and artist: the meaning lookup and the shared
-  /// quote need them, and the sheet itself only knows the line.
-  final String title;
-  final String artist;
-
-  /// Injected for tests; a real service when null.
-  final GeniusMeaningService? meaningService;
 
   @override
   ConsumerState<_NudgeLineSheet> createState() => _NudgeLineSheetState();
@@ -218,40 +191,6 @@ class _NudgeLineSheetState extends ConsumerState<_NudgeLineSheet> {
     final service = ref.read(audioPlayerServiceProvider);
     await service.seekTo(timestamp);
     if (!service.isPlaying) await service.play();
-  }
-
-  /// Opens the Genius meaning sheet for this line. Neither the lookup
-  /// nor the sheet touches the session: no write happens on close.
-  Future<void> _openMeaning() async {
-    final line = _line;
-    if (line == null || line.text.trim().isEmpty) return;
-    await showMeaningSheet(
-      context,
-      title: widget.title,
-      artist: widget.artist,
-      lineText: line.text,
-      service: widget.meaningService,
-    );
-  }
-
-  /// Shares this line, quoted with its song. The chooser opening is the
-  /// feedback; only a failure gets a snackbar.
-  Future<void> _shareLine() async {
-    final line = _line;
-    if (line == null || line.text.trim().isEmpty) return;
-    final outcome = await MediaStore.shareText(
-      text: shareQuote(
-        line: line.text,
-        artist: widget.artist,
-        title: widget.title,
-      ),
-      title: widget.title,
-    );
-    if (outcome != ShareOutcome.opened && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Partage impossible.')),
-      );
-    }
   }
 
   /// Deletes the line — empty ones only — and closes the sheet. The write
@@ -327,24 +266,6 @@ class _NudgeLineSheetState extends ConsumerState<_NudgeLineSheet> {
                   icon: const Icon(Icons.delete_outline),
                   label: const Text('Supprimer la ligne'),
                   style: TextButton.styleFrom(foregroundColor: scheme.error),
-                ),
-              ],
-              if (!isEmptyLine) ...[
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    FilledButton.tonalIcon(
-                      onPressed: _openMeaning,
-                      icon: const Icon(Icons.lightbulb_outline),
-                      label: const Text('Signification'),
-                    ),
-                    FilledButton.tonalIcon(
-                      onPressed: _shareLine,
-                      icon: const Icon(Icons.share_outlined),
-                      label: const Text('Partager'),
-                    ),
-                  ],
                 ),
               ],
             ],
