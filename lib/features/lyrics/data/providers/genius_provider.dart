@@ -5,7 +5,6 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
-import 'package:musync/features/lyrics/data/lyrics_confidence.dart';
 import 'package:musync/features/lyrics/data/providers/genius_html.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 
@@ -102,20 +101,13 @@ class GeniusSource implements LyricsSource {
           artist: artist,
           album: album,
           unsyncedLyrics: UnsyncedLyrics(lines.join('\n')),
-          // No duration to verify: the duration component scores 0, so
-          // an exact title+artist hit lands at ~0.65 — proposed by the
-          // AI mode, never auto-integrated on its own.
-          confidence: scoreLyricsCandidate(
-            candidateTitle: _asString(result['title']),
-            candidateArtist: _asString(result['artist_names']),
-            candidateDurationMs: null,
-            candidateHasSynced: false,
-            queryTitle: title,
-            queryArtist: artist,
-            queryAlbum: album,
-            queryDurationMs: durationMs,
-            filenameGuess: filenameGuess,
-          ).total,
+          // Fixed at the auto-integrate threshold, and no higher: the
+          // match is strict (equal titles, a shared artist), but there
+          // is no duration to verify, so the shared scorer would give
+          // 0.65. At 0.80 the AI mode integrates it on its own when it
+          // is the only result — the user's call, 2026-11-12 — while a
+          // genuinely stronger hit still outranks it.
+          confidence: 0.80,
         ),
       ];
     }
