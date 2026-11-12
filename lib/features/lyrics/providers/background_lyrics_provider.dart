@@ -51,6 +51,11 @@ class BackgroundLyricsService {
   /// the playing track — doesn't search twice.
   final Set<String> _attempted = {};
 
+  /// Prefetches in flight, by track path. A track change while its
+  /// prefetch is still running must join that search instead of starting
+  /// a second one for the same track.
+  final Map<String, Future<void>> _prefetchFutures = {};
+
   /// Confirmed « nothing exists for this track » answers, remembered
   /// across launches (see [SweepMemory]) so a launch's sweep does not
   /// re-ask the network — and the AI — about them every single time.
@@ -117,11 +122,68 @@ class BackgroundLyricsService {
     if (previous?.filePath == next.filePath) return;
     // No debounce: the check starts with the track. The fetch re-verifies
     // the track is still current after every async gap, so a quick skip just
-    // abandons the search silently.
-    unawaited(_maybeFetch(next));
+    // abandons the search silently. The next track's lyrics are prefetched
+    // after the current track's search, never alongside it — the prefetch
+    // must not cut the search for the song actually playing short.
+    unawaited(_maybeFetch(next).then((_) => _prefetchNext()));
+  }
+
+  /// Prefetches the next track's lyrics, so they are already there when it
+  /// starts. Wi-Fi only, like the sweep, and silent: no snackbar, and a
+  /// track the prefetch could not help is left for the normal fetch when it
+  /// plays (only a track the prefetch wrote is marked attempted).
+  Future<void> _prefetchNext() async {
+    if (!await MediaStore.isWifiConnected()) return;
+    final service = _ref.read(audioPlayerServiceProvider);
+    final next = service.nextSong;
+    if (next == null) return;
+    // Repeat-one: the next track is the one playing, already fetched.
+    if (_ref.read(currentSongProvider)?.filePath == next.filePath) return;
+    if (_attempted.contains(next.filePath)) return;
+    if (_prefetchFutures.containsKey(next.filePath)) return;
+    // Searched at a previous launch and confirmed absent: believed for a
+    // fortnight (see SweepMemory) instead of re-queried.
+    if (await _sweepMemory.recentlyMissed(
+      next.filePath,
+      title: next.title,
+      artist: next.artist,
+    )) {
+      return;
+    }
+    if (await _ref.read(lyricsMismatchStoreProvider).isMismatched(
+      next.filePath,
+      title: next.title,
+      artist: next.artist,
+    )) {
+      return;
+    }
+    // Already settled synced lyrics: nothing to fetch.
+    final status = await _ref
+        .read(lyricsStatusScannerProvider)
+        .statusOf(next.filePath)
+        .then<LyricsStatus?>((s) => s)
+        .catchError((_) => null);
+    if (status == LyricsStatus.synced &&
+        await _syncedIsSettled(next.filePath)) {
+      return;
+    }
+    final future = _searchAndWrite(next);
+    _prefetchFutures[next.filePath] = future;
+    try {
+      final written = await future;
+      // Written: the track is settled, no re-search when it plays.
+      if (written != null) _attempted.add(next.filePath);
+    } finally {
+      _prefetchFutures.remove(next.filePath);
+    }
   }
 
   Future<void> _maybeFetch(Song song) async {
+    // A prefetch for this track is still running: join it instead of
+    // searching twice, then re-read the status — the prefetch may just
+    // have written the lyrics.
+    final pendingPrefetch = _prefetchFutures[song.filePath];
+    if (pendingPrefetch != null) await pendingPrefetch;
     // The connectivity probe and the local status read run together: neither
     // waits for the other, so the pre-check costs a single round trip.
     final onlineFuture = _hasInternet();
