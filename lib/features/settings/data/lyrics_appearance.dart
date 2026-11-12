@@ -34,6 +34,16 @@ class LyricsAppearance {
   /// The bubble's own color choice, independent from the player screen's.
   final LyricsColorMode bubbleColorMode;
 
+  /// Show a line's romanization under it (NetEase `romalrc`), when the
+  /// line has one and it differs from the line. On by default: it only
+  /// appears where it exists, which is rare.
+  final bool showRomanization;
+
+  /// The advanced karaoke animations (sweep, word lift, held-word
+  /// letters) in « Lecture en cours ». Off by default — the user asked
+  /// for an option to enable them or leave the view as it is.
+  final bool karaokeAnimations;
+
   const LyricsAppearance({
     this.fontSize = LyricsFontSize.medium,
     this.textAlign = LyricsTextAlign.center,
@@ -41,6 +51,8 @@ class LyricsAppearance {
     this.italic = true,
     this.colorMode = LyricsColorMode.white,
     this.bubbleColorMode = LyricsColorMode.white,
+    this.showRomanization = true,
+    this.karaokeAnimations = false,
   });
 
   /// Font scale applied on top of the theme size and the system text scale.
@@ -57,6 +69,8 @@ class LyricsAppearance {
     bool? italic,
     LyricsColorMode? colorMode,
     LyricsColorMode? bubbleColorMode,
+    bool? showRomanization,
+    bool? karaokeAnimations,
   }) => LyricsAppearance(
     fontSize: fontSize ?? this.fontSize,
     textAlign: textAlign ?? this.textAlign,
@@ -64,6 +78,8 @@ class LyricsAppearance {
     italic: italic ?? this.italic,
     colorMode: colorMode ?? this.colorMode,
     bubbleColorMode: bubbleColorMode ?? this.bubbleColorMode,
+    showRomanization: showRomanization ?? this.showRomanization,
+    karaokeAnimations: karaokeAnimations ?? this.karaokeAnimations,
   );
 
   // Value equality, like LyricsSourceConfig and PlaybackSettings: the
@@ -79,7 +95,9 @@ class LyricsAppearance {
           other.fontStyle == fontStyle &&
           other.italic == italic &&
           other.colorMode == colorMode &&
-          other.bubbleColorMode == bubbleColorMode;
+          other.bubbleColorMode == bubbleColorMode &&
+          other.showRomanization == showRomanization &&
+          other.karaokeAnimations == karaokeAnimations;
 
   @override
   int get hashCode => Object.hash(
@@ -89,6 +107,8 @@ class LyricsAppearance {
     italic,
     colorMode,
     bubbleColorMode,
+    showRomanization,
+    karaokeAnimations,
   );
 
   Map<String, Object?> toJson() => {
@@ -98,6 +118,8 @@ class LyricsAppearance {
     'italic': italic,
     'colorMode': colorMode.name,
     'bubbleColorMode': bubbleColorMode.name,
+    'showRomanization': showRomanization,
+    'karaokeAnimations': karaokeAnimations,
   };
 
   static T _enumOf<T>(List<T> values, Object? raw, T fallback) {
@@ -139,6 +161,12 @@ class LyricsAppearance {
         m['bubbleColorMode'],
         LyricsColorMode.white,
       ),
+      showRomanization: m['showRomanization'] is bool
+          ? m['showRomanization'] as bool
+          : true,
+      karaokeAnimations: m['karaokeAnimations'] is bool
+          ? m['karaokeAnimations'] as bool
+          : false,
     );
   }
 }
