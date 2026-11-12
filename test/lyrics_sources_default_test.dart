@@ -1,6 +1,7 @@
 // Regression tests for the bundled lyrics sources.
 //
-// The app ships one built-in source: LRCLIB. lyrics.ovh used to be bundled
+// The app ships two built-in sources: LRCLIB (line-level) and
+// LyricsPlus (word-timed when the catalogue has it). lyrics.ovh used to be bundled
 // "on by default", but the service proved too unreliable for that — it is
 // now a one-tap preset in the Sources tab, added back as a regular entry.
 // These tests pin the fallbacks to the bundled list, and the migration that
@@ -43,14 +44,14 @@ void main() {
   ];
 
   group('LyricsSourceStore.load — bundled defaults', () {
-    test('with no file at all, only LRCLIB is returned', () async {
+    test('with no file at all, the bundled sources are returned', () async {
       final loaded = await storeFor('lyrics_sources.json').load();
 
-      expect(idsOf(loaded), ['lrclib']);
+      expect(idsOf(loaded), ['lrclib', 'lyrics-plus']);
       expect(loaded.every((config) => config.enabled), isTrue);
     });
 
-    test('an unreadable file falls back to LRCLIB alone', () async {
+    test('an unreadable file falls back to the bundled sources', () async {
       await writeSources([
         {'oops': 'not a list'},
       ]);
@@ -62,10 +63,10 @@ void main() {
 
       final loaded = await storeFor('lyrics_sources.json').load();
 
-      expect(idsOf(loaded), ['lrclib']);
+      expect(idsOf(loaded), ['lrclib', 'lyrics-plus']);
     });
 
-    test('a non-list payload falls back to LRCLIB alone', () async {
+    test('a non-list payload falls back to the bundled sources', () async {
       final file = File(
         '${tempDir.path}${Platform.pathSeparator}lyrics_sources.json',
       );
@@ -73,7 +74,7 @@ void main() {
 
       final loaded = await storeFor('lyrics_sources.json').load();
 
-      expect(idsOf(loaded), ['lrclib']);
+      expect(idsOf(loaded), ['lrclib', 'lyrics-plus']);
     });
 
     test(
@@ -101,7 +102,7 @@ void main() {
 
         final loaded = await storeFor('lyrics_sources.json').load();
 
-        expect(idsOf(loaded), ['lrclib']);
+        expect(idsOf(loaded), ['lrclib', 'lyrics-plus']);
       },
     );
 
@@ -131,12 +132,12 @@ void main() {
 
         final loaded = await storeFor('lyrics_sources.json').load();
 
-        expect(idsOf(loaded), ['lrclib']);
+        expect(idsOf(loaded), ['lrclib', 'lyrics-plus']);
       },
     );
 
-    test('builtInSources is LRCLIB alone', () {
-      expect(idsOf(builtInSources), ['lrclib']);
+    test('builtInSources is LRCLIB + LyricsPlus', () {
+      expect(idsOf(builtInSources), ['lrclib', 'lyrics-plus']);
     });
 
     test('every fallback returns a fresh, mutable copy — not the const',
@@ -167,7 +168,7 @@ void main() {
           () => loaded.add(lrclibDefault.copyWith(enabled: false)),
           returnsNormally,
         );
-        expect(builtInSources, hasLength(1));
+        expect(builtInSources, hasLength(2));
         await File(
           '${tempDir.path}${Platform.pathSeparator}lyrics_sources.json',
         ).writeAsString('');
