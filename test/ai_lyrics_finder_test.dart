@@ -32,12 +32,13 @@ Song _song({
 LyricsSearchResult _hit({
   String title = 'Titre',
   String artist = 'Artiste',
+  String source = 'LRCLIB',
   int? trackId,
   int? durationMs = 180000,
   bool synced = true,
   String text = 'Vraies paroles',
 }) => LyricsSearchResult(
-  source: 'LRCLIB',
+  source: source,
   title: title,
   artist: artist,
   syncedLyrics: synced
@@ -62,6 +63,9 @@ class _FakeRepo extends LyricsRepository {
   final Map<String, LyricsPair> files = {};
   final List<LyricsSearchResult> embedded = [];
 
+  /// Le drapeau d'alignement reçu à chaque écriture, dans l'ordre.
+  final List<bool> alignFlags = [];
+
   @override
   Future<List<LyricsSearchResult>> searchAll({
     required String title,
@@ -80,7 +84,9 @@ class _FakeRepo extends LyricsRepository {
     String filePath, {
     SyncedLyrics? synced,
     UnsyncedLyrics? unsynced,
+    bool alignToExisting = false,
   }) async {
+    alignFlags.add(alignToExisting);
     embedded.add(
       LyricsSearchResult(
         source: 'LRCLIB',
@@ -143,12 +149,22 @@ void main() {
     // 0,35 + 0,30 + 0,15 (durée) + 0,05 (synchro), sans album.
     expect(result.bestConfidence, closeTo(0.85, 0.001));
     expect(repo.embedded, hasLength(1));
+    expect(repo.alignFlags, [false]);
     expect(changed, [path]);
     final recorded = await provenance.forPath(path);
     expect(recorded, isNotNull);
     expect(recorded!.trackId, 7);
     expect(recorded.confidence, closeTo(0.85, 0.001));
     expect(recorded.origin, LyricsProvenanceOrigin.autoAi);
+  });
+
+  test('candidat LyricsPlus ≥ 0,80 → écriture avec alignement', () async {
+    final path = await realFile('1b.mp3');
+    repo.fallback = [_hit(trackId: 7, source: 'LyricsPlus')];
+    final result = await finder().findFor(_song(filePath: path));
+    expect(result.verdict, LyricsFindVerdict.integrated);
+    expect(repo.embedded, hasLength(1));
+    expect(repo.alignFlags, [true]);
   });
 
   test('0,50–0,79 → rien d\'écrit, verdict needsChoice, top 3 rendu', () async {
@@ -501,6 +517,7 @@ class _ThrowingRepo extends LyricsRepository {
     String filePath, {
     SyncedLyrics? synced,
     UnsyncedLyrics? unsynced,
+    bool alignToExisting = false,
   }) async {
     embeds++;
   }
