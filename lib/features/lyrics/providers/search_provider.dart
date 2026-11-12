@@ -167,21 +167,32 @@ Future<List<LyricsSearchResult>> performLyricsSearch(
   bool isStale() => generation != _searchGeneration;
 
   try {
-    final found = sourceName == null
-        ? await repository.searchAll(
-            title: title,
-            artist: artist,
-            album: album,
-            durationMs: durationMs,
-          )
-        : await repository.searchOne(
-            sourceName: sourceName,
-            title: title,
-            artist: artist,
-            album: album,
-            durationMs: durationMs,
-          );
-    if (!isStale()) results.state = found;
+    if (sourceName != null) {
+      final found = await repository.searchOne(
+        sourceName: sourceName,
+        title: title,
+        artist: artist,
+        album: album,
+        durationMs: durationMs,
+      );
+      if (!isStale()) results.state = found;
+      return found;
+    }
+    // Streamed: the first hit shows as soon as its source answers,
+    // the list settles ranked once every source has answered. A newer
+    // search cancels this one — breaking out of the loop cancels the
+    // subscription, and the stream's late emissions go nowhere.
+    var found = const <LyricsSearchResult>[];
+    await for (final ranked in repository.searchAllStream(
+      title: title,
+      artist: artist,
+      album: album,
+      durationMs: durationMs,
+    )) {
+      if (isStale()) break;
+      found = ranked;
+      results.state = ranked;
+    }
     return found;
   } on LyricsSourceException catch (e) {
     // The source already phrased this for the user; `toString()` would put the
