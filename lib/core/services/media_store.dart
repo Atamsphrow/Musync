@@ -168,34 +168,6 @@ abstract final class MediaStore {
     }
   }
 
-  /// Opens the system share sheet for a piece of text — a lyric line,
-  /// quoted with its song.
-  ///
-  /// Same channel as [shareAudio], same outcome names: the sheet opening
-  /// is the success, anything else a failure the caller reports.
-  static Future<ShareOutcome> shareText({
-    required String text,
-    String? title,
-  }) async {
-    if (!Platform.isAndroid) return ShareOutcome.failed;
-
-    try {
-      final ok = await _channel
-          .invokeMethod<bool>('shareText', <String, Object?>{
-            'text': text,
-            'title': title,
-          })
-          .timeout(_timeout);
-      return (ok ?? false) ? ShareOutcome.opened : ShareOutcome.failed;
-    } on TimeoutException {
-      return ShareOutcome.failed;
-    } on MissingPluginException {
-      return ShareOutcome.failed;
-    } on PlatformException {
-      return ShareOutcome.failed;
-    }
-  }
-
   /// Musicolet's application id.
   ///
   /// Hard-coded on purpose. Musync's whole reason for existing is that Musicolet
