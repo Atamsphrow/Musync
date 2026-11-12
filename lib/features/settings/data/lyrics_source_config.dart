@@ -19,6 +19,11 @@ enum LyricsSourceKind {
   /// Anything speaking LRCLIB's API: the bundled instance, a mirror, or a
   /// self-hosted copy. Returns timed lyrics.
   lrclib,
+
+  /// LyricsPlus (Apple Music timings): word-by-word when the catalogue
+  /// has them, line-by-line otherwise. A single fixed endpoint, not
+  /// self-hostable — the bundled entry is the only one there is.
+  lyricsPlus,
 }
 
 /// One entry in the sources list.
@@ -30,7 +35,9 @@ class LyricsSourceConfig {
 
   final String name;
 
-  /// Base URL of an LRCLIB-shaped API, without a trailing slash.
+  /// Base URL of the source's API, without a trailing slash: an
+  /// LRCLIB-shaped API for [LyricsSourceKind.lrclib], the `/get`
+  /// endpoint root for [LyricsSourceKind.lyricsPlus].
   final String baseUrl;
 
   final bool enabled;
@@ -128,8 +135,20 @@ const LyricsSourceConfig lrclibDefault = LyricsSourceConfig(
   isBuiltIn: true,
 );
 
+/// The bundled word-timed source. Always present, after LRCLIB.
+const LyricsSourceConfig lyricsPlusDefault = LyricsSourceConfig(
+  id: 'lyrics-plus',
+  name: 'LyricsPlus',
+  baseUrl: 'https://lyricsplus.binimum.org/v2/lyrics',
+  isBuiltIn: true,
+  kind: LyricsSourceKind.lyricsPlus,
+);
+
 /// Every bundled entry, in the order they are shown.
-const List<LyricsSourceConfig> builtInSources = [lrclibDefault];
+const List<LyricsSourceConfig> builtInSources = [
+  lrclibDefault,
+  lyricsPlusDefault,
+];
 
 /// Reads and writes the sources list as JSON in the app's documents directory.
 ///
