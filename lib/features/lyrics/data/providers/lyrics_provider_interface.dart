@@ -82,6 +82,10 @@ class LyricsSearchResult {
   bool get hasUnsyncedLyrics =>
       unsyncedLyrics != null && unsyncedLyrics!.isNotEmpty;
 
+  /// True when the synced lyrics carry word timings (LyricsPlus).
+  bool get hasWordTimings =>
+      syncedLyrics != null && syncedLyrics!.hasWordTimings;
+
   /// Nothing worth embedding — filtered out before the list is shown.
   bool get isEmpty => !hasSyncedLyrics && !hasUnsyncedLyrics;
 }
