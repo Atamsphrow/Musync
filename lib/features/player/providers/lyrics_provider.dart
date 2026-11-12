@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
+import 'package:musync/features/lyrics/data/lyrics_word_timings_store.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/settings/providers/playback_settings_provider.dart';
@@ -153,9 +154,17 @@ final currentLyricsProvider =
       ref.watch(_currentSongMtimeProvider);
       // Frame-walking: the tag's artwork is skipped, not loaded.
       final lyrics = await Id3Reader.readLyricsFrames(currentSong.filePath);
+      // The words live app-side, never in the file: re-attach them from the
+      // store when the lyrics text matches what was saved. A miss returns
+      // the lyrics unchanged — line-only, never an error.
+      final synced = lyrics.synced == null
+          ? null
+          : await ref
+                .read(lyricsWordTimingsStoreProvider)
+                .attachWords(currentSong.filePath, lyrics.synced!);
       return (
         song: currentSong,
-        synced: lyrics.synced,
+        synced: synced,
         unsynced: lyrics.unsynced,
       );
     });
@@ -196,7 +205,63 @@ void refreshLyricsOnForeground(WidgetRef ref) {
 /// would have needed for each of those four cases.
 const Duration lineRefreshInterval = Duration(milliseconds: 16);
 
-/// Index of the line that should be lit right now, or null when there is none.
+/// The word being sung at [position]: the latest word of the current line
+/// whose start has passed — or null before the first word of the line (or
+/// before the first line at all).
+///
+/// A pure function so the rule is unit-testable without a player: the
+/// provider below only samples the position.
+({int lineIndex, int wordIndex})? currentWordAt(
+  SyncedLyrics synced,
+  Duration position,
+) {
+  final lineIndex = synced.getLineAt(position);
+  if (lineIndex == null) return null;
+  final words = synced.lines[lineIndex].words;
+  var wordIndex = -1;
+  for (var i = 0; i < words.length; i++) {
+    if (words[i].start <= position) wordIndex = i;
+  }
+  if (wordIndex < 0) return null;
+  return (lineIndex: lineIndex, wordIndex: wordIndex);
+}
+
+/// The word to light right now, or null when there is none.
+///
+/// Mirrors [currentLineIndexProvider]: one 16 ms sample, one binary search
+/// each while playing, and it emits only when the answer actually changes.
+/// A frozen position reuses the last answer instead of re-running the
+/// search — same reason as there.
+final currentWordIndexProvider = StreamProvider.autoDispose<
+  ({int lineIndex, int wordIndex})?
+>((ref) {
+  // Song-tagged like the line provider: while the next track's lyrics load,
+  // the provider above still holds the previous track's, and ticking the
+  // old lines with the new position would light the wrong word.
+  final song = ref.watch(currentSongProvider);
+  final pair = ref.watch(currentLyricsProvider).valueOrNull;
+  final synced = pair?.song?.id == song?.id ? pair?.synced : null;
+  if (synced == null || synced.isEmpty || !synced.hasWordTimings) {
+    return Stream.value(null);
+  }
+
+  final service = ref.watch(audioPlayerServiceProvider);
+  // Watched, not read: dragging the compensation slider has to move the
+  // words as it is dragged, like it moves the lines.
+  final offset = ref.watch(lyricsOffsetProvider);
+
+  ({int lineIndex, int wordIndex})? last;
+  Duration? lastPosition;
+  return Stream<({int lineIndex, int wordIndex})?>.periodic(
+    lineRefreshInterval,
+    (_) {
+      final position = service.position + offset;
+      if (position == lastPosition) return last;
+      lastPosition = position;
+      return last = currentWordAt(synced, position);
+    },
+  ).distinct();
+});
 ///
 /// Emits only when the index actually changes, so the sixty samples a second
 /// cost one binary search each while playing — and none at all while paused:
