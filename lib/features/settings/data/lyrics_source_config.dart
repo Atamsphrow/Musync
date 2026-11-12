@@ -40,6 +40,10 @@ enum LyricsSourceKind {
   /// A single fixed endpoint, not self-hostable — the bundled entry is
   /// the only one there is.
   genius,
+
+  /// NetEase Cloud Music (line-synced LRC). A single fixed endpoint,
+  /// not self-hostable — the bundled entry is the only one there is.
+  netEase,
 }
 
 /// One entry in the sources list.
@@ -189,12 +193,23 @@ const LyricsSourceConfig geniusDefault = LyricsSourceConfig(
   kind: LyricsSourceKind.genius,
 );
 
+/// The bundled NetEase source. Always present, after Kugou and
+/// before Genius (the fallback stays last).
+const LyricsSourceConfig netEaseDefault = LyricsSourceConfig(
+  id: 'netease',
+  name: 'NetEase',
+  baseUrl: 'https://music.163.com',
+  isBuiltIn: true,
+  kind: LyricsSourceKind.netEase,
+);
+
 /// Every bundled entry, in the order they are shown.
 const List<LyricsSourceConfig> builtInSources = [
   lrclibDefault,
   lyricsPlusDefault,
   lrcRedDefault,
   kugouDefault,
+  netEaseDefault,
   geniusDefault,
 ];
 
