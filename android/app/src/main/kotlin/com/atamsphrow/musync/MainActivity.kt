@@ -386,6 +386,11 @@ class MainActivity : AudioServiceActivity() {
                         call.argument<String>("targetPackage"),
                         result,
                     )
+                    "shareText" -> shareText(
+                        call.argument<String>("text"),
+                        call.argument<String>("title"),
+                        result,
+                    )
                     "isWifiConnected" -> {
                         // ACCESS_NETWORK_STATE is a normal permission:
                         // granted at install, no runtime prompt.
@@ -517,6 +522,35 @@ class MainActivity : AudioServiceActivity() {
             // Told apart from a general failure: "Musicolet is not installed"
             // is something the user can act on, "share failed" is not.
             result.error("not_installed", targetPackage, null)
+        } catch (e: Exception) {
+            result.error("share_failed", e.message, null)
+        }
+    }
+
+    /// Opens the system share sheet for a piece of text — a lyric line,
+    /// quoted with its song. Same shape as [shareAudio], without the
+    /// file: ACTION_SEND, text/plain, chooser.
+    private fun shareText(
+        text: String?,
+        title: String?,
+        result: MethodChannel.Result,
+    ) {
+        if (text.isNullOrBlank()) {
+            result.error("bad-args", "text requis", null)
+            return
+        }
+
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+            if (!title.isNullOrEmpty()) putExtra(Intent.EXTRA_SUBJECT, title)
+        }
+
+        try {
+            startActivity(Intent.createChooser(intent, title ?: "Partager"))
+            result.success(true)
+        } catch (e: android.content.ActivityNotFoundException) {
+            result.error("share_failed", e.message, null)
         } catch (e: Exception) {
             result.error("share_failed", e.message, null)
         }
