@@ -3,6 +3,7 @@ import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/shared_http_client.dart';
 import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
+import 'package:musync/features/lyrics/data/lyrics_source_health.dart';
 import 'package:musync/features/lyrics/data/lyrics_word_timings_store.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lrcred_provider.dart';
@@ -10,6 +11,14 @@ import 'package:musync/features/lyrics/data/providers/lyricsplus_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 import 'package:musync/features/settings/data/lyrics_source_config.dart';
 import 'package:musync/features/settings/providers/settings_provider.dart';
+
+/// The health of the lyrics sources, shared by every repository the app
+/// builds. Top-level (not inside the repository) so it survives the
+/// rebuilds that follow a settings change — a cooldown must not reset
+/// because the user toggled a source.
+final lyricsSourceHealthProvider = Provider<LyricsSourceHealth>(
+  (ref) => LyricsSourceHealth(),
+);
 
 /// Built from whatever sources the user has switched on (plan P5).
 ///
@@ -22,17 +31,20 @@ final lyricsRepositoryProvider = Provider<LyricsRepository>((ref) {
   final client = ref.watch(sharedHttpClientProvider);
   final mismatchStore = ref.watch(lyricsMismatchStoreProvider);
   final wordTimingsStore = ref.watch(lyricsWordTimingsStoreProvider);
+  final health = ref.watch(lyricsSourceHealthProvider);
   if (configs == null) {
     return LyricsRepository(
       sources: [LrclibSource(client: client)],
       mismatchStore: mismatchStore,
       wordTimingsStore: wordTimingsStore,
+      health: health,
     );
   }
 
   return LyricsRepository(
     mismatchStore: mismatchStore,
     wordTimingsStore: wordTimingsStore,
+    health: health,
     sources: [
       for (final config in configs.where((c) => c.enabled))
         switch (config.kind) {
@@ -76,12 +88,27 @@ final lyricsSearchErrorProvider = StateProvider<String?>((ref) => null);
 /// ones on screen. Only the latest generation may write to the state.
 int _searchGeneration = 0;
 
-Future<void> performLyricsSearch(
+/// Runs a lyrics search and puts the outcome in the search state.
+///
+/// [explicit] is a deliberate re-search (the Rechercher button, Enter):
+/// the "no lyrics" memo for this query is dropped first, so the sources
+/// are asked again. An automatic search (screen open, auto-retry) leaves
+/// the memo alone — reopening a song a minute later must not re-ask a
+/// source that already said nothing.
+///
+/// [sourceName] asks one source only (the "try another source" bypass):
+/// a set-aside source is asked anyway, and the outcome feeds the health.
+///
+/// Returns what was found, so a caller that needs to react (a toast when
+/// a single source finds nothing) does not have to re-read the state.
+Future<List<LyricsSearchResult>> performLyricsSearch(
   WidgetRef ref, {
   required String title,
   required String artist,
   String? album,
   int? durationMs,
+  bool explicit = false,
+  String? sourceName,
 }) async {
   // Everything is resolved off `ref` before the first await, and held.
   //
@@ -105,22 +132,38 @@ Future<void> performLyricsSearch(
   error.state = null;
   results.state = [];
 
+  if (explicit) {
+    ref
+        .read(lyricsSourceHealthProvider)
+        .forgetTrack(lyricsHealthTrackKey(title, artist));
+  }
+
   // A newer search started while this one was in flight: its results are
   // stale, drop them instead of flashing them over the newer ones.
   bool isStale() => generation != _searchGeneration;
 
   try {
-    final found = await repository.searchAll(
-      title: title,
-      artist: artist,
-      album: album,
-      durationMs: durationMs,
-    );
+    final found = sourceName == null
+        ? await repository.searchAll(
+            title: title,
+            artist: artist,
+            album: album,
+            durationMs: durationMs,
+          )
+        : await repository.searchOne(
+            sourceName: sourceName,
+            title: title,
+            artist: artist,
+            album: album,
+            durationMs: durationMs,
+          );
     if (!isStale()) results.state = found;
+    return found;
   } on LyricsSourceException catch (e) {
     // The source already phrased this for the user; `toString()` would put the
     // class name and the source id in front of it.
     if (!isStale()) error.state = e.message;
+    return const [];
   } catch (e, stack) {
     DebugLog.instance.error(
       'Recherche',
@@ -129,6 +172,7 @@ Future<void> performLyricsSearch(
       stackTrace: stack,
     );
     if (!isStale()) error.state = 'Erreur inattendue : $e';
+    return const [];
   } finally {
     if (!isStale()) loading.state = false;
   }
