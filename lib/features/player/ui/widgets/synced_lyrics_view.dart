@@ -1,28 +1,38 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
+import 'package:musync/features/player/ui/widgets/karaoke_animated_line.dart';
 import 'package:musync/features/player/ui/widgets/nudge_line_sheet.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 import 'package:musync/features/library/data/models/song.dart';
 
-/// The spans for a word-timed current line: words already sung (including
-/// the current one) in [sungStyle], words still to come in [unsungStyle] —
-/// the classic karaoke sweep.
+/// The spans for a word-timed line: words already sung (including the
+/// current one) in [sungStyle], words still to come in [unsungStyle] —
+/// the classic karaoke sweep. A [wordIndex] of -1 means "none sung yet",
+/// so a line that is not current renders all its words unsung.
 ///
 /// Spaces between words take the style of the word before them; they carry
 /// no glyph, so the choice is invisible either way. The styles are explicit
 /// on every span, so a word change switches instantly — the 120 ms
 /// cross-fade of the line around it does not apply here, on purpose: a
 /// fade per word would blur the timing on fast lyrics.
+///
+/// When [onWordTap] is given, every word seeks to its own start when
+/// tapped, and a tap between two words seeks to the start of the word
+/// before it — the word just read, as in myspoti's `startAtChar`. The
+/// span recognizer wins the hit test over the line's InkWell, so a word
+/// tap never also seeks to the line.
 @visibleForTesting
 List<TextSpan> karaokeWordSpans({
   required LyricLine line,
   required int wordIndex,
   required TextStyle sungStyle,
   required TextStyle unsungStyle,
+  void Function(Duration position)? onWordTap,
 }) {
   final spans = <TextSpan>[];
   for (var i = 0; i < line.words.length; i++) {
@@ -31,6 +41,10 @@ List<TextSpan> karaokeWordSpans({
         TextSpan(
           text: ' ',
           style: i - 1 <= wordIndex ? sungStyle : unsungStyle,
+          recognizer: onWordTap == null
+              ? null
+              : (TapGestureRecognizer()
+                ..onTap = () => onWordTap(line.words[i - 1].start)),
         ),
       );
     }
@@ -44,7 +58,16 @@ List<TextSpan> karaokeWordSpans({
         fontStyle: FontStyle.italic,
       );
     }
-    spans.add(TextSpan(text: word.text, style: style));
+    spans.add(
+      TextSpan(
+        text: word.text,
+        style: style,
+        recognizer: onWordTap == null
+            ? null
+            : (TapGestureRecognizer()
+              ..onTap = () => onWordTap(word.start)),
+      ),
+    );
   }
   return spans;
 }
@@ -55,6 +78,30 @@ List<TextSpan> karaokeWordSpans({
 /// needs no label either.
 String? voicePrefix(LyricLine line, bool hasDuet) =>
     hasDuet && line.voice == 2 ? 'V2' : null;
+
+/// The romanization under a line, or null when the line has none to
+/// show: the setting is off, the source gave none, or it is identical
+/// to the line itself. Same words, another alphabet — never a
+/// replacement for the line.
+TextSpan? romanizationSpan(
+  LyricLine line,
+  LyricsAppearance appearance,
+  Color dimColor,
+) {
+  final romanization = line.romanization;
+  if (!appearance.showRomanization) return null;
+  if (romanization == null || romanization.trim().isEmpty) return null;
+  if (romanization == line.text) return null;
+  return TextSpan(
+    text: '\n$romanization',
+    style: TextStyle(
+      fontSize: 12 * appearance.fontScale,
+      color: dimColor,
+      fontStyle: FontStyle.italic,
+      fontWeight: FontWeight.w400,
+    ),
+  );
+}
 
 /// Karaoke-style lyrics: the active line is highlighted and kept centered
 /// while the track plays. Tapping a line seeks to it.
@@ -193,10 +240,11 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
             final dimColor =
                 scheme.onSurfaceVariant.withValues(alpha: 0.55);
 
-            // Karaoke: when the current line carries word timings, the
-            // words already sung (including the current one) take the
-            // line's active style and the rest stay dim. The word's line
-            // must be the current line — the two providers sample
+            // Karaoke: when a line carries word timings, its words are
+            // rendered as spans — the current line's sung split, every
+            // other line all unsung — so a tap on any word seeks to it,
+            // current line or not. The sung split itself only applies
+            // to the current line: the two providers sample
             // independently, and a one-frame disagreement must light
             // nothing, not the wrong line's word.
             //
@@ -206,13 +254,96 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
             // falls back to the plain line — no karaoke is better than
             // karaoke showing different words.
             final wordIndex = isCurrent && currentWord?.lineIndex == index
-                ? currentWord?.wordIndex
-                : null;
+                ? currentWord?.wordIndex ?? -1
+                : -1;
             final showWords =
-                wordIndex != null &&
+                line.hasWordTimings &&
                 line.words.map((w) => w.text).join(' ') == line.text;
             // In a duet, the second singer's lines carry a small marker.
             final prefix = voicePrefix(line, widget.lyrics.hasDuet);
+            // The romanization under the line, when the line has one.
+            final romanization =
+                romanizationSpan(line, appearance, dimColor);
+
+            // The sung and unsung word styles, shared by the static and
+            // the animated rendering of the line.
+            final sungStyle = _lyricsTextStyle(
+              textTheme.bodyLarge,
+              appearance,
+            ).copyWith(
+              color: color,
+              fontWeight: FontWeight.w700,
+            );
+            final unsungStyle = _lyricsTextStyle(
+              textTheme.bodyLarge,
+              appearance,
+            ).copyWith(
+              color: dimColor,
+              fontWeight: FontWeight.w400,
+            );
+            final prefixSpan = prefix == null
+                ? null
+                : TextSpan(
+                    text: '$prefix · ',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: dimColor,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  );
+            // The animated rendering applies only to the current line,
+            // only when the option is on, and only when the line carries
+            // word timings — every other line renders exactly as before.
+            final Widget lineChild;
+            if (showWords &&
+                isCurrent &&
+                appearance.karaokeAnimations) {
+              lineChild = AnimatedKaraokeLine(
+                line: line,
+                wordIndex: wordIndex,
+                sungStyle: sungStyle,
+                unsungStyle: unsungStyle,
+                onWordTap: (position) =>
+                    ref.read(audioPlayerServiceProvider).seekTo(position),
+                prefix: prefixSpan,
+                romanization: romanization,
+                textAlign: textAlign,
+              );
+            } else if (showWords) {
+              lineChild = Text.rich(
+                TextSpan(
+                  children: [
+                    ?prefixSpan,
+                    ...karaokeWordSpans(
+                      line: line,
+                      wordIndex: wordIndex,
+                      onWordTap: (position) => ref
+                          .read(audioPlayerServiceProvider)
+                          .seekTo(position),
+                      sungStyle: sungStyle,
+                      unsungStyle: unsungStyle,
+                    ),
+                    ?romanization,
+                  ],
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: textAlign,
+              );
+            } else {
+              lineChild = Text.rich(
+                TextSpan(
+                  children: [
+                    ?prefixSpan,
+                    TextSpan(text: line.text),
+                    ?romanization,
+                  ],
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: textAlign,
+              );
+            }
 
             return InkWell(
               // Non-null: this view renders SyncedLyrics, which is timed-only.
@@ -249,62 +380,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                           isCurrent ? FontWeight.w700 : FontWeight.w400,
                     ),
                     textAlign: textAlign,
-                    child: showWords
-                        ? Text.rich(
-                            TextSpan(
-                              children: [
-                                if (prefix != null)
-                                  TextSpan(
-                                    text: '$prefix · ',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: dimColor,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ...karaokeWordSpans(
-                                  line: line,
-                                  wordIndex: wordIndex,
-                                  sungStyle: _lyricsTextStyle(
-                                    textTheme.bodyLarge,
-                                    appearance,
-                                  ).copyWith(
-                                    color: color,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                  unsungStyle: _lyricsTextStyle(
-                                    textTheme.bodyLarge,
-                                    appearance,
-                                  ).copyWith(
-                                    color: dimColor,
-                                    fontWeight: FontWeight.w400,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: textAlign,
-                          )
-                        : Text.rich(
-                            TextSpan(
-                              children: [
-                                if (prefix != null)
-                                  TextSpan(
-                                    text: '$prefix · ',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: dimColor,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                TextSpan(text: line.text),
-                              ],
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: textAlign,
-                          ),
+                    child: lineChild,
                   ),
                 ),
               ),
