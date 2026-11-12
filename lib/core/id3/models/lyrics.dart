@@ -65,11 +65,18 @@ class LyricLine implements Comparable<LyricLine> {
   /// never "no singer". Ignored by the LRC/SYLT writers, like [words].
   final int? voice;
 
+  /// The line's pronunciation in Latin letters (pinyin, romaji, romaja),
+  /// or null when the source has none. Same words, another alphabet — not
+  /// a translation. Only NetEase provides it today (`romalrc`). Ignored
+  /// by the LRC/SYLT writers, like [words] and [voice].
+  final String? romanization;
+
   const LyricLine({
     required this.timestamp,
     required this.text,
     this.words = const [],
     this.voice,
+    this.romanization,
   });
 
   bool get isTimed => timestamp != null;
@@ -82,11 +89,13 @@ class LyricLine implements Comparable<LyricLine> {
     String? text,
     List<LyricWord>? words,
     int? voice,
+    String? romanization,
   }) => LyricLine(
     timestamp: timestamp ?? this.timestamp,
     text: text ?? this.text,
     words: words ?? this.words,
     voice: voice ?? this.voice,
+    romanization: romanization ?? this.romanization,
   );
 
   /// Drops the time and keeps the words.
@@ -94,8 +103,13 @@ class LyricLine implements Comparable<LyricLine> {
   /// A separate method because `copyWith(timestamp: null)` means "leave it
   /// alone" by the convention every other copyWith in this codebase follows;
   /// overloading it to mean "clear it" would make the two indistinguishable.
-  LyricLine withoutTimestamp() =>
-      LyricLine(timestamp: null, text: text, words: words, voice: voice);
+  LyricLine withoutTimestamp() => LyricLine(
+    timestamp: null,
+    text: text,
+    words: words,
+    voice: voice,
+    romanization: romanization,
+  );
 
   /// Untimed lines sort last. They never reach SYLT, so this only decides where
   /// they sit in a list that still holds them — the editor's, in practice.
@@ -114,12 +128,18 @@ class LyricLine implements Comparable<LyricLine> {
         other.timestamp == timestamp &&
         other.text == text &&
         other.voice == voice &&
+        other.romanization == romanization &&
         listEquals(other.words, words);
   }
 
   @override
-  int get hashCode =>
-      Object.hash(timestamp, text, voice, Object.hashAll(words));
+  int get hashCode => Object.hash(
+    timestamp,
+    text,
+    voice,
+    romanization,
+    Object.hashAll(words),
+  );
 
   @override
   String toString() => timestamp == null
