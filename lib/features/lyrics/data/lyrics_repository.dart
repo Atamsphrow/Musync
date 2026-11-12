@@ -5,6 +5,7 @@ import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
+import 'package:musync/features/lyrics/data/lyrics_word_timings_store.dart';
 import 'package:musync/features/lyrics/data/providers/lrclib_provider.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 
@@ -21,8 +22,16 @@ class LyricsRepository {
   /// n'exercent que la recherche.
   final LyricsMismatchStore? _mismatchStore;
 
-  LyricsRepository({List<LyricsSource>? sources, this._mismatchStore})
-    : _sources = sources ?? [LrclibSource()];
+  /// Quand il est présent, une écriture de paroles mot à mot y sauve les
+  /// mots (offsets relatifs, voir [LyricsWordTimingsStore]). Null dans
+  /// les tests qui n'exercent que la recherche.
+  final LyricsWordTimingsStore? _wordTimingsStore;
+
+  LyricsRepository({
+    List<LyricsSource>? sources,
+    this._mismatchStore,
+    this._wordTimingsStore,
+  }) : _sources = sources ?? [LrclibSource()];
 
   /// Queries every source in parallel and returns their results, best first.
   ///
@@ -136,6 +145,14 @@ class LyricsRepository {
     if (hasLyrics) {
       await _mismatchStore?.unmark(filePath);
       await _mismatchStore?.save();
+    }
+    // Les mots, quand il y en a : sauvés côté app, jamais dans le fichier
+    // (SYLT/USLT/LRC sont au niveau ligne). Une écriture sans mots ne
+    // touche pas au store — l'éditeur et le décalage sauvent sans mots,
+    // et leurs sauves ne doivent pas tuer le karaoké.
+    if (synced != null && synced.hasWordTimings) {
+      await _wordTimingsStore?.saveWords(filePath, synced);
+      await _wordTimingsStore?.save();
     }
   }
 
