@@ -210,6 +210,11 @@ class LyricsPlusSource extends LyricsSource {
           timestamp: Duration(milliseconds: timeMs),
           text: text,
           words: List.unmodifiable(words),
+          voice: _voiceOf(
+            raw['element'] is Map<String, dynamic>
+                ? (raw['element'] as Map<String, dynamic>)['singer']
+                : null,
+          ),
         ),
       );
     }
@@ -279,6 +284,16 @@ class LyricsPlusSource extends LyricsSource {
     final ms = value is num ? value.toInt() : 0;
     return ms < 0 ? 0 : ms;
   }
+
+  /// Who sings a line, from `element.singer`: « v1 » the first singer,
+  /// « v2 » the second, both together 0, anything else unknown. A
+  /// missing `element` is unknown, never "no singer".
+  static int? _voiceOf(Object? singer) => switch (singer) {
+    'v1' => 1,
+    'v2' => 2,
+    final String s when s.contains('v1') && s.contains('v2') => 0,
+    _ => null,
+  };
 
   /// `totalDuration` arrives as `m:ss.mmm` ("2:50.539") or as an empty
   /// string when the source does not know it. A plain seconds number
