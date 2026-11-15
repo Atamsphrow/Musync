@@ -11,6 +11,30 @@ import 'package:musync/features/lyrics/data/lyrics_align.dart';
 import 'package:musync/features/lyrics/ui/embed_lyrics_action.dart';
 import 'package:musync/features/lyrics/ui/source_picker_sheet.dart';
 
+/// Le 2e essai automatique (Deviner Artiste/Titre appliqué tout seul)
+/// doit-il se déclencher après la 1re recherche ?
+///
+/// Fonction pure, pour être testée sans écran. Il se déclenche quand la
+/// recherche n'a rien donné, OU quand elle a donné des résultats mais
+/// aucune parole synchronisée : un fournisseur flou qui trouve du texte
+/// brut ne doit pas empêcher les fournisseurs exacts d'être interrogés
+/// avec la requête devinée.
+///
+/// Jamais quand : la recherche a été annulée par le ×, une recherche est
+/// en cours, la recherche a échoué, ou les champs ont été modifiés depuis
+/// (correction manuelle).
+bool shouldAutoRetryWithGuess({
+  required bool cancelled,
+  required bool loading,
+  required bool hasError,
+  required bool hasResults,
+  required bool hasSyncedResult,
+  required bool fieldsChanged,
+}) {
+  if (cancelled || loading || hasError || fieldsChanged) return false;
+  return !hasResults || !hasSyncedResult;
+}
+
 /// Online lyrics lookup (plan §3.4).
 ///
 /// Seeded from the file's own tags and searched immediately, since that is
@@ -182,7 +206,9 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
     cancelLyricsSearch(ref);
   }
 
-  void _search({bool autoRetry = true, bool explicit = false}) {
+  /// Lance la recherche des champs courants. Le Future rendu se termine
+  /// quand la recherche — et son éventuel 2e essai automatique — est finie.
+  Future<void> _search({bool autoRetry = true, bool explicit = false}) {
     // Assurer l'artiste et le titre AVANT de chercher : le nom du fichier
     // dit souvent mieux que les tags qui est l'artiste et quel est le titre
     // (artiste « Unknown », titre = nom du fichier entier). L'heuristique
@@ -210,15 +236,15 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
     }
     final title = _titleController.text;
     final artist = _artistController.text;
-    performLyricsSearch(
+    return performLyricsSearch(
       ref,
       title: title,
       artist: artist,
       album: widget.song.album,
       durationMs: widget.song.duration,
       explicit: explicit,
-    ).then((_) {
-      if (mounted && autoRetry) _autoRetryWithGuess(title, artist);
+    ).then((_) async {
+      if (mounted && autoRetry) await _autoRetryWithGuess(title, artist);
     });
   }
 
@@ -233,31 +259,38 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
     );
   }
 
-  /// 2e essai automatique : quand la recherche ne donne rien, Deviner
-  /// Artiste/Titre (heuristique puis IA) est appliqué tout seul, et la
-  /// recherche est relancée une fois si le deviné diffère de la requête
+  /// 2e essai automatique : quand la recherche ne donne rien — ou ne donne
+  /// aucune parole synchronisée, typiquement un fournisseur flou qui trouve
+  /// du texte brut pendant que les fournisseurs exacts restent vides —,
+  /// Deviner Artiste/Titre (heuristique puis IA) est appliqué tout seul, et
+  /// la recherche est relancée une fois si le deviné diffère de la requête
   /// utilisée — jamais deux fois la même requête.
+  ///
+  /// Les résultats partiels de la 1re recherche ne sont pas perdus : si le
+  /// 2e essai ne trouve rien, ils reviennent à l'écran.
   Future<void> _autoRetryWithGuess(String usedTitle, String usedArtist) async {
-    // Annulée par l'utilisateur : le × arrête la recherche, il ne doit pas
-    // en relancer une autre derrière.
-    if (ref.read(lyricsSearchCancelledProvider)) return;
-    // L'utilisateur a relancé une recherche entre-temps : ne pas marcher
-    // sur ses plates-bandes.
-    if (ref.read(lyricsSearchLoadingProvider)) return;
-    if (ref.read(lyricsSearchErrorProvider) != null) return;
-    if (ref.read(lyricsSearchResultsProvider).isNotEmpty) return;
-    // Les champs ont changé depuis (correction manuelle) : le 2e essai
-    // n'a plus de sens sur l'ancienne requête.
-    if (_titleController.text != usedTitle ||
-        _artistController.text != usedArtist) {
-      return;
+    // Les gardes, réévaluées telles quelles après chaque attente :
+    // annulée par le × (il ne doit pas relancer une recherche derrière),
+    // recherche relancée entre-temps, erreur, champs corrigés à la main.
+    bool allowed() {
+      final results = ref.read(lyricsSearchResultsProvider);
+      return shouldAutoRetryWithGuess(
+        cancelled: ref.read(lyricsSearchCancelledProvider),
+        loading: ref.read(lyricsSearchLoadingProvider),
+        hasError: ref.read(lyricsSearchErrorProvider) != null,
+        hasResults: results.isNotEmpty,
+        hasSyncedResult: results.any((r) => r.hasSyncedLyrics),
+        fieldsChanged:
+            _titleController.text != usedTitle ||
+            _artistController.text != usedArtist,
+      );
     }
+
+    if (!allowed()) return;
+    final previous = ref.read(lyricsSearchResultsProvider);
     final guess = await _guessFromFilename(silent: true);
     if (!mounted || guess == null) return;
-    if (_titleController.text != usedTitle ||
-        _artistController.text != usedArtist) {
-      return;
-    }
+    if (!allowed()) return;
     final newTitle = guess.title.isNotEmpty ? guess.title : usedTitle;
     final newArtist = guess.artist.isNotEmpty ? guess.artist : usedArtist;
     if (newTitle.toLowerCase() == usedTitle.toLowerCase() &&
@@ -268,7 +301,21 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
       _titleController.text = newTitle;
       _artistController.text = newArtist;
     });
-    _search(autoRetry: false);
+    await _search(autoRetry: false);
+    if (!mounted || previous.isEmpty) return;
+    // Le 2e essai remet la liste à zéro en démarrant : s'il ne trouve rien,
+    // les résultats partiels du 1er reviennent. Pas si l'utilisateur a
+    // relancé autre chose entre-temps (champs retouchés, recherche en cours).
+    if (_titleController.text != newTitle ||
+        _artistController.text != newArtist) {
+      return;
+    }
+    if (ref.read(lyricsSearchLoadingProvider) ||
+        ref.read(lyricsSearchErrorProvider) != null ||
+        ref.read(lyricsSearchResultsProvider).isNotEmpty) {
+      return;
+    }
+    ref.read(lyricsSearchResultsProvider.notifier).state = previous;
   }
   
 
