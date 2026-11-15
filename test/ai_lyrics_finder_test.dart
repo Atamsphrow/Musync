@@ -92,6 +92,14 @@ class _FakeRepo extends LyricsRepository {
   Future<LyricsPair> readLyrics(String filePath) async =>
       files[filePath] ?? (synced: null, unsynced: null);
 
+  /// Mots sauvés via saveWordTimings, par chemin.
+  final Map<String, SyncedLyrics> savedWords = {};
+
+  @override
+  Future<void> saveWordTimings(String filePath, SyncedLyrics synced) async {
+    savedWords[filePath] = synced;
+  }
+
   @override
   Future<void> embedLyrics(
     String filePath, {
@@ -340,6 +348,258 @@ void main() {
     final result = await finder().findFor(_song(filePath: path));
     expect(result.verdict, LyricsFindVerdict.keptExisting);
     expect(repo.embedded, isEmpty);
+  });
+
+  group('mots rattachés au fichier', () {
+    LyricWord w(int startMs, int durationMs, String text) => LyricWord(
+      start: Duration(milliseconds: startMs),
+      duration: Duration(milliseconds: durationMs),
+      text: text,
+    );
+
+    test('offsets conservés, timestamps du fichier', () {
+      final file = SyncedLyrics([
+        const LyricLine(timestamp: Duration(seconds: 10), text: 'Premiere ligne'),
+        const LyricLine(timestamp: Duration(seconds: 20), text: 'Deuxieme ligne'),
+      ]);
+      final candidate = SyncedLyrics([
+        LyricLine(
+          timestamp: const Duration(seconds: 12),
+          text: 'Premiere ligne',
+          words: [w(12000, 500, 'Premiere'), w(12500, 400, 'ligne')],
+        ),
+        LyricLine(
+          timestamp: const Duration(seconds: 22),
+          text: 'Deuxieme ligne',
+          words: [w(22200, 600, 'Deuxieme'), w(22800, 400, 'ligne')],
+        ),
+      ]);
+      final attached = AiLyricsFinder.attachCandidateWords(
+        fileLyrics: file,
+        candidateLyrics: candidate,
+      );
+      expect(attached, isNotNull);
+      expect(attached!.lines[0].timestamp, const Duration(seconds: 10));
+      expect(attached.lines[0].words[0].start, const Duration(seconds: 10));
+      expect(
+        attached.lines[0].words[1].start,
+        const Duration(milliseconds: 10500),
+      );
+      expect(
+        attached.lines[1].words[0].start,
+        const Duration(milliseconds: 20200),
+      );
+      expect(
+        attached.lines[1].words[1].start,
+        const Duration(milliseconds: 20800),
+      );
+    });
+
+    test('textes différents → rien', () {
+      final file = SyncedLyrics([
+        const LyricLine(timestamp: Duration(seconds: 10), text: 'Premiere ligne'),
+        const LyricLine(timestamp: Duration(seconds: 20), text: 'Deuxieme ligne'),
+      ]);
+      final candidate = SyncedLyrics([
+        LyricLine(
+          timestamp: const Duration(seconds: 12),
+          text: 'Autre texte',
+          words: [w(12000, 500, 'Autre'), w(12500, 400, 'texte')],
+        ),
+        LyricLine(
+          timestamp: const Duration(seconds: 22),
+          text: 'Encore autre',
+          words: [w(22000, 500, 'Encore'), w(22500, 400, 'autre')],
+        ),
+      ]);
+      expect(
+        AiLyricsFinder.attachCandidateWords(
+          fileLyrics: file,
+          candidateLyrics: candidate,
+        ),
+        isNull,
+      );
+    });
+
+    test('lignes répétées : appariement dans l\'ordre', () {
+      final file = SyncedLyrics([
+        const LyricLine(timestamp: Duration(seconds: 10), text: 'Yeah'),
+        const LyricLine(timestamp: Duration(seconds: 20), text: 'Yeah'),
+        const LyricLine(timestamp: Duration(seconds: 30), text: 'Yeah'),
+      ]);
+      final candidate = SyncedLyrics([
+        LyricLine(
+          timestamp: const Duration(seconds: 12),
+          text: 'Yeah',
+          words: [w(12100, 400, 'Yeah')],
+        ),
+        LyricLine(
+          timestamp: const Duration(seconds: 22),
+          text: 'Yeah',
+          words: [w(22300, 400, 'Yeah')],
+        ),
+        LyricLine(
+          timestamp: const Duration(seconds: 32),
+          text: 'Yeah',
+          words: [w(32500, 400, 'Yeah')],
+        ),
+      ]);
+      final attached = AiLyricsFinder.attachCandidateWords(
+        fileLyrics: file,
+        candidateLyrics: candidate,
+      );
+      expect(attached, isNotNull);
+      expect(
+        attached!.lines.map((l) => l.words.single.start),
+        [
+          const Duration(milliseconds: 10100),
+          const Duration(milliseconds: 20300),
+          const Duration(milliseconds: 30500),
+        ],
+      );
+    });
+
+    test('mot trop en avance : la ligne perd ses mots, les autres non', () {
+      final file = SyncedLyrics([
+        const LyricLine(timestamp: Duration(seconds: 10), text: 'Premiere ligne'),
+        const LyricLine(timestamp: Duration(seconds: 20), text: 'Deuxieme ligne'),
+      ]);
+      final candidate = SyncedLyrics([
+        LyricLine(
+          timestamp: const Duration(seconds: 12),
+          text: 'Premiere ligne',
+          // 1 s avant sa ligne : nettement trop tôt, ligne abandonnée.
+          words: [w(11000, 500, 'Premiere'), w(12500, 400, 'ligne')],
+        ),
+        LyricLine(
+          timestamp: const Duration(seconds: 22),
+          text: 'Deuxieme ligne',
+          words: [w(22200, 600, 'Deuxieme'), w(22800, 400, 'ligne')],
+        ),
+      ]);
+      final attached = AiLyricsFinder.attachCandidateWords(
+        fileLyrics: file,
+        candidateLyrics: candidate,
+      );
+      expect(attached, isNotNull);
+      expect(attached!.lines[0].words, isEmpty);
+      expect(attached.lines[1].words, hasLength(2));
+    });
+
+    test('mot après la fin de sa ligne : la ligne perd ses mots', () {
+      final file = SyncedLyrics([
+        const LyricLine(timestamp: Duration(seconds: 10), text: 'Premiere ligne'),
+        const LyricLine(timestamp: Duration(seconds: 12), text: 'Deuxieme ligne'),
+      ]);
+      final candidate = SyncedLyrics([
+        LyricLine(
+          timestamp: const Duration(seconds: 12),
+          text: 'Premiere ligne',
+          // 2,5 s dans une ligne de 2 s : nettement trop tard.
+          words: [w(14500, 500, 'Premiere')],
+        ),
+        LyricLine(
+          timestamp: const Duration(seconds: 14),
+          text: 'Deuxieme ligne',
+          words: [w(14200, 600, 'Deuxieme'), w(14800, 400, 'ligne')],
+        ),
+      ]);
+      final attached = AiLyricsFinder.attachCandidateWords(
+        fileLyrics: file,
+        candidateLyrics: candidate,
+      );
+      expect(attached, isNotNull);
+      expect(attached!.lines[0].words, isEmpty);
+      expect(attached.lines[1].words, hasLength(2));
+    });
+
+    test('fichier déjà mot à mot, ou candidat sans mots → rien', () {
+      final withWords = SyncedLyrics([
+        LyricLine(
+          timestamp: const Duration(seconds: 10),
+          text: 'Premiere ligne',
+          words: [w(10000, 500, 'Premiere')],
+        ),
+      ]);
+      final withoutWords = SyncedLyrics([
+        const LyricLine(timestamp: Duration(seconds: 12), text: 'Premiere ligne'),
+      ]);
+      final candidate = SyncedLyrics([
+        LyricLine(
+          timestamp: const Duration(seconds: 12),
+          text: 'Premiere ligne',
+          words: [w(12000, 500, 'Premiere'), w(12500, 400, 'ligne')],
+        ),
+      ]);
+      expect(
+        AiLyricsFinder.attachCandidateWords(
+          fileLyrics: withWords,
+          candidateLyrics: candidate,
+        ),
+        isNull,
+      );
+      expect(
+        AiLyricsFinder.attachCandidateWords(
+          fileLyrics: withoutWords,
+          candidateLyrics: withoutWords,
+        ),
+        isNull,
+      );
+    });
+
+    test('fichier calé sans mots + candidat mot à mot même texte → '
+        'mots rattachés, fichier intact', () async {
+      final path = await realFile('1.mp3');
+      repo.files[path] = (
+        synced: SyncedLyrics([
+          const LyricLine(timestamp: Duration(seconds: 1), text: 'Vraies paroles'),
+        ]),
+        unsynced: null,
+      );
+      repo.fallback = [_hit(trackId: 7, wordTimed: true)];
+      final result = await finder().findFor(_song(filePath: path));
+      expect(result.verdict, LyricsFindVerdict.keptExisting);
+      expect(result.wordsAttached, isTrue);
+      expect(repo.embedded, isEmpty);
+      expect(repo.savedWords[path], isNotNull);
+      expect(repo.savedWords[path]!.lines.first.words, hasLength(1));
+      expect(
+        repo.savedWords[path]!.lines.first.words.first.start,
+        const Duration(seconds: 1),
+      );
+      expect(changed, [path]);
+    });
+
+    test('textes différents → pas de rattachement, réécriture existante',
+        () async {
+      final path = await realFile('1.mp3');
+      repo.files[path] = (
+        synced: SyncedLyrics([
+          const LyricLine(timestamp: Duration(seconds: 1), text: 'Fausses'),
+        ]),
+        unsynced: null,
+      );
+      repo.fallback = [_hit(trackId: 7, wordTimed: true)];
+      final result = await finder().findFor(_song(filePath: path));
+      expect(result.wordsAttached, isFalse);
+      expect(repo.savedWords, isEmpty);
+      expect(result.verdict, LyricsFindVerdict.integrated);
+    });
+
+    test('dryRun → mots rattachables signalés, rien de sauvé', () async {
+      final path = await realFile('1.mp3');
+      repo.files[path] = (
+        synced: SyncedLyrics([
+          const LyricLine(timestamp: Duration(seconds: 1), text: 'Vraies paroles'),
+        ]),
+        unsynced: null,
+      );
+      repo.fallback = [_hit(trackId: 7, wordTimed: true)];
+      final result = await finder().findFor(_song(filePath: path), dryRun: true);
+      expect(result.wordsAttached, isTrue);
+      expect(repo.savedWords, isEmpty);
+      expect(changed, isEmpty);
+    });
   });
 
   group('verifyFor', () {
