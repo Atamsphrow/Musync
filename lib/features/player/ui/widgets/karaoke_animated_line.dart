@@ -66,13 +66,21 @@ class AnimatedKaraokeLine extends ConsumerWidget {
 
 /// Part (0..1) de la couleur chantée dans le ton de la partie « pas
 /// encore balayée » du mot courant : entre le dim (0) et le chanté (1).
-const double karaokeSweepBaseMix = 0.7;
+///
+/// 0 depuis le 2026-11-16 (décision utilisateur : balayage pur) : la
+/// partie pas encore balayée est en dim complet, comme les mots non
+/// chantés. Avant, 0,7 pré-éclairait le mot entier dès son début — le
+/// mot s'allumait d'un coup en moins clair, puis le balayage le
+/// suivait pour bien l'éclairer : on voyait mot à mot + balayage en
+/// même temps. À 0, seules les lettres balayées s'allument, en pleine
+/// couleur chantée : le contraste est maximal quelle que soit la
+/// longueur du mot, court ou long.
+const double karaokeSweepBaseMix = 0.0;
 
-/// Le style de la partie non encore balayée du mot courant : un ton
-/// intermédiaire entre [unsung] et [sung], plus lumineux que le dim
-/// complet. Sans cela, au début d'un mot (fraction ~0) le mot courant
-/// s'affichait presque entièrement en dim — plus terne que les mots déjà
-/// chantés. Garde la graisse de [sung], comme le mot balayé.
+/// Le style de la partie non encore balayée du mot courant : à 0, le dim
+/// complet (couleur de [unsung]). Garde la graisse de [sung], comme le
+/// mot balayé — les deux copies du mot doivent avoir la même largeur,
+/// sinon le clip dérive.
 @visibleForTesting
 TextStyle sweepBaseStyle(TextStyle sung, TextStyle unsung) => sung.copyWith(
   color: Color.lerp(unsung.color, sung.color, karaokeSweepBaseMix),
