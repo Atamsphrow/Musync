@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:musync/core/utils/snackbar.dart';
 import 'package:flutter/services.dart';
@@ -40,11 +42,18 @@ class SyncEditorScreen extends ConsumerStatefulWidget {
   /// without having to find it manually.
   final int? initialLineIndex;
 
+  /// First line this window shows, when it opens as a second window from
+  /// a line's overflow menu ("Synchroniser à partir d'ici"). The earlier
+  /// lines are hidden, not dropped: the editor still owns the whole lyric
+  /// and saves it whole. Null shows the full list.
+  final int? fromLineIndex;
+
   const SyncEditorScreen({
     super.key,
     required this.song,
     this.initialMode,
     this.initialLineIndex,
+    this.fromLineIndex,
   });
 
   @override
@@ -74,6 +83,11 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
   /// user can fix it without scrolling through the whole song first.
   bool _initialLineApplied = false;
 
+  /// Applied once, after the file has been read. A filtered window opens
+  /// on its first shown line: the stamp button ("Caler") must land there,
+  /// not on the first line of the song, which is hidden.
+  bool _fromLineApplied = false;
+
   @override
   void dispose() {
     _scrollController.dispose();
@@ -83,9 +97,24 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
   SyncEditorNotifier get _editor =>
       ref.read(syncEditorProvider(widget.song).notifier);
 
+  /// First visible row in this window: 0 for the full list, the requested
+  /// line for a filtered window. Clamped to what the file actually holds,
+  /// so deleting shown lines can never point it past the end.
+  int _fromLine() {
+    final lines = ref.read(syncEditorProvider(widget.song)).lines;
+    if (lines.isEmpty) return 0;
+    return (widget.fromLineIndex ?? 0).clamp(0, lines.length - 1);
+  }
+
   void _scrollToCursor(int cursor) {
     if (_lastScrolledTo == cursor || !_scrollController.hasClients) return;
     _lastScrolledTo = cursor;
+
+    // In a filtered window the visible rows start at [_fromLine]: row 0 is
+    // that line, not the first line of the song. A cursor above the filter
+    // has no visible row, so there is nothing to scroll to.
+    final row = cursor - _fromLine();
+    if (row < 0) return;
 
     final viewport = _scrollController.position.viewportDimension;
     // `_listPadding` is the list's leading inset, so row `cursor` starts there
@@ -95,7 +124,7 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
     // wrong, and the two views should not disagree about how centring works.
     final target =
         _listPadding +
-        (cursor * _rowExtent) +
+        (row * _rowExtent) +
         (_rowExtent / 2) -
         (viewport / 2);
     _scrollController.animateTo(
@@ -233,6 +262,18 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
       });
     }
 
+    final fromLine = widget.fromLineIndex;
+    if (!state.isLoading &&
+        !_fromLineApplied &&
+        fromLine != null &&
+        fromLine >= 0 &&
+        fromLine < state.lines.length) {
+      _fromLineApplied = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _editor.setCursor(fromLine);
+      });
+    }
+
     if (state.mode == SyncMode.synced) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _scrollToCursor(state.cursor);
@@ -366,12 +407,25 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
   ) {
     if (state.isEmpty) return const _NoLyrics();
 
+    // A filtered window shows only this line and the ones after it. The
+    // indices the tiles report stay the full-list ones — the provider, the
+    // cursor and the save all work on the whole lyric, so only the display
+    // is cut, never the song.
+    final from = _fromLine();
+    final count = state.lines.length - from;
+    if (count <= 0) {
+      return const Center(
+        child: Text('Plus de lignes à partir d\'ici.'),
+      );
+    }
+
     return ListView.builder(
       controller: _scrollController,
-      itemCount: state.lines.length,
+      itemCount: count,
       itemExtent: _rowExtent,
       padding: const EdgeInsets.symmetric(vertical: _listPadding),
-      itemBuilder: (context, index) {
+      itemBuilder: (context, i) {
+        final index = from + i;
         return LyricLineTile(
           line: state.lines[index],
           isPlaying:
@@ -396,6 +450,16 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
         );
       },
     );
+  }
+
+  /// Plays from this line's timestamp, so a nudge can be heard instead of
+  /// guessed at. A line with no timestamp has nothing to play from — the
+  /// menu disables the entry, so this is only a guard.
+  void _playFromHere(int index, SyncEditorState state) {
+    final timestamp = state.lines[index].timestamp;
+    if (timestamp == null) return;
+    final service = ref.read(audioPlayerServiceProvider);
+    unawaited(service.seekTo(timestamp).then((_) => service.play()));
   }
 
   void _handleAction(LyricLineAction action, int index, SyncEditorState state) {
@@ -425,6 +489,21 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
         _editor.insertLineAfter(index);
       case LyricLineAction.delete:
         _editor.removeLine(index);
+      case LyricLineAction.playFromHere:
+        _playFromHere(index, state);
+      case LyricLineAction.syncFromHere:
+        // A second window on the same song: it shares the editor state,
+        // so edits land in the same lyric and saving still writes it
+        // whole. MaterialPageRoute is what the router builds too.
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => SyncEditorScreen(
+              song: widget.song,
+              initialMode: SyncMode.synced,
+              fromLineIndex: index,
+            ),
+          ),
+        );
     }
   }
 
