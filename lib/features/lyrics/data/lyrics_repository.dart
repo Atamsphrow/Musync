@@ -454,6 +454,14 @@ class LyricsRepository {
     }
   }
 
+  /// Sauve les mots d'une paroles déjà dans le fichier, sans toucher au
+  /// fichier : les mots vivent dans le store, les lignes du fichier ne
+  /// bougent pas. Sans store (tests de recherche seule), ne fait rien.
+  Future<void> saveWordTimings(String filePath, SyncedLyrics synced) async {
+    await _wordTimingsStore?.saveWords(filePath, synced);
+    await _wordTimingsStore?.save();
+  }
+
   Future<LyricsPair> readLyrics(String filePath) =>
       Id3Reader.readLyrics(filePath);
 }
