@@ -17,6 +17,7 @@ library;
 
 import 'dart:typed_data';
 
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:on_audio_query/on_audio_query.dart';
 
@@ -60,6 +61,10 @@ class ArtworkBytesCache {
   Future<Uint8List?> load(Song song) {
     final existing = _pending[song.id];
     if (existing != null) return existing;
+    // Chrono « Perf » : une requête n'a lieu que sur un cache froid
+    // (réouverture après plus de 40 morceaux, ou pochette modifiée). Une
+    // ligne ici à la réouverture dit que le cache n'a pas servi.
+    final sw = Stopwatch()..start();
     final future = _query
         .queryArtwork(
           song.id,
@@ -70,6 +75,11 @@ class ArtworkBytesCache {
         .then((bytes) {
           _resolved[song.id] = bytes;
           _trimResolved();
+          DebugLog.instance.info(
+            'Perf',
+            'pochette (morceau ${song.id}) : requête MediaStore '
+            '${sw.elapsedMilliseconds}ms, ${bytes?.length ?? 0} o',
+          );
           return bytes;
         })
         .onError((_, _) {
