@@ -66,6 +66,12 @@ class SongRouteArgs {
   /// screen is the entry point. Null when the editor is reached any other way.
   final int? initialLineIndex;
 
+  /// First line the sync editor shows, when it opens as a second window
+  /// from a line's overflow menu ("Synchroniser à partir d'ici"). The
+  /// earlier lines are hidden, not dropped: the editor still owns the
+  /// whole lyric and saves it whole. Null shows the full list.
+  final int? fromLineIndex;
+
   /// Requête pré-remplie pour l'écran de recherche de paroles (venue du
   /// vérificateur ou de l'assistant IA) : elle prime sur les tags.
   final String? initialTitle;
@@ -79,6 +85,7 @@ class SongRouteArgs {
     this.index,
     this.editorMode,
     this.initialLineIndex,
+    this.fromLineIndex,
     this.initialTitle,
     this.initialArtist,
   });
@@ -164,6 +171,7 @@ class AppRouter {
               song: args.song,
               initialMode: args.editorMode,
               initialLineIndex: args.initialLineIndex,
+              fromLineIndex: args.fromLineIndex,
             ),
           );
         }
