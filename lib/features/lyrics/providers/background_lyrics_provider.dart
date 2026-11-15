@@ -270,6 +270,9 @@ class BackgroundLyricsService {
 
     final written = await _searchAndWrite(song);
     if (written == null) return;
+    // Seuls les mots ont été rattachés : les paroles étaient déjà là,
+    // rien à annoncer.
+    if (written.wordsAttached) return;
     if (_ref.read(currentSongProvider)?.filePath != song.filePath) return;
 
     appMessengerKey.currentState?.showOnly(
@@ -385,7 +388,9 @@ class BackgroundLyricsService {
         onConfirmedMiss: () => confirmedMiss = true,
       );
       if (outcome != null) {
-        written++;
+        // Un rattachement de mots n'est pas une parole ajoutée : il ne
+        // compte pas dans le total du balayage.
+        if (!outcome.wordsAttached) written++;
       } else if (confirmedMiss) {
         await _sweepMemory.markMissed(
           song.filePath,
@@ -418,8 +423,11 @@ class BackgroundLyricsService {
   /// behind the undo is what puts the write in Settings › Historique.
   /// [onConfirmedMiss] fires only on a confirmed absence: searches ran
   /// on a good-quality query and found nothing — never on a network
-  /// failure or an unresolvable query.
-  Future<({bool canUndo, bool synced})?> _searchAndWrite(
+  /// failure or an unresolvable query. A words-only attach counts as a
+  /// result (so the prefetch marks the track attempted) with no undo —
+  /// the file was never written.
+  Future<({bool canUndo, bool synced, bool wordsAttached})?>
+  _searchAndWrite(
     Song song, {
     bool aiFallback = true,
     void Function()? onConfirmedMiss,
@@ -434,10 +442,18 @@ class BackgroundLyricsService {
         !result.searchesFailed) {
       onConfirmedMiss?.call();
     }
-    if (result.verdict != LyricsFindVerdict.integrated) return null;
+    if (result.verdict != LyricsFindVerdict.integrated &&
+        !result.wordsAttached) {
+      return null;
+    }
     // The finder only writes when the backup succeeded, so an undo is
-    // always available for a write it made.
-    return (canUndo: true, synced: result.best?.hasSyncedLyrics ?? false);
+    // always available for a write it made. A words-only attach never
+    // wrote the file: no undo.
+    return (
+      canUndo: result.verdict == LyricsFindVerdict.integrated,
+      synced: result.best?.hasSyncedLyrics ?? false,
+      wordsAttached: result.wordsAttached,
+    );
   }
 
   /// Vrai quand un morceau synchronisé peut être sauté : ses paroles
