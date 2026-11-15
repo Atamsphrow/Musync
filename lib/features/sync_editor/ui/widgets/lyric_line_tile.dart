@@ -28,6 +28,17 @@ enum LyricLineAction {
   nudgeFromBack,
   nudgeFromForward,
 
+  /// Seek to this line and play from there, so a nudge can be heard
+  /// instead of guessed at: the ear decides whether the line lands on
+  /// the voice. Disabled for a line with no timestamp.
+  playFromHere,
+
+  /// Open a second synchronisation window showing only this line and the
+  /// ones after it — for timing the end of a track without scrolling
+  /// through the part that is already right. The editor still owns the
+  /// whole lyric; the earlier lines are hidden, not dropped.
+  syncFromHere,
+
   /// Put the line back to un-timed and move the cursor onto it, ready for the
   /// next tap of *Caler*.
   retime,
@@ -148,6 +159,29 @@ class LyricLineTile extends StatelessWidget {
                     forwardAction: LyricLineAction.nudgeFromForward,
                     backTooltip: _nudgeFromBackLabel,
                     forwardTooltip: _nudgeFromForwardLabel,
+                  ),
+                  PopupMenuItem(
+                    value: LyricLineAction.playFromHere,
+                    enabled: line.timestamp != null,
+                    child: ListTile(
+                      leading: Icon(Icons.play_arrow),
+                      title: Text('Écouter à partir d\'ici'),
+                      subtitle: Text('Lecture depuis cette ligne'),
+                      contentPadding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: LyricLineAction.syncFromHere,
+                    child: ListTile(
+                      leading: Icon(Icons.playlist_play),
+                      title: Text('Synchroniser à partir d\'ici'),
+                      subtitle: Text(
+                        'Ne montre que cette ligne et les suivantes',
+                      ),
+                      contentPadding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                    ),
                   ),
                   PopupMenuDivider(),
                   PopupMenuItem(
