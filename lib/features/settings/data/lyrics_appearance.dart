@@ -23,6 +23,12 @@ enum LyricsFontStyle { normal, stylized }
 /// Active-line color: plain white, or follow the Material You dynamic color.
 enum LyricsColorMode { white, materialYou }
 
+/// How the current line is animated when the karaoke mode is on:
+/// [sweep] lights each word progressively (ClipRect sweep, word lift,
+/// held-word letters), [instant] lights each word whole the moment it
+/// starts. Off means no word animation at all — the line lights up whole.
+enum KaraokeAnimationStyle { sweep, instant }
+
 @immutable
 class LyricsAppearance {
   final LyricsFontSize fontSize;
@@ -39,10 +45,14 @@ class LyricsAppearance {
   /// appears where it exists, which is rare.
   final bool showRomanization;
 
-  /// The advanced karaoke animations (sweep, word lift, held-word
-  /// letters) in « Lecture en cours ». Off by default — the user asked
-  /// for an option to enable them or leave the view as it is.
+  /// The karaoke mode in « Lecture en cours ». Off by default: the current
+  /// line lights up whole, line by line, with no word animation. On, the
+  /// words light up one by one — see [karaokeAnimationStyle] for how.
   final bool karaokeAnimations;
+
+  /// Which word animation the karaoke mode uses. Only read when
+  /// [karaokeAnimations] is on.
+  final KaraokeAnimationStyle karaokeAnimationStyle;
 
   const LyricsAppearance({
     this.fontSize = LyricsFontSize.medium,
@@ -53,6 +63,7 @@ class LyricsAppearance {
     this.bubbleColorMode = LyricsColorMode.white,
     this.showRomanization = true,
     this.karaokeAnimations = false,
+    this.karaokeAnimationStyle = KaraokeAnimationStyle.sweep,
   });
 
   /// Font scale applied on top of the theme size and the system text scale.
@@ -71,6 +82,7 @@ class LyricsAppearance {
     LyricsColorMode? bubbleColorMode,
     bool? showRomanization,
     bool? karaokeAnimations,
+    KaraokeAnimationStyle? karaokeAnimationStyle,
   }) => LyricsAppearance(
     fontSize: fontSize ?? this.fontSize,
     textAlign: textAlign ?? this.textAlign,
@@ -80,6 +92,8 @@ class LyricsAppearance {
     bubbleColorMode: bubbleColorMode ?? this.bubbleColorMode,
     showRomanization: showRomanization ?? this.showRomanization,
     karaokeAnimations: karaokeAnimations ?? this.karaokeAnimations,
+    karaokeAnimationStyle:
+        karaokeAnimationStyle ?? this.karaokeAnimationStyle,
   );
 
   // Value equality, like LyricsSourceConfig and PlaybackSettings: the
@@ -97,7 +111,8 @@ class LyricsAppearance {
           other.colorMode == colorMode &&
           other.bubbleColorMode == bubbleColorMode &&
           other.showRomanization == showRomanization &&
-          other.karaokeAnimations == karaokeAnimations;
+          other.karaokeAnimations == karaokeAnimations &&
+          other.karaokeAnimationStyle == karaokeAnimationStyle;
 
   @override
   int get hashCode => Object.hash(
@@ -109,6 +124,7 @@ class LyricsAppearance {
     bubbleColorMode,
     showRomanization,
     karaokeAnimations,
+    karaokeAnimationStyle,
   );
 
   Map<String, Object?> toJson() => {
@@ -120,6 +136,7 @@ class LyricsAppearance {
     'bubbleColorMode': bubbleColorMode.name,
     'showRomanization': showRomanization,
     'karaokeAnimations': karaokeAnimations,
+    'karaokeAnimationStyle': karaokeAnimationStyle.name,
   };
 
   static T _enumOf<T>(List<T> values, Object? raw, T fallback) {
@@ -167,6 +184,11 @@ class LyricsAppearance {
       karaokeAnimations: m['karaokeAnimations'] is bool
           ? m['karaokeAnimations'] as bool
           : false,
+      karaokeAnimationStyle: _enumOf(
+        KaraokeAnimationStyle.values,
+        m['karaokeAnimationStyle'],
+        KaraokeAnimationStyle.sweep,
+      ),
     );
   }
 }
