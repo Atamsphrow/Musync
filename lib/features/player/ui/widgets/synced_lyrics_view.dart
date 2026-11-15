@@ -16,6 +16,12 @@ import 'package:musync/features/library/data/models/song.dart';
 /// the classic karaoke sweep. A [wordIndex] of -1 means "none sung yet",
 /// so a line that is not current renders all its words unsung.
 ///
+/// Un mot est une UNITÉ (`karaokeWordUnits`) : les fragments collés
+/// (« Per » « co » « cet ») sont rendus en un seul span « Percocet » qui
+/// s'allume d'un bloc dès que son premier fragment est atteint, et un tap
+/// dessus cherche le début de l'unité. Une ligne à un fragment par mot
+/// se rend exactement comme avant.
+///
 /// Spaces between words take the style of the word before them; they carry
 /// no glyph, so the choice is invisible either way. The styles are explicit
 /// on every span, so a word change switches instantly — the 120 ms
@@ -36,28 +42,26 @@ List<TextSpan> karaokeWordSpans({
   void Function(Duration position)? onWordTap,
 }) {
   final spans = <TextSpan>[];
-  final seps = karaokeWordSeparators(line);
-  for (var i = 0; i < line.words.length; i++) {
-    if (i > 0) {
-      final sep = seps == null ? ' ' : seps[i - 1];
-      if (sep.isNotEmpty) {
-        spans.add(
-          TextSpan(
-            text: sep,
-            style: i - 1 <= wordIndex ? sungStyle : unsungStyle,
-            recognizer: onWordTap == null
-                ? null
-                : (TapGestureRecognizer()
-                  ..onTap = () => onWordTap(line.words[i - 1].start)),
-          ),
-        );
-      }
+  final units = karaokeWordUnits(line);
+  for (var k = 0; k < units.length; k++) {
+    final unit = units[k];
+    if (k > 0 && unit.separatorBefore.isNotEmpty) {
+      final previous = units[k - 1];
+      spans.add(
+        TextSpan(
+          text: unit.separatorBefore,
+          style: previous.firstIndex <= wordIndex ? sungStyle : unsungStyle,
+          recognizer: onWordTap == null
+              ? null
+              : (TapGestureRecognizer()
+                ..onTap = () => onWordTap(previous.start)),
+        ),
+      );
     }
-    final word = line.words[i];
-    var style = i <= wordIndex ? sungStyle : unsungStyle;
+    var style = unit.firstIndex <= wordIndex ? sungStyle : unsungStyle;
     // A backing vocal word, sung under the lead line: dimmed and
     // slanted, so the eye reads it as a choir, not as the lead.
-    if (word.isBackground) {
+    if (unit.isBackground) {
       style = style.copyWith(
         color: style.color?.withValues(alpha: 0.6),
         fontStyle: FontStyle.italic,
@@ -65,12 +69,11 @@ List<TextSpan> karaokeWordSpans({
     }
     spans.add(
       TextSpan(
-        text: word.text,
+        text: unit.text,
         style: style,
         recognizer: onWordTap == null
             ? null
-            : (TapGestureRecognizer()
-              ..onTap = () => onWordTap(word.start)),
+            : (TapGestureRecognizer()..onTap = () => onWordTap(unit.start)),
       ),
     );
   }
