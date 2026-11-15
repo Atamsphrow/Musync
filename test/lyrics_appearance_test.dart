@@ -56,6 +56,38 @@ void main() {
       expect(LyricsAppearance.fromJson('nope'), const LyricsAppearance());
     });
 
+    test('karaoke defaults: off, balayage', () {
+      const a = LyricsAppearance();
+      expect(a.karaokeAnimations, isFalse);
+      expect(a.karaokeAnimationStyle, KaraokeAnimationStyle.sweep);
+    });
+
+    test('karaoke style round-trips through JSON', () {
+      const a = LyricsAppearance(
+        karaokeAnimations: true,
+        karaokeAnimationStyle: KaraokeAnimationStyle.instant,
+      );
+      final b = LyricsAppearance.fromJson(a.toJson());
+      expect(b.karaokeAnimations, isTrue);
+      expect(b.karaokeAnimationStyle, KaraokeAnimationStyle.instant);
+    });
+
+    test('bad karaoke style falls back to balayage', () {
+      final a = LyricsAppearance.fromJson({'karaokeAnimationStyle': 'vite'});
+      expect(a.karaokeAnimationStyle, KaraokeAnimationStyle.sweep);
+    });
+
+    test('copyWith can switch the karaoke style', () {
+      const a = LyricsAppearance();
+      final b = a.copyWith(
+        karaokeAnimations: true,
+        karaokeAnimationStyle: KaraokeAnimationStyle.instant,
+      );
+      expect(b, isNot(a));
+      expect(b.karaokeAnimationStyle, KaraokeAnimationStyle.instant);
+      expect(b.copyWith(), b);
+    });
+
     test('bubble color is independent from the player color', () {
       const a = LyricsAppearance(
         colorMode: LyricsColorMode.white,
