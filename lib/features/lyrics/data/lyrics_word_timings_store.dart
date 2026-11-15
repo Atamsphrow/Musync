@@ -20,8 +20,10 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/utils/atomic_file.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -53,6 +55,67 @@ String lyricsWordsHash(SyncedLyrics synced) {
   return h.toUnsigned(64).toRadixString(16);
 }
 
+/// Lit et parse le fichier du store. Top-level et synchrone : il tourne
+/// dans un isolate de fond (voir `LyricsWordTimingsStore._load`), jamais
+/// sur l'isolate principal — le fichier contient les mots de TOUS les
+/// morceaux, et sa lecture + son `jsonDecode` + la construction des
+/// entrées coûtent en proportion de sa taille.
+///
+/// Illisible = aucune parole mot à mot : le comportement d'avant, les
+/// lignes s'affichent sans karaoké.
+Map<String, _WordEntry> _chargerEntrees(String path) {
+  final loaded = <String, _WordEntry>{};
+  try {
+    final file = File(path);
+    if (file.existsSync()) {
+      final decoded = jsonDecode(file.readAsStringSync());
+      if (decoded is Map) {
+        for (final entry in decoded.entries) {
+          final parsed = _entryFromJson(entry.value);
+          if (parsed != null) loaded['${entry.key}'] = parsed;
+        }
+      }
+    }
+  } catch (_) {
+    // Voir la doc de la fonction.
+  }
+  return loaded;
+}
+
+_WordEntry? _entryFromJson(Object? raw) {
+  if (raw is! Map) return null;
+  final hash = raw['hash'];
+  final rawLines = raw['lines'];
+  if (hash is! String || rawLines is! Map) return null;
+  final lines = <int, List<LyricWord>>{};
+  for (final lineEntry in rawLines.entries) {
+    final index = int.tryParse('${lineEntry.key}');
+    final rawWords = lineEntry.value;
+    if (index == null || rawWords is! List) continue;
+    final words = <LyricWord>[];
+    for (final rawWord in rawWords) {
+      if (rawWord is! Map) continue;
+      final offsetMs = rawWord['offsetMs'];
+      final durationMs = rawWord['durationMs'];
+      final text = rawWord['text'];
+      if (offsetMs is! int || durationMs is! int || text is! String) {
+        continue;
+      }
+      words.add(
+        LyricWord(
+          start: Duration(milliseconds: offsetMs),
+          duration: Duration(milliseconds: durationMs),
+          text: text,
+          isBackground: rawWord['isBackground'] == true,
+        ),
+      );
+    }
+    if (words.isNotEmpty) lines[index] = words;
+  }
+  if (lines.isEmpty) return null;
+  return (hash: hash, lines: lines);
+}
+
 class LyricsWordTimingsStore {
   /// Overridable so tests do not need `path_provider`.
   final Directory? root;
@@ -62,6 +125,10 @@ class LyricsWordTimingsStore {
   static const String _fileName = 'lyrics_word_timings.json';
 
   Map<String, _WordEntry>? _entries; // path -> entry
+
+  /// Chargement en cours : deux lecteurs qui arrivent ensemble au premier
+  /// accès partagent la même lecture au lieu d'en lancer deux.
+  Future<Map<String, _WordEntry>>? _loading;
   bool _dirty = false;
 
   Future<File> _file() async {
@@ -69,60 +136,33 @@ class LyricsWordTimingsStore {
     return File('${dir.path}${Platform.pathSeparator}$_fileName');
   }
 
-  Future<Map<String, _WordEntry>> _load() async {
+  Future<Map<String, _WordEntry>> _load() {
     final cached = _entries;
-    if (cached != null) return cached;
-    final loaded = <String, _WordEntry>{};
-    try {
-      final file = await _file();
-      if (await file.exists()) {
-        final decoded = jsonDecode(await file.readAsString());
-        if (decoded is Map) {
-          for (final entry in decoded.entries) {
-            final parsed = _entryFromJson(entry.value);
-            if (parsed != null) loaded['${entry.key}'] = parsed;
-          }
-        }
-      }
-    } catch (_) {
-      // Illisible = aucune parole mot à mot : le comportement d'avant,
-      // les lignes s'affichent sans karaoké.
-    }
-    return _entries = loaded;
+    if (cached != null) return Future.value(cached);
+    return _loading ??= _loadFromDisk();
   }
 
-  static _WordEntry? _entryFromJson(Object? raw) {
-    if (raw is! Map) return null;
-    final hash = raw['hash'];
-    final rawLines = raw['lines'];
-    if (hash is! String || rawLines is! Map) return null;
-    final lines = <int, List<LyricWord>>{};
-    for (final lineEntry in rawLines.entries) {
-      final index = int.tryParse('${lineEntry.key}');
-      final rawWords = lineEntry.value;
-      if (index == null || rawWords is! List) continue;
-      final words = <LyricWord>[];
-      for (final rawWord in rawWords) {
-        if (rawWord is! Map) continue;
-        final offsetMs = rawWord['offsetMs'];
-        final durationMs = rawWord['durationMs'];
-        final text = rawWord['text'];
-        if (offsetMs is! int || durationMs is! int || text is! String) {
-          continue;
-        }
-        words.add(
-          LyricWord(
-            start: Duration(milliseconds: offsetMs),
-            duration: Duration(milliseconds: durationMs),
-            text: text,
-            isBackground: rawWord['isBackground'] == true,
-          ),
-        );
+  Future<Map<String, _WordEntry>> _loadFromDisk() async {
+    final sw = Stopwatch()..start();
+    Map<String, _WordEntry> loaded;
+    try {
+      final path = (await _file()).path;
+      try {
+        loaded = await compute(_chargerEntrees, path);
+      } catch (_) {
+        // Pas d'isolate de fond disponible : même travail, sur place.
+        loaded = _chargerEntrees(path);
       }
-      if (words.isNotEmpty) lines[index] = words;
+    } catch (_) {
+      loaded = <String, _WordEntry>{};
     }
-    if (lines.isEmpty) return null;
-    return (hash: hash, lines: lines);
+    DebugLog.instance.info(
+      'Perf',
+      'store mots : chargé en ${sw.elapsedMilliseconds}ms '
+      '(${loaded.length} morceau(x), lecture + parse hors UI)',
+    );
+    _loading = null;
+    return _entries = loaded;
   }
 
   /// Stores the words of [synced] for [filePath], as offsets from their
