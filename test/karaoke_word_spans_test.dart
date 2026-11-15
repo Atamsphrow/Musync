@@ -393,7 +393,9 @@ void main() {
     });
   });
 
-  test('karaokeWordSpans : « never » sans espace parasite + tap par syllabe', () {
+  // « never » est une seule unité (« nev » + « er » collés) : un seul span,
+  // et un tap dessus cherche le début de l'unité, pas du fragment.
+  test('karaokeWordSpans : « never » sans espace parasite + tap sur l\'unité', () {
     Duration? seeked;
     final spans = karaokeWordSpans(
       line: syllables, wordIndex: 1,
@@ -401,9 +403,9 @@ void main() {
       onWordTap: (p) => seeked = p,
     );
     expect(spans.map((s) => s.text).join(), 'would never try');
-    final er = spans.firstWhere((s) => s.text == 'er');
-    (er.recognizer! as TapGestureRecognizer).onTap!();
-    expect(seeked, const Duration(milliseconds: 17691));
+    final never = spans.firstWhere((s) => s.text == 'never');
+    (never.recognizer! as TapGestureRecognizer).onTap!();
+    expect(seeked, const Duration(milliseconds: 17397));
   });
 
 
@@ -443,28 +445,25 @@ void main() {
       expect(spans[3].text, ' ');
     });
 
-    test('tap par syllabe : « nev » et « er » cherchent à leur début', () {
+    // Une unité = un seul span : « nev » et « er » ne sont plus
+    // tapables séparément, le tap sur « never » cherche son début.
+    test('tap sur l\'unité : « never » cherche à son début', () {
       final tapped = <Duration>[];
       final spans = plainSpans(line: syllables, onWordTap: tapped.add);
-      final nev = spans.firstWhere((s) => s.text == 'nev');
-      final er = spans.firstWhere((s) => s.text == 'er');
-      (nev.recognizer! as TapGestureRecognizer).onTap!();
-      (er.recognizer! as TapGestureRecognizer).onTap!();
-      expect(tapped, [
-        const Duration(milliseconds: 17397),
-        const Duration(milliseconds: 17691),
-      ]);
+      final never = spans.firstWhere((s) => s.text == 'never');
+      (never.recognizer! as TapGestureRecognizer).onTap!();
+      expect(tapped, [const Duration(milliseconds: 17397)]);
     });
 
     test('tap sur un espace : début du mot précédent', () {
       final tapped = <Duration>[];
       final spans = plainSpans(line: syllables, onWordTap: tapped.add);
-      // spans : would, ' ', nev, er, ' ', try
+      // spans : would, ' ', never, ' ', try
       (spans[1].recognizer! as TapGestureRecognizer).onTap!();
-      (spans[4].recognizer! as TapGestureRecognizer).onTap!();
+      (spans[3].recognizer! as TapGestureRecognizer).onTap!();
       expect(tapped, [
         const Duration(milliseconds: 17055),
-        const Duration(milliseconds: 17691),
+        const Duration(milliseconds: 17397),
       ]);
     });
 
@@ -477,13 +476,14 @@ void main() {
         unsungStyle: unsung,
         onWordTap: (_) {},
       );
-      // 'would' vient de finir (retombe encore) et 'nev' est chanté :
-      // les deux sont des WidgetSpan ; 'er' et 'try' restent du texte.
+      // 'would' vient de finir (retombe encore) et 'never' est chanté :
+      // les deux sont des WidgetSpan ; 'er' fait partie de l'unité
+      // 'never', 'try' reste du texte.
       expect(spans[2], isA<WidgetSpan>());
       expect(spans.whereType<WidgetSpan>(), hasLength(2));
       expect(
         spans.whereType<TextSpan>().map((s) => s.text).join(),
-        ' er try',
+        '  try',
       );
     });
   });
