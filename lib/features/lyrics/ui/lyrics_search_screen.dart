@@ -6,6 +6,7 @@ import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
+import 'package:musync/features/lyrics/data/search_variants.dart';
 import 'package:musync/features/lyrics/providers/search_provider.dart';
 import 'package:musync/features/lyrics/data/lyrics_align.dart';
 import 'package:musync/features/lyrics/ui/embed_lyrics_action.dart';
@@ -80,6 +81,19 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
   /// True while a model is being asked. It can take a few seconds, and a
   /// button that looks idle invites a second press.
   bool _guessing = false;
+
+  /// Incrémenté à chaque recherche lancée « pour de vrai » (écran ouvert,
+  /// Rechercher, Entrée, Réessayer). La cascade du 2e essai se souvient de
+  /// la valeur de départ et s'arrête dès qu'elle change : une recherche
+  /// relancée par l'utilisateur ne doit jamais être suivie d'une variante
+  /// de l'ancienne cascade. Les variantes elles-mêmes ne l'incrémentent pas.
+  int _cascadeEpoch = 0;
+
+  /// Attente maximale d'une variante de la cascade, toutes sources
+  /// confondues. Les fournisseurs retentent en interne (12 s + 1 s + 12 s) :
+  /// sans plafond, une variante qui échoue coûte 25 s. Les sources courant
+  /// en parallèle, le pire cas mural d'une variante est ce plafond.
+  static const Duration _variantMaxWait = Duration(seconds: 12);
 
   @override
   void initState() {
@@ -208,7 +222,22 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
 
   /// Lance la recherche des champs courants. Le Future rendu se termine
   /// quand la recherche — et son éventuel 2e essai automatique — est finie.
-  Future<void> _search({bool autoRetry = true, bool explicit = false}) {
+  ///
+  /// [prefill] : remplace les champs encore à leur valeur d'origine par ce
+  /// que dit le nom du fichier. Coupé pour les variantes de la cascade, dont
+  /// les champs sont déjà ce qu'on veut chercher — sans quoi une variante
+  /// égale aux tags d'origine serait réécrite par l'heuristique.
+  ///
+  /// [maxWait] : plafond d'attente de cette recherche (voir
+  /// [performLyricsSearch]). Null pour la 1re recherche.
+  Future<void> _search({
+    bool autoRetry = true,
+    bool explicit = false,
+    bool prefill = true,
+    Duration? maxWait,
+  }) {
+    if (autoRetry) _cascadeEpoch++;
+    final epoch = _cascadeEpoch;
     // Assurer l'artiste et le titre AVANT de chercher : le nom du fichier
     // dit souvent mieux que les tags qui est l'artiste et quel est le titre
     // (artiste « Unknown », titre = nom du fichier entier). L'heuristique
@@ -216,23 +245,25 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
     // (heuristique puis IA) reste sur le bouton Deviner et sur le 2e essai
     // automatique. Seuls les champs encore à leur valeur d'origine sont
     // remplacés : une correction tapée à la main n'est jamais écrasée.
-    final filenameGuess = FilenameParser.parse(widget.song.filePath);
-    if (filenameGuess.title.isNotEmpty ||
-        filenameGuess.artist.isNotEmpty) {
-      var changed = false;
-      if (_titleController.text == _initialTitle &&
-          filenameGuess.title.isNotEmpty &&
-          filenameGuess.title != _titleController.text) {
-        _titleController.text = filenameGuess.title;
-        changed = true;
+    if (prefill) {
+      final filenameGuess = FilenameParser.parse(widget.song.filePath);
+      if (filenameGuess.title.isNotEmpty ||
+          filenameGuess.artist.isNotEmpty) {
+        var changed = false;
+        if (_titleController.text == _initialTitle &&
+            filenameGuess.title.isNotEmpty &&
+            filenameGuess.title != _titleController.text) {
+          _titleController.text = filenameGuess.title;
+          changed = true;
+        }
+        if (_artistController.text == _initialArtist &&
+            filenameGuess.artist.isNotEmpty &&
+            filenameGuess.artist != _artistController.text) {
+          _artistController.text = filenameGuess.artist;
+          changed = true;
+        }
+        if (changed) setState(() {});
       }
-      if (_artistController.text == _initialArtist &&
-          filenameGuess.artist.isNotEmpty &&
-          filenameGuess.artist != _artistController.text) {
-        _artistController.text = filenameGuess.artist;
-        changed = true;
-      }
-      if (changed) setState(() {});
     }
     final title = _titleController.text;
     final artist = _artistController.text;
@@ -243,8 +274,9 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
       album: widget.song.album,
       durationMs: widget.song.duration,
       explicit: explicit,
+      maxWait: maxWait,
     ).then((_) async {
-      if (mounted && autoRetry) await _autoRetryWithGuess(title, artist);
+      if (mounted && autoRetry) await _autoRetryWithGuess(title, artist, epoch);
     });
   }
 
@@ -262,17 +294,33 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
   /// 2e essai automatique : quand la recherche ne donne rien — ou ne donne
   /// aucune parole synchronisée, typiquement un fournisseur flou qui trouve
   /// du texte brut pendant que les fournisseurs exacts restent vides —,
-  /// Deviner Artiste/Titre (heuristique puis IA) est appliqué tout seul, et
-  /// la recherche est relancée une fois si le deviné diffère de la requête
-  /// utilisée — jamais deux fois la même requête.
+  /// Deviner Artiste/Titre (heuristique puis IA) est appliqué tout seul,
+  /// puis une cascade de variantes est essayée (voir [buildSearchVariants]) :
+  /// complet, nettoyé, titre seul. Elle s'arrête dès qu'une variante donne
+  /// des paroles synchronisées. Jamais deux fois la même requête.
   ///
-  /// Les résultats partiels de la 1re recherche ne sont pas perdus : si le
-  /// 2e essai ne trouve rien, ils reviennent à l'écran.
-  Future<void> _autoRetryWithGuess(String usedTitle, String usedArtist) async {
+  /// Chaque variante est plafonnée à [_variantMaxWait]. Les résultats
+  /// partiels de la 1re recherche ne sont pas perdus : si aucune variante
+  /// ne trouve rien, ils reviennent à l'écran (à défaut, ceux de la
+  /// première variante qui en a donné).
+  ///
+  /// [epoch] : valeur de [_cascadeEpoch] au départ ; la cascade s'arrête
+  /// si une autre recherche a été lancée depuis.
+  Future<void> _autoRetryWithGuess(
+    String usedTitle,
+    String usedArtist,
+    int epoch,
+  ) async {
+    // Ce que les champs doivent contenir si personne n'y a touché : la
+    // requête de la 1re recherche, puis celle de chaque variante lancée.
+    var expectedTitle = usedTitle;
+    var expectedArtist = usedArtist;
+
     // Les gardes, réévaluées telles quelles après chaque attente :
     // annulée par le × (il ne doit pas relancer une recherche derrière),
     // recherche relancée entre-temps, erreur, champs corrigés à la main.
     bool allowed() {
+      if (!mounted || epoch != _cascadeEpoch) return false;
       final results = ref.read(lyricsSearchResultsProvider);
       return shouldAutoRetryWithGuess(
         cancelled: ref.read(lyricsSearchCancelledProvider),
@@ -281,43 +329,69 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
         hasResults: results.isNotEmpty,
         hasSyncedResult: results.any((r) => r.hasSyncedLyrics),
         fieldsChanged:
-            _titleController.text != usedTitle ||
-            _artistController.text != usedArtist,
+            _titleController.text != expectedTitle ||
+            _artistController.text != expectedArtist,
       );
     }
 
     if (!allowed()) return;
-    final previous = ref.read(lyricsSearchResultsProvider);
+    var partial = ref.read(lyricsSearchResultsProvider);
     final guess = await _guessFromFilename(silent: true);
     if (!mounted || guess == null) return;
     if (!allowed()) return;
-    final newTitle = guess.title.isNotEmpty ? guess.title : usedTitle;
-    final newArtist = guess.artist.isNotEmpty ? guess.artist : usedArtist;
-    if (newTitle.toLowerCase() == usedTitle.toLowerCase() &&
-        newArtist.toLowerCase() == usedArtist.toLowerCase()) {
-      return;
+
+    final variants = buildSearchVariants(
+      usedTitle: usedTitle,
+      usedArtist: usedArtist,
+      guessTitle: guess.title,
+      guessArtist: guess.artist,
+    );
+    if (variants.isEmpty) return;
+
+    for (final variant in variants) {
+      if (!allowed()) return;
+      setState(() {
+        _titleController.text = variant.title;
+        _artistController.text = variant.artist;
+      });
+      expectedTitle = variant.title;
+      expectedArtist = variant.artist;
+      await _search(
+        autoRetry: false,
+        prefill: false,
+        maxWait: _variantMaxWait,
+      );
+      if (!mounted) return;
+      // Chaque variante remet la liste à zéro en démarrant : on garde en
+      // réserve les premiers résultats partiels rencontrés.
+      final found = ref.read(lyricsSearchResultsProvider);
+      if (partial.isEmpty && found.isNotEmpty) partial = found;
     }
-    setState(() {
-      _titleController.text = newTitle;
-      _artistController.text = newArtist;
-    });
-    await _search(autoRetry: false);
-    if (!mounted || previous.isEmpty) return;
-    // Le 2e essai remet la liste à zéro en démarrant : s'il ne trouve rien,
-    // les résultats partiels du 1er reviennent. Pas si l'utilisateur a
-    // relancé autre chose entre-temps (champs retouchés, recherche en cours).
-    if (_titleController.text != newTitle ||
-        _artistController.text != newArtist) {
+
+    // Toutes les variantes ont été essayées sans paroles synchronisées
+    // (sinon la garde du tour suivant aurait arrêté la boucle, et on est
+    // sorti plus haut). Restauration seulement si personne n'a rien relancé
+    // ni retouché entre-temps.
+    if (!mounted || epoch != _cascadeEpoch) return;
+    if (_titleController.text != expectedTitle ||
+        _artistController.text != expectedArtist) {
       return;
     }
     if (ref.read(lyricsSearchLoadingProvider) ||
         ref.read(lyricsSearchErrorProvider) != null ||
-        ref.read(lyricsSearchResultsProvider).isNotEmpty) {
+        ref.read(lyricsSearchResultsProvider).isNotEmpty ||
+        ref.read(lyricsSearchCancelledProvider)) {
       return;
     }
-    ref.read(lyricsSearchResultsProvider.notifier).state = previous;
+    ref.read(lyricsSearchResultsProvider.notifier).state = partial;
+    // Les champs reviennent au meilleur deviné (le complet), pas à la
+    // dernière variante — « titre seul, sans artiste » n'est pas ce que
+    // l'utilisateur doit retrouver à l'écran.
+    setState(() {
+      _titleController.text = variants.first.title;
+      _artistController.text = variants.first.artist;
+    });
   }
-  
 
   @override
   Widget build(BuildContext context) {
