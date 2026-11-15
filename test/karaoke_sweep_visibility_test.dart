@@ -44,10 +44,11 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('sweepBaseStyle', () {
-    test('le ton de base est plus lumineux que le dim complet', () {
+    // Balayage pur (2026-11-16) : la partie pas encore balayée est en
+    // dim complet — rien ne pré-éclaire le mot courant.
+    test('le ton de base est le dim complet', () {
       final base = sweepBaseStyle(_sung, _unsung);
-      expect(base.color!.a, greaterThan(_dimColor.a));
-      expect(base.color, isNot(_dimColor));
+      expect(base.color, _dimColor);
     });
 
     test('le ton de base reste en dessous de la couleur chantée', () {
@@ -61,17 +62,14 @@ void main() {
   });
 
   group('mot courant en balayage', () {
-    test('début de mot (fraction ~0) : pas le style des mots non chantés', () {
+    test('début de mot (fraction ~0) : le mot est entièrement en dim', () {
       final copies = _copies(_rendre(1000), 2);
-      final style = copies.dessous.style!;
-      expect(style.color, isNot(_dimColor));
-      expect(style.color!.a, greaterThan(_dimColor.a));
+      expect(copies.dessous.style!.color, _dimColor);
     });
 
-    test('mi-mot : pas le style des mots non chantés', () {
+    test('mi-mot : la partie pas encore balayée est en dim complet', () {
       final copies = _copies(_rendre(1300), 2);
-      final style = copies.dessous.style!;
-      expect(style.color!.a, greaterThan(_dimColor.a));
+      expect(copies.dessous.style!.color, _dimColor);
     });
 
     test('la partie balayée reste la plus lumineuse', () {
@@ -85,19 +83,19 @@ void main() {
       }
     });
 
-    test('le mot courant n\'est jamais plus terne qu\'un mot non chanté, '
+    test('le mot courant ne pré-éclaire jamais : la base reste le dim '
         'à aucun moment du mot', () {
       for (var ms = 1000; ms <= 1600; ms += 50) {
         final copies = _copies(_rendre(ms), 2);
         expect(
-          copies.dessous.style!.color!.a,
-          greaterThan(_unsung.color!.a),
+          copies.dessous.style!.color,
+          _dimColor,
           reason: 'à $ms ms',
         );
       }
     });
 
-    test('unité collée : le ton intermédiaire couvre toute l\'unité', () {
+    test('unité collée : le dim couvre toute l\'unité', () {
       final line = LyricLine(
         timestamp: Duration.zero,
         text: 'Percocet',
@@ -114,7 +112,32 @@ void main() {
       expect(spans, hasLength(1));
       final copies = _copies(spans, 0);
       expect(copies.dessous.data, 'Percocet');
-      expect(copies.dessous.style!.color!.a, greaterThan(_dimColor.a));
+      expect(copies.dessous.style!.color, _dimColor);
+    });
+
+    test('mot court ou long : les lettres balayées sont en pleine couleur '
+        'chantée', () {
+      // Mot court (150 ms) et mot long (2000 ms) : à mi-mot, la partie
+      // balayée est en pleine couleur chantée et le reste en dim complet —
+      // le contraste est maximal quelle que soit la longueur du mot.
+      final line = LyricLine(
+        timestamp: Duration.zero,
+        text: 'I underestimate',
+        words: [_mot('I', 1000, 150), _mot('underestimate', 1200, 2000)],
+      );
+      for (final (index, at, ms) in [(0, 0, 1075), (1, 2, 2200)]) {
+        final spans = animatedKaraokeSpans(
+          line: line,
+          wordIndex: index,
+          position: Duration(milliseconds: ms),
+          sungStyle: _sung,
+          unsungStyle: _unsung,
+          onWordTap: (_) {},
+        );
+        final copies = _copies(spans, at);
+        expect(copies.lumineuse.style, _sung, reason: 'à $ms ms');
+        expect(copies.dessous.style!.color, _dimColor, reason: 'à $ms ms');
+      }
     });
 
     test('les mots non chantés gardent le dim complet', () {
