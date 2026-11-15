@@ -116,12 +116,34 @@ class AppearanceTab extends ConsumerWidget {
           value: appearance.karaokeAnimations,
           onChanged: (v) =>
               update(appearance.copyWith(karaokeAnimations: v)),
-          title: const Text('Animations karaoké'),
+          title: const Text('Mode karaoké'),
           subtitle: const Text(
-            'Balayage et soulèvement des mots sur la ligne en cours.',
+            'Mots animés sur la ligne en cours. Éteint, la ligne s\'allume d\'un coup.',
           ),
           contentPadding: EdgeInsets.zero,
         ),
+        if (appearance.karaokeAnimations) ...[
+          const SizedBox(height: 8),
+          Text('Animation', style: textTheme.titleSmall),
+          const SizedBox(height: 8),
+          SegmentedButton<KaraokeAnimationStyle>(
+            segments: const [
+              ButtonSegment(
+                value: KaraokeAnimationStyle.sweep,
+                label: Text('Balayage'),
+              ),
+              ButtonSegment(
+                value: KaraokeAnimationStyle.instant,
+                label: Text('Mot à mot'),
+              ),
+            ],
+            selected: {appearance.karaokeAnimationStyle},
+            onSelectionChanged: (s) => update(
+              appearance.copyWith(karaokeAnimationStyle: s.first),
+            ),
+            showSelectedIcon: false,
+          ),
+        ],
         const Divider(height: 32),
         Text('Couleur des paroles', style: textTheme.titleSmall),
         const SizedBox(height: 4),
