@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/player/ui/widgets/karaoke_animated_line.dart';
@@ -164,6 +165,28 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
   // every rebuild re-scheduled one while the previous was still pending.
   bool _centerScheduled = false;
 
+  // Chronos « Perf » (chasse au figement à la réouverture). Une seule
+  // ligne par montage de la vue, pour ne pas inonder le journal (400
+  // entrées) : le montage lui-même, puis le premier recentrage.
+  final Stopwatch _montage = Stopwatch()..start();
+  bool _centerLogged = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Du montage de la vue à la fin de sa première image : construction,
+    // mise en page et peinture de cette image (la liste ne construit que
+    // les lignes visibles).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      DebugLog.instance.info(
+        'Perf',
+        'vue paroles : 1re image ${_montage.elapsedMilliseconds}ms '
+        '(${widget.lyrics.length} ligne(s))',
+      );
+    });
+  }
+
   @override
   void dispose() {
     _scrollController.dispose();
@@ -185,6 +208,8 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     final target =
         (index * _lineExtent) + (_lineExtent / 2) - (viewportHeight / 2);
 
+    final sw = _centerLogged ? null : (Stopwatch()..start());
+
     // One fixed, quick glide per line: 250 ms, ease-out. Measured
     // frame-by-frame on Musicolet's lyrics view: the step starts fast and
     // settles softly, which is ease-out, not ease-in-out.
@@ -193,6 +218,18 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
       duration: const Duration(milliseconds: 250),
       curve: Curves.easeOutCubic,
     );
+
+    if (sw != null) {
+      _centerLogged = true;
+      // Le coût synchrone de l'appel (démarrage de l'animation), pas la
+      // glissade elle-même ; `depuis montage` situe ce recentrage dans la
+      // fenêtre où l'utilisateur sent le figement.
+      DebugLog.instance.info(
+        'Perf',
+        'vue paroles : recentrage ligne $index : ${sw.elapsedMicroseconds}µs '
+        '(depuis montage ${_montage.elapsedMilliseconds}ms)',
+      );
+    }
   }
 
   @override
