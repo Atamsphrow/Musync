@@ -64,11 +64,31 @@ class AnimatedKaraokeLine extends ConsumerWidget {
   }
 }
 
+/// Part (0..1) de la couleur chantée dans le ton de la partie « pas
+/// encore balayée » du mot courant : entre le dim (0) et le chanté (1).
+const double karaokeSweepBaseMix = 0.7;
+
+/// Le style de la partie non encore balayée du mot courant : un ton
+/// intermédiaire entre [unsung] et [sung], plus lumineux que le dim
+/// complet. Sans cela, au début d'un mot (fraction ~0) le mot courant
+/// s'affichait presque entièrement en dim — plus terne que les mots déjà
+/// chantés. Garde la graisse de [sung], comme le mot balayé.
+@visibleForTesting
+TextStyle sweepBaseStyle(TextStyle sung, TextStyle unsung) => sung.copyWith(
+  color: Color.lerp(unsung.color, sung.color, karaokeSweepBaseMix),
+);
+
 /// The animated spans for a word-timed line at [position]: the word
 /// being sung sweeps bright, a word that just ended is still settling
 /// back down, and a held word swells letter by letter. Words that are
 /// not moving render exactly like the static karaoke spans — plain
 /// [TextSpan]s in the sung or unsung style.
+///
+/// Le mot est une UNITÉ (`karaokeWordUnits`) : les fragments collés d'un
+/// mot (« Per » « co » « cet ») forment un seul `WidgetSpan`, un seul
+/// balayage (du début du premier fragment à la fin du dernier), un seul
+/// soulèvement, et les lettres qui gonflent sont celles du texte joint.
+/// Une ligne à un fragment par mot se rend exactement comme avant.
 ///
 /// Two simplifications against myspoti, both deliberate: a growing
 /// letter's lean and rise are not drawn — a per-letter sideways shift
@@ -87,58 +107,61 @@ List<InlineSpan> animatedKaraokeSpans({
   required void Function(Duration position) onWordTap,
 }) {
   final spans = <InlineSpan>[];
-  final seps = karaokeWordSeparators(line);
-  for (var i = 0; i < line.words.length; i++) {
-    if (i > 0) {
-      final sep = seps == null ? ' ' : seps[i - 1];
-      if (sep.isNotEmpty) {
-        // The space between two words takes the style of the word before
-        // it; a tap between two words seeks to the start of the word
-        // before it — the word just read.
-        spans.add(
-          TextSpan(
-            text: sep,
-            style: i - 1 <= wordIndex ? sungStyle : unsungStyle,
-            recognizer: TapGestureRecognizer()
-              ..onTap = () => onWordTap(line.words[i - 1].start),
-          ),
-        );
-      }
+  final units = karaokeWordUnits(line);
+  for (var k = 0; k < units.length; k++) {
+    final unit = units[k];
+    if (k > 0 && unit.separatorBefore.isNotEmpty) {
+      // The space between two words takes the style of the word before
+      // it; a tap between two words seeks to the start of the word
+      // before it — the word just read.
+      final previous = units[k - 1];
+      spans.add(
+        TextSpan(
+          text: unit.separatorBefore,
+          style: previous.firstIndex <= wordIndex ? sungStyle : unsungStyle,
+          recognizer: TapGestureRecognizer()
+            ..onTap = () => onWordTap(previous.start),
+        ),
+      );
     }
-    final word = line.words[i];
-    final isCurrent = i == wordIndex;
+    final word = unit.asWord;
+    final reached = unit.firstIndex <= wordIndex;
+    final isCurrent = unit.contains(wordIndex);
     final isGrowing = isCurrent && isGrowingWord(word, position);
     final lift = wordLiftFraction(word: word, position: position);
     // A backing vocal word, sung under the lead line: dimmed and
     // slanted, so the eye reads it as a choir, not as the lead.
     final wordSung = _wordStyle(word, sungStyle);
     final wordUnsung = _wordStyle(word, unsungStyle);
+    // Le ton de la partie pas encore balayée du mot courant.
+    final wordBase = sweepBaseStyle(wordSung, wordUnsung);
 
     Widget? wordWidget;
     if (isCurrent && !isGrowing) {
       // The word being sung: two copies in the sung weight, so they are
-      // exactly the same width and the clip never drifts — the dim one
-      // underneath, the bright one clipped to how much of the word has
-      // been sung.
+      // exactly the same width and the clip never drifts — the
+      // intermediate one underneath, the bright one clipped to how much
+      // of the word has been sung.
       wordWidget = _sweptWord(
         word: word,
         fraction: wordSweepFraction(word: word, position: position),
         sungStyle: wordSung,
-        dimSungStyle:
-            wordUnsung.copyWith(fontWeight: wordSung.fontWeight),
+        dimSungStyle: wordBase,
       );
     } else if (isGrowing) {
       // A held word, letter by letter: each letter swells and glows in
       // turn. The letters stay in the text flow, so the word never comes
       // apart — the size and the glow carry the move.
       wordWidget = Text.rich(
-        TextSpan(children: _growingLetterSpans(word, position, wordSung, wordUnsung)),
+        TextSpan(
+          children: _growingLetterSpans(word, position, wordSung, wordBase),
+        ),
       );
     } else if (lift > 0.01) {
       // A word that just ended, still settling back down.
       wordWidget = Text(
         word.text,
-        style: i <= wordIndex ? wordSung : wordUnsung,
+        style: reached ? wordSung : wordUnsung,
       );
     }
 
@@ -156,7 +179,7 @@ List<InlineSpan> animatedKaraokeSpans({
           // line, so middle alignment is visually exact.
           alignment: PlaceholderAlignment.middle,
           child: GestureDetector(
-            onTap: () => onWordTap(word.start),
+            onTap: () => onWordTap(unit.start),
             child: wordWidget,
           ),
         ),
@@ -165,9 +188,9 @@ List<InlineSpan> animatedKaraokeSpans({
       spans.add(
         TextSpan(
           text: word.text,
-          style: i <= wordIndex ? wordSung : wordUnsung,
+          style: reached ? wordSung : wordUnsung,
           recognizer: TapGestureRecognizer()
-            ..onTap = () => onWordTap(word.start),
+            ..onTap = () => onWordTap(unit.start),
         ),
       );
     }
@@ -183,8 +206,8 @@ TextStyle _wordStyle(LyricWord word, TextStyle style) {
   );
 }
 
-/// Two copies of [word] in the sung weight — the dim one underneath,
-/// the bright one clipped to [fraction] of the word's width.
+/// Two copies of [word] in the sung weight — the intermediate one
+/// underneath, the bright one clipped to [fraction] of the word's width.
 Widget _sweptWord({
   required LyricWord word,
   required double fraction,
@@ -221,12 +244,14 @@ double _measureWidth(String text, TextStyle style) {
 }
 
 /// One span per letter of a growing word: the size swells and the
-/// colour glows from dim to bright as the letter runs its move.
+/// colour glows from the base tone to bright as the letter runs its
+/// move. [baseStyle] est le ton intermédiaire du mot courant (jamais le
+/// dim complet).
 List<TextSpan> _growingLetterSpans(
   LyricWord word,
   Duration position,
   TextStyle sungStyle,
-  TextStyle unsungStyle,
+  TextStyle baseStyle,
 ) {
   final baseSize = sungStyle.fontSize ?? 16;
   final spans = <TextSpan>[];
@@ -242,7 +267,7 @@ List<TextSpan> _growingLetterSpans(
         style: sungStyle.copyWith(
           fontSize: baseSize * growth.scale,
           color: Color.lerp(
-            unsungStyle.color,
+            baseStyle.color,
             sungStyle.color,
             growth.bloom.clamp(0.0, 1.0),
           ),
