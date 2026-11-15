@@ -296,13 +296,21 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                       fontWeight: FontWeight.w600,
                     ),
                   );
-            // The animated rendering applies only to the current line,
-            // only when the option is on, and only when the line carries
-            // word timings — every other line renders exactly as before.
+            // The karaoke rendering, in three cases:
+            //
+            // * Off: the line lights up whole, line by line — no word
+            //   animation at all. Tapping the line still seeks to it.
+            // * On, balayage: the animated rendering (sweep, word lift,
+            //   held-word letters) on the current line only.
+            // * On, mot à mot: each word lights up whole the moment it
+            //   starts. Other lines render the same way, with every word
+            //   unsung until their turn comes.
             final Widget lineChild;
             if (showWords &&
                 isCurrent &&
-                appearance.karaokeAnimations) {
+                appearance.karaokeAnimations &&
+                appearance.karaokeAnimationStyle ==
+                    KaraokeAnimationStyle.sweep) {
               lineChild = AnimatedKaraokeLine(
                 line: line,
                 wordIndex: wordIndex,
@@ -314,7 +322,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                 romanization: romanization,
                 textAlign: textAlign,
               );
-            } else if (showWords) {
+            } else if (showWords && appearance.karaokeAnimations) {
               lineChild = Text.rich(
                 TextSpan(
                   children: [
