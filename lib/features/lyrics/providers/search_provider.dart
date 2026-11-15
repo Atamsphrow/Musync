@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/shared_http_client.dart';
@@ -132,6 +134,14 @@ int _searchGeneration = 0;
 /// [sourceName] asks one source only (the "try another source" bypass):
 /// a set-aside source is asked anyway, and the outcome feeds the health.
 ///
+/// [maxWait] caps the wall-clock time spent waiting for the sources, all
+/// of them together (null = no cap, the default). When it runs out the
+/// search stops waiting and settles on whatever has already arrived —
+/// the sources that are still in flight are abandoned, not waited on.
+/// Used by the variants of the auto-retry cascade, where a source that
+/// does not answer must not cost its full retry budget (12 s + 1 s + 12 s)
+/// on every variant. It does not apply to [sourceName].
+///
 /// Returns what was found, so a caller that needs to react (a toast when
 /// a single source finds nothing) does not have to re-read the state.
 Future<List<LyricsSearchResult>> performLyricsSearch(
@@ -142,6 +152,7 @@ Future<List<LyricsSearchResult>> performLyricsSearch(
   int? durationMs,
   bool explicit = false,
   String? sourceName,
+  Duration? maxWait,
 }) async {
   // Everything is resolved off `ref` before the first await, and held.
   //
@@ -194,15 +205,44 @@ Future<List<LyricsSearchResult>> performLyricsSearch(
     // search cancels this one — breaking out of the loop cancels the
     // subscription, and the stream's late emissions go nowhere.
     var found = const <LyricsSearchResult>[];
-    await for (final ranked in repository.searchAllStream(
+    final stream = repository.searchAllStream(
       title: title,
       artist: artist,
       album: album,
       durationMs: durationMs,
-    )) {
-      if (isStale()) break;
-      found = ranked;
-      results.state = ranked;
+    );
+    if (maxWait == null) {
+      await for (final ranked in stream) {
+        if (isStale()) break;
+        found = ranked;
+        results.state = ranked;
+      }
+    } else {
+      // Same loop with a total deadline. `Stream.timeout` only measures the
+      // gap between two events, so the deadline is kept by hand: each wait
+      // gets what is left of [maxWait], and a wait that runs out reads as
+      // "the stream is over for us".
+      final iterator = StreamIterator(stream);
+      final clock = Stopwatch()..start();
+      try {
+        while (true) {
+          final remaining = maxWait - clock.elapsed;
+          if (remaining <= Duration.zero) break;
+          final hasNext = await iterator.moveNext().timeout(
+            remaining,
+            onTimeout: () => false,
+          );
+          if (!hasNext || isStale()) break;
+          found = iterator.current;
+          results.state = found;
+        }
+      } finally {
+        // Not awaited: cancelling a stream that is suspended on a slow
+        // request can take until that request ends, and the whole point
+        // of the deadline is not to wait for it. The loading flag below
+        // must drop now.
+        unawaited(iterator.cancel());
+      }
     }
     return found;
   } on LyricsSourceException catch (e) {
