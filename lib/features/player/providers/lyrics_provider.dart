@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
+import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/lyrics/data/lyrics_word_timings_store.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/data/lyric_clock.dart';
@@ -153,8 +154,17 @@ final currentLyricsProvider =
       // provider whenever another app rewrites the tag, so what is shown is
       // always what is on disk right now.
       ref.watch(_currentSongMtimeProvider);
+      // Chrono « Perf » (chasse au figement à la réouverture) : une ligne
+      // ici à la REMONTÉE du lecteur veut dire que ce provider s'est
+      // relancé (flux mtime, invalidation) au lieu de servir son cache.
+      // `lecture tags` = Id3Reader (parse des frames, voir sa doc : le
+      // travail est-il hors isolate ? à lire dans le code de Id3Reader),
+      // `mots` = rattachement du store (chargement JSON compris au
+      // premier appel du lancement).
+      final sw = Stopwatch()..start();
       // Frame-walking: the tag's artwork is skipped, not loaded.
       final lyrics = await Id3Reader.readLyricsFrames(currentSong.filePath);
+      final tagsMs = sw.elapsedMilliseconds;
       // The words live app-side, never in the file: re-attach them from the
       // store when the lyrics text matches what was saved. A miss returns
       // the lyrics unchanged — line-only, never an error.
@@ -163,6 +173,12 @@ final currentLyricsProvider =
           : await ref
                 .read(lyricsWordTimingsStoreProvider)
                 .attachWords(currentSong.filePath, lyrics.synced!);
+      DebugLog.instance.info(
+        'Perf',
+        'paroles (morceau ${currentSong.id}) : lecture tags ${tagsMs}ms, '
+        'mots ${sw.elapsedMilliseconds - tagsMs}ms, '
+        '${synced?.lines.length ?? 0} ligne(s) synchro',
+      );
       return (
         song: currentSong,
         synced: synced,
