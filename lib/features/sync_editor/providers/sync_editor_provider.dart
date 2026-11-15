@@ -4,6 +4,7 @@ import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/id3/lrc_parser.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/lyrics/data/lyrics_word_timings_store.dart';
 
 /// Simple = the text alone (USLT). Synchronisé = the text with timestamps
 /// (SYLT). The toggle mirrors Musicolet's.
@@ -119,20 +120,18 @@ class SyncEditorNotifier extends AutoDisposeFamilyNotifier<SyncEditorState, Song
 
     final synced = pair.synced;
     if (synced != null && synced.isNotEmpty) {
-      // USLT can carry lines SYLT doesn't — untimed markers like [Refrain],
-      // extra verses. They are not in `synced.lines`, so without this they
-      // vanish from the file on the next save. Keep them as untimed lines:
-      // they stay in the USLT text and out of SYLT.
-      final syncedTexts = {for (final l in synced.lines) l.text};
-      final extra = [
-        for (final l in _linesFromText(pair.unsynced?.text ?? ''))
-          if (l.text.isNotEmpty && !syncedTexts.contains(l.text))
-            l.withoutTimestamp(),
-      ];
-      state = state.copyWith(
-        lines: [...synced.lines, ...extra],
-        isLoading: false,
+      // Les mots enregistrés (store app-side) sont recollés aux lignes
+      // synchronisées : sans cela l'éditeur ouvrait des lignes sans mots,
+      // et la sauvegarde ne les repassait pas au store.
+      final store = ref.read(lyricsWordTimingsStoreProvider);
+      final lines = await loadedLines(
+        filePath: song.filePath,
+        synced: synced,
+        unsynced: pair.unsynced,
+        store: store,
       );
+      if (_disposed) return;
+      state = state.copyWith(lines: lines, isLoading: false);
       return;
     }
 
@@ -144,6 +143,37 @@ class SyncEditorNotifier extends AutoDisposeFamilyNotifier<SyncEditorState, Song
       mode: plain == null ? SyncMode.synced : SyncMode.simple,
       isLoading: false,
     );
+  }
+
+  /// Les lignes de l'éditeur pour un fichier qui a des paroles synchronisées :
+  /// d'abord les lignes SYLT avec leurs mots rattachés (`attachWords`, les
+  /// index du store correspondent aux lignes synchronisées, dans l'ordre),
+  /// puis les lignes en plus venues de l'USLT, sans heure.
+  ///
+  /// Sans entrée au store, ou texte modifié depuis (hash différent),
+  /// `attachWords` renvoie les paroles telles quelles : ligne seule.
+  @visibleForTesting
+  static Future<List<LyricLine>> loadedLines({
+    required String filePath,
+    required SyncedLyrics synced,
+    required UnsyncedLyrics? unsynced,
+    LyricsWordTimingsStore? store,
+  }) async {
+    final withWords = store == null
+        ? synced
+        : await store.attachWords(filePath, synced);
+
+    // USLT can carry lines SYLT doesn't — untimed markers like [Refrain],
+    // extra verses. They are not in `synced.lines`, so without this they
+    // vanish from the file on the next save. Keep them as untimed lines:
+    // they stay in the USLT text and out of SYLT.
+    final syncedTexts = {for (final l in synced.lines) l.text};
+    final extra = [
+      for (final l in _linesFromText(unsynced?.text ?? ''))
+        if (l.text.isNotEmpty && !syncedTexts.contains(l.text))
+          l.withoutTimestamp(),
+    ];
+    return [...withWords.lines, ...extra];
   }
 
   /// Seeds the editor from plain text, honouring LRC prefixes if they are there.
@@ -168,6 +198,34 @@ class SyncEditorNotifier extends AutoDisposeFamilyNotifier<SyncEditorState, Song
 
   // ── Timing ──
 
+  /// Donne [timestamp] à [line] et déplace ses mots du même écart.
+  ///
+  /// Les mots portent des heures ABSOLUES, mais le store les enregistre en
+  /// décalage par rapport à l'heure de leur ligne : une ligne retimée dont
+  /// les mots restent en place serait sauvée avec des décalages faux, et
+  /// les mots ne suivraient plus leur ligne. Une ligne sans heure (mots
+  /// gardés par `withoutTimestamp`) prend le début de son premier mot
+  /// comme référence.
+  @visibleForTesting
+  static LyricLine retimedLine(LyricLine line, Duration timestamp) {
+    if (line.words.isEmpty) return line.copyWith(timestamp: timestamp);
+    final from = line.timestamp ?? line.words.first.start;
+    final delta = timestamp - from;
+    if (delta == Duration.zero) return line.copyWith(timestamp: timestamp);
+    return line.copyWith(
+      timestamp: timestamp,
+      words: [
+        for (final word in line.words)
+          LyricWord(
+            start: _floorAtZero(word.start + delta),
+            duration: word.duration,
+            text: word.text,
+            isBackground: word.isBackground,
+          ),
+      ],
+    );
+  }
+
   /// The central gesture: stamp the cursor line at [position] and step on.
   ///
   /// Returns the line that was stamped, or null when the cursor has run off
@@ -176,7 +234,7 @@ class SyncEditorNotifier extends AutoDisposeFamilyNotifier<SyncEditorState, Song
     final index = state.cursor;
     if (index < 0 || index >= state.lines.length) return null;
 
-    _replaceLine(index, state.lines[index].copyWith(timestamp: position));
+    _replaceLine(index, retimedLine(state.lines[index], position));
     state = state.copyWith(cursor: index + 1);
     return index;
   }
@@ -189,8 +247,9 @@ class SyncEditorNotifier extends AutoDisposeFamilyNotifier<SyncEditorState, Song
     if (index < 0 || index >= state.lines.length) return;
     _replaceLine(
       index,
-      state.lines[index].copyWith(
-        timestamp: timestamp.isNegative ? Duration.zero : timestamp,
+      retimedLine(
+        state.lines[index],
+        timestamp.isNegative ? Duration.zero : timestamp,
       ),
     );
   }
@@ -312,8 +371,9 @@ class SyncEditorNotifier extends AutoDisposeFamilyNotifier<SyncEditorState, Song
   /// An untimed line comes back untouched. There is no time to shift, and
   /// handing it one would quietly undo the user's decision to strip it — which
   /// is precisely what a `[Refrain]` marker is doing by having none.
+  /// Les mots de la ligne suivent (voir [retimedLine]).
   static LyricLine _shifted(LyricLine line, Duration delta) => line.isTimed
-      ? line.copyWith(timestamp: _floorAtZero(line.timestamp! + delta))
+      ? retimedLine(line, _floorAtZero(line.timestamp! + delta))
       : line;
 
   static Duration _floorAtZero(Duration d) => d.isNegative ? Duration.zero : d;
@@ -338,6 +398,9 @@ class SyncEditorNotifier extends AutoDisposeFamilyNotifier<SyncEditorState, Song
 
   // ── Text ──
 
+  /// Le texte change, les mots restent (`copyWith` les conserve) : fusionner
+  /// « Per co cet » en « Percocet » garde les trois fragments, et la
+  /// sauvegarde les stocke sous le nouveau hash du texte.
   void updateLineText(int index, String text) {
     if (index < 0 || index >= state.lines.length) return;
     _replaceLine(index, state.lines[index].copyWith(text: text));
