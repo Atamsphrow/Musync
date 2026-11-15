@@ -8,6 +8,7 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/id3/id3_reader.dart';
+import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/id3/tag_backup.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/permission_service.dart';
@@ -60,6 +61,11 @@ class LyricsFindResult {
   /// mémorisé comme une absence confirmée.
   final bool searchesFailed;
 
+  /// Vrai quand seuls les mots ont été rattachés aux paroles du fichier
+  /// (store des mots, fichier intact) : rien n'a été écrit, donc pas
+  /// d'annulation, et le fond ne doit pas afficher « paroles ajoutées ».
+  final bool wordsAttached;
+
   const LyricsFindResult({
     required this.verdict,
     this.best,
@@ -72,8 +78,32 @@ class LyricsFindResult {
     this.note,
     this.queryGoodQuality = false,
     this.searchesFailed = false,
+    this.wordsAttached = false,
   });
 }
+
+/// Similarité globale minimale (Dice sur les lignes pliées) entre les
+/// paroles du fichier et celles du candidat pour rattacher les mots :
+/// en dessous, ce n'est pas la même version.
+const double kWordsAttachMinSimilarity = 0.90;
+
+/// Part minimale des lignes du fichier appariées à l'identique (texte
+/// plié) avec une ligne du candidat : en dessous, les mots ne sont pas
+/// rattachés.
+const double kWordsAttachMinLineMatch = 0.80;
+
+/// Écart maximal entre le décalage d'une ligne appariée et le décalage
+/// médian (même tolérance que `alignLyrics`) : une ligne qui s'en écarte
+/// plus est une ligne d'un autre découpage, pas la même ligne décalée.
+const Duration kWordsAttachPairTolerance = Duration(milliseconds: 1500);
+
+/// Un mot qui commence plus de ceci avant sa ligne est un mot mal aligné :
+/// la ligne entière perd ses mots plutôt que d'en garder un faux.
+const Duration kWordsAttachMaxEarly = Duration(milliseconds: 200);
+
+/// Un mot qui finit plus de ceci après la fin de sa ligne est un mot mal
+/// aligné : même règle — la ligne entière perd ses mots.
+const Duration kWordsAttachMaxOverrun = Duration(milliseconds: 200);
 
 enum LyricsVerifyVerdict { plausible, suspicious, protected, unknown }
 
@@ -336,6 +366,57 @@ class AiLyricsFinder {
 
     final current = await _readCurrent(song.filePath);
     final currentProvenance = await provenance.forPath(song.filePath);
+
+    // Mots seuls : le fichier a déjà des paroles calées sans mots et le
+    // meilleur candidat en a — on rattache les mots au store, sans jamais
+    // réécrire le fichier. Les lignes du fichier ne bougent pas ; un
+    // rattachement réussi court-circuite la réécriture que `_decideWrite`
+    // autoriserait sinon pour un candidat mot à mot. Quand les textes
+    // diffèrent, le rattachement échoue et le comportement existant
+    // s'applique. Ré-attacher est idempotent : un balayage ultérieur
+    // retrouve les mêmes mots et les réécrit tels quels. Pas besoin
+    // d'aligner le candidat d'abord : les mots sont ré-ancrés par
+    // décalage dans leur ligne, et ce décalage est invariant par
+    // translation — un autre enregistrement ne décale que le début des
+    // lignes, que les timestamps du fichier absorbent.
+    if (current.synced != null &&
+        current.synced!.isNotEmpty &&
+        !current.synced!.hasWordTimings &&
+        best.hasWordTimings) {
+      final withWords = attachCandidateWords(
+        fileLyrics: current.synced!,
+        candidateLyrics: best.syncedLyrics!,
+      );
+      if (withWords != null) {
+        if (!dryRun) {
+          await repository.saveWordTimings(song.filePath, withWords);
+          fileChanged(song.filePath);
+        }
+        _log(
+          'mots rattachés',
+          song,
+          best.confidence,
+          '$queriedTitle — $queriedArtist',
+        );
+        return LyricsFindResult(
+          verdict: LyricsFindVerdict.keptExisting,
+          best: best,
+          top: top,
+          bestConfidence: best.confidence,
+          queriedTitle: queriedTitle,
+          queriedArtist: queriedArtist,
+          viaFilename: viaFilename,
+          wordsAttached: true,
+          note: dryRun
+              ? 'Rattacherait les mots aux paroles de « ${song.title} » — '
+                  '${song.artist} (source ${best.source}).'
+              : 'Mots rattachés aux paroles de « ${song.title} » — '
+                  '${song.artist} (source ${best.source}).',
+          queryGoodQuality: resolved.goodQuality,
+        );
+      }
+    }
+
     final decision = _decideWrite(
       best: best,
       current: current,
@@ -764,6 +845,195 @@ class AiLyricsFinder {
   static String _candidateText(LyricsSearchResult result) {
     if (result.hasSyncedLyrics) return result.syncedLyrics!.toLrc();
     return result.unsyncedLyrics?.text ?? '';
+  }
+
+  /// Rattache les mots d'un candidat aux lignes du fichier, sans toucher
+  /// au texte des lignes : les mots sont ré-ancrés sur les timestamps du
+  /// fichier, ligne par ligne, par texte plié identique. La conversion est
+  /// invariante par translation — un candidat d'un autre enregistrement,
+  /// décalé de quelques secondes, donne les mêmes mots — et les écarts
+  /// résiduels sont bornés par la ligne (clamp / abandon, voir
+  /// `_reanchoredWords`).
+  ///
+  /// Null quand rien ne peut être rattaché en sécurité : textes trop
+  /// différents, pas assez de lignes appariées, ou aucun mot conservé.
+  /// Une ligne est tout ou rien : un seul mot mal aligné et la ligne
+  /// entière reste sans mots — le rendu replierait la ligne en ligne
+  /// simple de toute façon si les mots ne recouvraient pas son texte.
+  static SyncedLyrics? attachCandidateWords({
+    required SyncedLyrics fileLyrics,
+    required SyncedLyrics candidateLyrics,
+  }) {
+    if (fileLyrics.isEmpty || candidateLyrics.isEmpty) return null;
+    if (fileLyrics.hasWordTimings) return null;
+    if (!candidateLyrics.hasWordTimings) return null;
+
+    // Porte globale : les deux textes doivent être la même version.
+    if (_textSimilarity(fileLyrics.toLrc(), candidateLyrics.toLrc()) <
+        kWordsAttachMinSimilarity) {
+      return null;
+    }
+
+    final fileLines = fileLyrics.lines;
+    final candidateLines = candidateLyrics.lines;
+    String fold(String text) => normalizeForConfidence(text);
+
+    // Porte de couverture : assez de lignes du fichier doivent avoir
+    // une jumelle à l'identique chez le candidat.
+    final candidateTexts = {
+      for (final line in candidateLines) fold(line.text),
+    };
+    final matched = fileLines
+        .where((line) => candidateTexts.contains(fold(line.text)))
+        .length;
+    if (matched / fileLines.length < kWordsAttachMinLineMatch) {
+      return null;
+    }
+
+    // Appariement dans l'ordre : la k-ième occurrence d'un texte dans le
+    // fichier va avec la k-ième occurrence du même texte chez le candidat.
+    final candidateByText = <String, List<int>>{};
+    for (var i = 0; i < candidateLines.length; i++) {
+      (candidateByText[fold(candidateLines[i].text)] ??= []).add(i);
+    }
+    final taken = <String, int>{};
+    final pairs = <({int fileIndex, int candidateIndex})>[];
+    for (var i = 0; i < fileLines.length; i++) {
+      final key = fold(fileLines[i].text);
+      final indexes = candidateByText[key];
+      if (indexes == null) continue;
+      final used = taken[key] ?? 0;
+      if (used >= indexes.length) continue;
+      taken[key] = used + 1;
+      pairs.add((fileIndex: i, candidateIndex: indexes[used]));
+    }
+
+    // Garde-fou sur les décalages : une ligne appariée dont le décalage
+    // s'écarte trop du décalage médian est une ligne d'un autre
+    // découpage, pas la même ligne décalée.
+    final gaps = <int>[];
+    for (final pair in pairs) {
+      final gap = _pairGap(
+        fileLines[pair.fileIndex],
+        candidateLines[pair.candidateIndex],
+      );
+      if (gap != null) gaps.add(gap);
+    }
+    var usablePairs = pairs;
+    if (gaps.length >= 3) {
+      final sorted = List<int>.of(gaps)..sort();
+      final median = sorted[sorted.length ~/ 2];
+      usablePairs = <({int fileIndex, int candidateIndex})>[];
+      for (final pair in pairs) {
+        final gap = _pairGap(
+          fileLines[pair.fileIndex],
+          candidateLines[pair.candidateIndex],
+        );
+        if (gap != null &&
+            (gap - median).abs() <=
+                kWordsAttachPairTolerance.inMilliseconds) {
+          usablePairs.add(pair);
+        }
+      }
+    }
+    final pairByFileIndex = <int, int>{
+      for (final pair in usablePairs)
+        pair.fileIndex: pair.candidateIndex,
+    };
+
+    var attached = 0;
+    final updated = <LyricLine>[];
+    for (var i = 0; i < fileLines.length; i++) {
+      final fileLine = fileLines[i];
+      final candidateIndex = pairByFileIndex[i];
+      if (candidateIndex == null) {
+        updated.add(fileLine);
+        continue;
+      }
+      final candidateLine = candidateLines[candidateIndex];
+      final fileSpan = i + 1 < fileLines.length
+          ? _spanBetween(fileLine, fileLines[i + 1])
+          : null;
+      final candidateSpan = candidateIndex + 1 < candidateLines.length
+          ? _spanBetween(candidateLine, candidateLines[candidateIndex + 1])
+          : null;
+      final words = _reanchoredWords(
+        fileLine: fileLine,
+        candidateLine: candidateLine,
+        fileSpan: fileSpan,
+        candidateSpan: candidateSpan,
+      );
+      if (words == null) {
+        updated.add(fileLine);
+        continue;
+      }
+      attached += words.length;
+      updated.add(fileLine.copyWith(words: words));
+    }
+    if (attached == 0) return null;
+    return SyncedLyrics(updated);
+  }
+
+  /// Décalage en ms entre une ligne du fichier et sa jumelle candidate,
+  /// ou null quand l'une des deux n'a pas de timestamp.
+  static int? _pairGap(LyricLine fileLine, LyricLine candidateLine) {
+    final fileStart = fileLine.timestamp;
+    final candidateStart = candidateLine.timestamp;
+    if (fileStart == null || candidateStart == null) return null;
+    return fileStart.inMilliseconds - candidateStart.inMilliseconds;
+  }
+
+  /// Durée d'une ligne : jusqu'à la ligne suivante, ou null quand elle
+  /// est inconnue (dernière ligne, timestamp manquant ou incohérent).
+  static Duration? _spanBetween(LyricLine a, LyricLine b) {
+    final start = a.timestamp;
+    final end = b.timestamp;
+    if (start == null || end == null) return null;
+    final span = end - start;
+    return span.isNegative ? null : span;
+  }
+
+  /// Les mots de [candidateLine] ré-ancrés sur [fileLine] : chaque mot
+  /// garde son décalage dans la ligne, appliqué au timestamp du fichier.
+  /// Null quand la ligne ne peut pas être rattachée en sécurité — un seul
+  /// mot mal aligné et c'est toute la ligne qui reste sans mots.
+  static List<LyricWord>? _reanchoredWords({
+    required LyricLine fileLine,
+    required LyricLine candidateLine,
+    required Duration? fileSpan,
+    required Duration? candidateSpan,
+  }) {
+    final fileStart = fileLine.timestamp;
+    final candidateStart = candidateLine.timestamp;
+    if (fileStart == null || candidateStart == null) return null;
+    if (candidateLine.words.isEmpty) return null;
+    final span = fileSpan ?? candidateSpan;
+    final words = <LyricWord>[];
+    for (final word in candidateLine.words) {
+      var offset = word.start - candidateStart;
+      if (offset < -kWordsAttachMaxEarly) return null;
+      if (offset.isNegative) offset = Duration.zero;
+      if (span != null && offset > span + kWordsAttachMaxOverrun) {
+        return null;
+      }
+      var duration = word.duration;
+      if (span != null) {
+        final maxEnd = span + kWordsAttachMaxOverrun;
+        if (offset + duration > maxEnd) {
+          duration = maxEnd - offset;
+          if (duration <= Duration.zero) return null;
+        }
+      }
+      words.add(
+        LyricWord(
+          start: fileStart + offset,
+          duration: duration,
+          text: word.text,
+          isBackground: word.isBackground,
+        ),
+      );
+    }
+    return words.isEmpty ? null : words;
   }
 
   /// Similarité de deux textes de paroles, après pliage, en Dice sur
