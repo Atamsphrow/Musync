@@ -30,6 +30,7 @@ import 'package:musync/features/settings/data/lyrics_appearance.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 import 'package:musync/features/settings/providers/backup_provider.dart';
 import 'package:musync/features/player/data/artwork_bytes_cache.dart';
+import 'package:musync/features/player/data/audio_player_service.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/player/ui/widgets/player_controls.dart';
 import 'package:musync/features/player/ui/widgets/marquee_text.dart';
@@ -388,10 +389,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           .playSong(args.song, queue: args.queue, index: args.index)
           .catchError((Object e) {
             if (mounted) {
+              // Says whether the file is gone or only unreadable: « corrupt »
+              // was the only message, even for a track deleted since the
+              // last scan — which a refresh fixes and a re-encode does not.
               ScaffoldMessenger.of(context).showOnly(
-                const SnackBar(
+                SnackBar(
                   content: Text(
-                    'Fichier illisible ou corrompu : impossible de le lire.',
+                    PlaybackFailure.of(args.song, canSkip: false).message,
                   ),
                 ),
               );

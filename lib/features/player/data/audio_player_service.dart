@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show File;
 
 import 'package:flutter/foundation.dart';
 import 'package:audio_session/audio_session.dart';
@@ -14,6 +15,49 @@ import 'package:musync/features/player/data/last_song_store.dart';
 import 'package:musync/features/player/data/playback_state_store.dart';
 import 'package:musync/features/player/data/volume_fade.dart';
 
+/// A track that could not be played, as reported to the UI.
+@immutable
+class PlaybackFailure {
+  /// The track the player was on when it failed; null when none was known.
+  final Song? song;
+
+  /// True when the file is gone from disk (moved, deleted, SD card removed),
+  /// as opposed to present but unreadable.
+  final bool missingFile;
+
+  /// Whether a next track exists, so the message can offer to skip to it.
+  final bool canSkip;
+
+  const PlaybackFailure({
+    required this.song,
+    required this.missingFile,
+    required this.canSkip,
+  });
+
+  /// What the user is told.
+  String get message {
+    final target = song;
+    final name = target == null ? 'ce morceau' : '« ${target.title} »';
+    return missingFile
+        ? 'Fichier introuvable : $name a été déplacé ou supprimé. '
+              'Tirez la bibliothèque vers le bas pour l’actualiser.'
+        : 'Lecture impossible : $name est illisible ou corrompu.';
+  }
+
+  /// Builds the failure for [song], checking the disk for the file.
+  static PlaybackFailure of(Song? song, {required bool canSkip}) {
+    var missing = false;
+    if (song != null) {
+      try {
+        missing = !File(song.filePath).existsSync();
+      } catch (_) {
+        // Unreadable path: report it as unreadable, not as missing.
+      }
+    }
+    return PlaybackFailure(song: song, missingFile: missing, canSkip: canSkip);
+  }
+}
+
 /// Wraps [AudioPlayer] and owns the playback queue.
 ///
 /// Every source handed to the player carries a [MediaItem] tag: that is what
@@ -28,6 +72,10 @@ class AudioPlayerService {
 
   final StreamController<Song?> _currentSongController =
       StreamController<Song?>.broadcast();
+
+  /// Playback failures the player reports on its own (see [playbackFailures]).
+  final StreamController<PlaybackFailure> _failureController =
+      StreamController<PlaybackFailure>.broadcast();
 
   /// Held so it can be cancelled before the controller closes — see [dispose].
   late final StreamSubscription<int?> _indexSubscription;
@@ -116,6 +164,11 @@ class AudioPlayerService {
     });
     _loopWatchSubscription = _player.playbackEventStream.listen(
       _onPlaybackEvent,
+      // just_audio reports a track it cannot open (deleted, moved, corrupt)
+      // as an error on this stream. Nothing listened for it: an automatic
+      // advance onto a missing file simply stopped the music, with no word
+      // to the user and no line in the Journal.
+      onError: _onPlaybackError,
     );
     unawaited(_watchBecomingNoisy());
   }
@@ -188,6 +241,27 @@ class AudioPlayerService {
       unawaited(LastSongStore().save(song.filePath, Duration.zero));
     }
   }
+
+  /// Failures the player hits by itself — chiefly an automatic advance (or a
+  /// notification skip) onto a file that is gone or unreadable. The app
+  /// shows each one as a message. Failures of an explicit [playSong] are
+  /// also reported to its caller.
+  Stream<PlaybackFailure> get playbackFailures => _failureController.stream;
+
+  void _onPlaybackError(Object error, StackTrace stack) {
+    final song = _currentSong;
+    DebugLog.instance.error(
+      'Player',
+      'Erreur de lecture${song == null ? '' : ' : ${song.filePath}'}',
+      error: error,
+      stackTrace: stack,
+    );
+    if (_failureController.isClosed) return;
+    _failureController.add(PlaybackFailure.of(song, canSkip: _player.hasNext));
+  }
+
+  /// Whether the queue has a track after the current one.
+  bool get hasNext => _player.hasNext;
 
   Song? get currentSong => _currentSong;
   List<Song> get queue => _queue;
@@ -1144,5 +1218,6 @@ class AudioPlayerService {
     await _indexSubscription.cancel();
     await _player.dispose();
     await _currentSongController.close();
+    await _failureController.close();
   }
 }

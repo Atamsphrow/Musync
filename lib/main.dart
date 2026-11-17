@@ -204,10 +204,35 @@ class MusyncApp extends ConsumerStatefulWidget {
 
 class _MusyncAppState extends ConsumerState<MusyncApp>
     with WidgetsBindingObserver {
+  /// Failures the player hits on its own (an automatic advance onto a deleted
+  /// file…), shown as a message wherever the user is.
+  StreamSubscription<PlaybackFailure>? _playbackFailures;
+
+  void _showPlaybackFailure(PlaybackFailure failure) {
+    final service = ref.read(audioPlayerServiceProvider);
+    appMessengerKey.currentState?.showOnly(
+      SnackBar(
+        content: Text(failure.message),
+        duration: const Duration(seconds: 6),
+        action: failure.canSkip
+            ? SnackBarAction(
+                label: 'Suivant',
+                onPressed: () =>
+                    unawaited(service.next().catchError((Object _) {})),
+              )
+            : null,
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _playbackFailures = ref
+        .read(audioPlayerServiceProvider)
+        .playbackFailures
+        .listen(_showPlaybackFailure);
     // Automatisations phase 2 : reprogramme les alarmes Android au démarrage
     // et arme l'écoute du branchement des écouteurs.
     unawaited(ref.read(automationRunnerProvider).init());
@@ -230,6 +255,7 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
 
   @override
   void dispose() {
+    unawaited(_playbackFailures?.cancel());
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
