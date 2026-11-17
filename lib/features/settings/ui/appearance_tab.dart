@@ -175,6 +175,18 @@ class AppearanceTab extends ConsumerWidget {
             ),
             showSelectedIcon: false,
           ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            value: appearance.karaokeEstimatedWords,
+            onChanged: (v) =>
+                update(appearance.copyWith(karaokeEstimatedWords: v)),
+            title: const Text('Mot à mot sur toutes les chansons'),
+            subtitle: const Text(
+              'Pour les paroles calées ligne par ligne, le moment de chaque '
+              'mot est estimé. Le fichier n\'est pas modifié.',
+            ),
+            contentPadding: EdgeInsets.zero,
+          ),
         ],
         const Divider(height: 32),
         Text('Couleur des paroles', style: textTheme.titleSmall),

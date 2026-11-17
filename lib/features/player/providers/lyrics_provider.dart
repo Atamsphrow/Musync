@@ -260,7 +260,9 @@ Duration lyricSamplingInterval({required bool playing}) =>
   return (lineIndex: lineIndex, wordIndex: wordIndex);
 }
 
-/// [synced] as the karaoke view lights it: every timing unit one word (see
+/// [synced] as the karaoke view lights it: every timing unit one word, and
+/// estimated words on line-only lines when the karaoke mode and its « mot
+/// à mot sur toutes les chansons » option are on (see
 /// [prepareKaraokeWords]). Display-side only: the nudge sheet and the file
 /// keep the lyrics as they are.
 ///
@@ -269,7 +271,12 @@ Duration lyricSamplingInterval({required bool playing}) =>
 /// the same word in both.
 final karaokeLyricsProvider = Provider.autoDispose
     .family<SyncedLyrics, SyncedLyrics>((ref, synced) {
-      return prepareKaraokeWords(synced, estimateUntimed: false);
+      final estimate = ref.watch(
+        lyricsAppearanceProvider.select(
+          (a) => a.karaokeAnimations && a.karaokeEstimatedWords,
+        ),
+      );
+      return prepareKaraokeWords(synced, estimateUntimed: estimate);
     });
 
 /// The word to light right now, or null when there is none.

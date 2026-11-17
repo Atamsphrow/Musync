@@ -101,6 +101,19 @@ void main() {
       expect(b.karaokeAnimationStyle, KaraokeAnimationStyle.instant);
     });
 
+    test('mot à mot estimé : allumé par défaut, aller-retour JSON', () {
+      expect(const LyricsAppearance().karaokeEstimatedWords, isTrue);
+      // Files written before the option existed turn it on.
+      expect(LyricsAppearance.fromJson({}).karaokeEstimatedWords, isTrue);
+      const off = LyricsAppearance(karaokeEstimatedWords: false);
+      expect(LyricsAppearance.fromJson(off.toJson()), off);
+      expect(off, isNot(const LyricsAppearance()));
+      expect(
+        const LyricsAppearance().copyWith(karaokeEstimatedWords: false),
+        off,
+      );
+    });
+
     test('bad karaoke style falls back to balayage', () {
       final a = LyricsAppearance.fromJson({'karaokeAnimationStyle': 'vite'});
       expect(a.karaokeAnimationStyle, KaraokeAnimationStyle.sweep);
