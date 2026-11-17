@@ -7,6 +7,7 @@ import 'package:on_audio_query/on_audio_query.dart';
 import 'package:musync/core/router/app_router.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
+import 'package:musync/features/player/ui/widgets/player_controls.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
@@ -339,7 +340,9 @@ class _MiniPlayPauseButton extends ConsumerWidget {
       onPressed: () {
         HapticFeedback.lightImpact();
         final service = ref.read(audioPlayerServiceProvider);
-        unawaited(isPlaying ? service.pause() : service.play());
+        unawaited(
+          PlayerControls.run(isPlaying ? service.pause : service.play),
+        );
       },
     );
   }

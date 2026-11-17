@@ -13,7 +13,10 @@ class PlayerControls extends ConsumerWidget {
   /// buttons used to fire the Future and forget it, so a just_audio
   /// failure (no source, source in error) became an unhandled async
   /// error and the tap silently did nothing.
-  static Future<void> _run(Future<void> Function() action) async {
+  ///
+  /// Public so every other transport control (mini player, seek bar) gets
+  /// the same guard instead of an unhandled async error.
+  static Future<void> run(Future<void> Function() action) async {
     try {
       await action();
     } catch (error) {
@@ -61,14 +64,14 @@ class PlayerControls extends ConsumerWidget {
           ),
           tooltip: 'Lecture aléatoire',
           onPressed: shuffleReady
-              ? () => _run(playerService.toggleShuffle)
+              ? () => run(playerService.toggleShuffle)
               : null,
         ),
         IconButton(
           iconSize: 36,
           icon: Icon(Icons.skip_previous, color: scheme.onSurface),
           tooltip: 'Précédent',
-          onPressed: () => _run(playerService.previous),
+          onPressed: () => run(playerService.previous),
         ),
         // The one filled, high-emphasis control on the screen.
         Material(
@@ -82,7 +85,7 @@ class PlayerControls extends ConsumerWidget {
               onTap: () {
                 HapticFeedback.lightImpact();
                 unawaited(
-                  _run(isPlaying ? playerService.pause : playerService.play),
+                  run(isPlaying ? playerService.pause : playerService.play),
                 );
               },
               child: SizedBox(
@@ -105,13 +108,13 @@ class PlayerControls extends ConsumerWidget {
           iconSize: 36,
           icon: Icon(Icons.skip_next, color: scheme.onSurface),
           tooltip: 'Suivant',
-          onPressed: () => _run(playerService.next),
+          onPressed: () => run(playerService.next),
         ),
         IconButton(
           icon: Icon(repeatIcon, color: repeatColor),
           tooltip: 'Répétition',
           onPressed:
-              loopReady ? () => _run(playerService.cycleRepeatMode) : null,
+              loopReady ? () => run(playerService.cycleRepeatMode) : null,
         ),
       ],
     );

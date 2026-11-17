@@ -1276,9 +1276,12 @@ class _SeekBarState extends ConsumerState<_SeekBar> {
             max: max <= 0 ? 1 : max,
             onChanged: max <= 0 ? null : (v) => setState(() => _dragValue = v),
             onChangeEnd: (v) {
-              ref
-                  .read(audioPlayerServiceProvider)
-                  .seekTo(Duration(milliseconds: v.toInt()));
+              final service = ref.read(audioPlayerServiceProvider);
+              unawaited(
+                PlayerControls.run(
+                  () => service.seekTo(Duration(milliseconds: v.toInt())),
+                ),
+              );
               setState(() => _dragValue = null);
             },
           ),

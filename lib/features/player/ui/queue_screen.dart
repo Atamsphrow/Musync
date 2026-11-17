@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/player/data/audio_player_service.dart';
 import 'package:musync/features/player/providers/named_queue_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 
@@ -687,7 +688,23 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
   }
 
   Future<void> _remove(int index, Song song) async {
-    await ref.read(audioPlayerServiceProvider).removeFromQueue(index);
+    try {
+      await ref.read(audioPlayerServiceProvider).removeFromQueue(index);
+    } catch (error) {
+      // Runs from an animation listener via unawaited: an error here had
+      // nowhere to go, and the row the user swiped away came back silently.
+      DebugLog.instance.warning(
+        'QueueScreen',
+        'Retrait de la file impossible',
+        error: error,
+      );
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Impossible de retirer « ${song.title} ».')),
+      );
+      return;
+    }
     await _syncActiveQueue();
     if (!mounted) return;
     setState(() {});
@@ -700,9 +717,23 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
     // The queue can shrink between the tap and the call (a song removed
     // from elsewhere): an out-of-range index crashed here.
     if (index < 0 || index >= queue.length) return;
-    await ref
-        .read(audioPlayerServiceProvider)
-        .playSong(queue[index], queue: queue, index: index);
+    try {
+      await ref
+          .read(audioPlayerServiceProvider)
+          .playSong(queue[index], queue: queue, index: index);
+    } catch (_) {
+      // A tap on a row whose file is gone or unreadable: say which, instead
+      // of an unhandled error and a tap that did nothing.
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            PlaybackFailure.of(queue[index], canSkip: false).message,
+          ),
+        ),
+      );
+      return;
+    }
     if (mounted) setState(() {});
   }
 
