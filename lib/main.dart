@@ -208,6 +208,23 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
   /// file…), shown as a message wherever the user is.
   StreamSubscription<PlaybackFailure>? _playbackFailures;
 
+  /// The system's light/dark setting, followed when the user picked
+  /// « Système » in Apparence.
+  Brightness _platformBrightness =
+      WidgetsBinding.instance.platformDispatcher.platformBrightness;
+
+  /// The brightness the app last rendered at: the artwork prewarm below
+  /// must compute the scheme the player will actually ask for.
+  Brightness _brightness = Brightness.dark;
+
+  @override
+  void didChangePlatformBrightness() {
+    final next = WidgetsBinding.instance.platformDispatcher.platformBrightness;
+    if (next != _platformBrightness && mounted) {
+      setState(() => _platformBrightness = next);
+    }
+  }
+
   void _showPlaybackFailure(PlaybackFailure failure) {
     final service = ref.read(audioPlayerServiceProvider);
     appMessengerKey.currentState?.showOnly(
@@ -244,12 +261,12 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
     // la pochette est calculé dès que le morceau change, pas au moment où
     // l'écran monte. Quand il arrivait en pleine transition, tout l'écran
     // se re-thémait d'un coup et l'agrandissement semblait se figer à
-    // mi-course. L'app est sombre uniquement : la luminosité de la requête
-    // est toujours Brightness.dark, comme dans l'écran de lecture.
+    // mi-course. La luminosité de la requête est celle de l'app (réglage
+    // Apparence › Thème), comme dans l'écran de lecture.
     // `fireImmediately` couvre le morceau déjà en cours au démarrage.
     ref.listenManual(currentSongProvider, (previous, next) {
       if (next == null) return;
-      unawaited(warmArtworkScheme(ref, next.id));
+      unawaited(warmArtworkScheme(ref, next.id, _brightness));
     }, fireImmediately: true);
   }
 
@@ -285,20 +302,32 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
     // up again and fed, instead of sitting frozen until the player is opened.
     ref.read(lyricsBubbleProvider);
 
+    // Apparence › Thème. Resolved here rather than left to MaterialApp's
+    // themeMode, so the same single theme fills both slots as before: the
+    // app follows the setting, never the system behind the user's back.
+    final preference = ref.watch(
+      lyricsAppearanceProvider.select((a) => a.themePreference),
+    );
+    final brightness = effectiveBrightness(preference, _platformBrightness);
+    _brightness = brightness;
+
     return DynamicColorBuilder(
       builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
         // Publish the dynamic scheme so the floating bubble (separate engine)
-        // can follow Material You too. Post-frame: modifying a provider
-        // during build is not allowed.
+        // can follow Material You too — the dark one: the bubble floats over
+        // other apps and stays dark whatever the app's theme. Post-frame:
+        // modifying a provider during build is not allowed.
         WidgetsBinding.instance.addPostFrameCallback((_) {
           final notifier = ref.read(dynamicColorSchemeProvider.notifier);
           if (notifier.state != darkDynamic) notifier.state = darkDynamic;
         });
-        // darkDynamic is the wallpaper palette on Android 12+, null elsewhere;
-        // resolveScheme falls back to the brand seed in that case.
+        // The dynamic schemes are the wallpaper palette on Android 12+, null
+        // elsewhere; resolveScheme falls back to the brand seed then.
         final scheme = AppTheme.resolveScheme(
-          dynamicScheme: darkDynamic,
-          brightness: Brightness.dark,
+          dynamicScheme: brightness == Brightness.dark
+              ? darkDynamic
+              : lightDynamic,
+          brightness: brightness,
         );
         final theme = AppTheme.fromScheme(scheme);
 
@@ -309,12 +338,15 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
           child: MaterialApp(
             title: 'Musync',
             debugShowCheckedModeBanner: false,
-            // Dark only, per the spec. Both slots get the same theme so the app
-            // can't be flipped light by the system setting — `themeMode` alone
-            // would still let a light theme through if one were ever supplied.
+            // Both slots get the one theme resolved above, so the system
+            // setting can never flip the app on its own: only Apparence ›
+            // Thème decides — « Système » included, followed through
+            // didChangePlatformBrightness.
             theme: theme,
             darkTheme: theme,
-            themeMode: ThemeMode.dark,
+            themeMode: brightness == Brightness.dark
+                ? ThemeMode.dark
+                : ThemeMode.light,
             initialRoute: AppRoutes.library,
             onGenerateRoute: AppRouter.generateRoute,
             navigatorObservers: [appRouteObserver],
@@ -332,11 +364,15 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
 /// it returns null on undecodable art — so anything still escaping is
 /// swallowed here: a failed prewarm must never surface, the player will
 /// simply compute the scheme itself, as before.
-Future<void> warmArtworkScheme(WidgetRef ref, int songId) async {
+Future<void> warmArtworkScheme(
+  WidgetRef ref,
+  int songId,
+  Brightness brightness,
+) async {
   try {
     await ref.read(
       artworkSchemeProvider(
-        ArtworkSchemeRequest(songId: songId, brightness: Brightness.dark),
+        ArtworkSchemeRequest(songId: songId, brightness: brightness),
       ).future,
     );
   } catch (_) {

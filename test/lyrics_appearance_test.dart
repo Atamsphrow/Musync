@@ -16,6 +16,35 @@ void main() {
       expect(a.fontScale, 1.0);
     });
 
+    test('theme: dark by default, and for files written before the setting',
+        () {
+      expect(const LyricsAppearance().themePreference, AppThemePreference.dark);
+      expect(
+        LyricsAppearance.fromJson({'fontSize': 'large'}).themePreference,
+        AppThemePreference.dark,
+      );
+      expect(
+        LyricsAppearance.fromJson({'themePreference': 'nonsense'})
+            .themePreference,
+        AppThemePreference.dark,
+      );
+    });
+
+    test('theme round-trips and takes part in equality', () {
+      const light = LyricsAppearance(themePreference: AppThemePreference.light);
+      expect(
+        LyricsAppearance.fromJson(light.toJson()).themePreference,
+        AppThemePreference.light,
+      );
+      expect(light, isNot(const LyricsAppearance()));
+      expect(
+        const LyricsAppearance().copyWith(
+          themePreference: AppThemePreference.system,
+        ).themePreference,
+        AppThemePreference.system,
+      );
+    });
+
     test('fontScale follows the size', () {
       expect(
         const LyricsAppearance(fontSize: LyricsFontSize.small).fontScale,

@@ -48,15 +48,31 @@ class LyricsAppearanceNotifier extends Notifier<LyricsAppearance> {
 /// — can follow it too.
 final dynamicColorSchemeProvider = StateProvider<ColorScheme?>((ref) => null);
 
-/// Resolves the active-line color: plain white, or the Material You dynamic
-/// primary from the current theme.
+/// Resolves the active-line color: the neutral high-contrast color, or the
+/// Material You dynamic primary from the current theme.
+///
+/// « Neutral » is white on a dark theme — what this always returned — and
+/// the theme's onSurface on a light one, where white would vanish into the
+/// background.
 Color lyricsActiveColor(
     BuildContext context, LyricsAppearance appearance) {
+  final scheme = Theme.of(context).colorScheme;
   if (appearance.colorMode == LyricsColorMode.materialYou) {
-    return Theme.of(context).colorScheme.primary;
+    return scheme.primary;
   }
-  return Colors.white;
+  return scheme.brightness == Brightness.dark ? Colors.white : scheme.onSurface;
 }
+
+/// Which brightness the app renders at for [preference], given the
+/// system's own.
+Brightness effectiveBrightness(
+  AppThemePreference preference,
+  Brightness platformBrightness,
+) => switch (preference) {
+  AppThemePreference.system => platformBrightness,
+  AppThemePreference.light => Brightness.light,
+  AppThemePreference.dark => Brightness.dark,
+};
 
 /// Same for the bubble, which has its own independent color choice.
 Color bubbleActiveColor(
