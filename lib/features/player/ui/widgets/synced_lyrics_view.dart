@@ -353,6 +353,11 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     if (widget.lyrics.isEmpty) {
       return _EmptyLyrics(onSearchOnline: widget.onSearchOnline);
     }
+    // The words as they are lit — split into real words, estimated on
+    // line-only lines when the option asks for it. Same lines, same texts
+    // and timestamps as [widget.lyrics], which stays the one handed to the
+    // nudge sheet: estimated words must never reach the file.
+    final karaokeLyrics = ref.watch(karaokeLyricsProvider(widget.lyrics));
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -383,7 +388,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
           itemCount: widget.lyrics.length,
           itemExtentBuilder: (index, _) => _extentAt(index),
           itemBuilder: (context, index) {
-            final line = widget.lyrics.lines[index];
+            final line = karaokeLyrics.lines[index];
             final isCurrent = index == currentIndex;
 
             // The active line is bold in the chosen color, everything else

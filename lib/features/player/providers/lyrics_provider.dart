@@ -6,8 +6,10 @@ import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/lyrics/data/lyrics_word_timings_store.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/player/data/karaoke_words.dart';
 import 'package:musync/features/player/data/lyric_clock.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
+import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 import 'package:musync/features/settings/providers/playback_settings_provider.dart';
 
 /// Lyrics for the current song, tagged with the song they were read for.
@@ -258,6 +260,18 @@ Duration lyricSamplingInterval({required bool playing}) =>
   return (lineIndex: lineIndex, wordIndex: wordIndex);
 }
 
+/// [synced] as the karaoke view lights it: every timing unit one word (see
+/// [prepareKaraokeWords]). Display-side only: the nudge sheet and the file
+/// keep the lyrics as they are.
+///
+/// Keyed by the lyrics themselves (value equality): the view and
+/// [currentWordIndexProvider] get one shared result, so a word index means
+/// the same word in both.
+final karaokeLyricsProvider = Provider.autoDispose
+    .family<SyncedLyrics, SyncedLyrics>((ref, synced) {
+      return prepareKaraokeWords(synced, estimateUntimed: false);
+    });
+
 /// The word to light right now, or null when there is none.
 ///
 /// Mirrors [currentLineIndexProvider]: one 16 ms sample, one binary search
@@ -272,10 +286,15 @@ final currentWordIndexProvider = StreamProvider.autoDispose<
   // old lines with the new position would light the wrong word.
   final song = ref.watch(currentSongProvider);
   final pair = ref.watch(currentLyricsProvider).valueOrNull;
-  final synced = pair?.song?.id == song?.id ? pair?.synced : null;
-  if (synced == null || synced.isEmpty || !synced.hasWordTimings) {
-    return Stream.value(null);
-  }
+  final raw = pair?.song?.id == song?.id ? pair?.synced : null;
+  // The karaoke mode off, the view lights whole lines and never reads the
+  // word: no 16 ms ticker for it.
+  final karaoke = ref.watch(
+    lyricsAppearanceProvider.select((a) => a.karaokeAnimations),
+  );
+  if (!karaoke || raw == null || raw.isEmpty) return Stream.value(null);
+  final synced = ref.watch(karaokeLyricsProvider(raw));
+  if (!synced.hasWordTimings) return Stream.value(null);
 
   final service = ref.watch(audioPlayerServiceProvider);
   // Watched, not read: dragging the compensation slider has to move the

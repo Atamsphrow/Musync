@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
+import 'package:musync/features/player/data/karaoke_words.dart';
 
 /// Séparateurs entre les mots d'une ligne, lus dans `line.text`.
 /// `result[i]` = texte entre le mot i et le mot i+1 : `' '` si le texte
@@ -43,6 +44,11 @@ List<String>? karaokeWordSeparators(LyricLine line) {
 /// le modèle `LyricLine` / `LyricWord` ne change pas.
 ///
 /// Cas normal (un fragment par mot) : une unité = un fragment.
+///
+/// Un fragment en han ou en kana n'est jamais collé à son voisin : ces
+/// écritures n'ont pas d'espace entre les mots, chaque caractère y est un
+/// mot — les coller faisait de toute la ligne une seule unité, allumée
+/// d'un bloc.
 @immutable
 class KaraokeUnit {
   /// Index (dans `line.words`) du premier et du dernier fragment.
@@ -90,6 +96,8 @@ class KaraokeUnit {
       wordIndex >= firstIndex && wordIndex <= lastIndex;
 }
 
+bool _isUnspaced(String text) => text.runes.any(isUnspacedScriptRune);
+
 /// Regroupe les fragments de [line] en unités de mot, dans l'ordre.
 ///
 /// Si [karaokeWordSeparators] renvoie null (mots incohérents avec le
@@ -108,7 +116,9 @@ List<KaraokeUnit> karaokeWordUnits(LyricLine line) {
     final endsUnit =
         i == words.length ||
         sepBefore(i).isNotEmpty ||
-        words[i].isBackground != words[first].isBackground;
+        words[i].isBackground != words[first].isBackground ||
+        _isUnspaced(words[i - 1].text) ||
+        _isUnspaced(words[i].text);
     if (!endsUnit) continue;
     final last = i - 1;
     units.add(

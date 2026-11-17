@@ -165,12 +165,14 @@ List<InlineSpan> animatedKaraokeSpans({
         TextSpan(
           children: _growingLetterSpans(word, position, wordSung, wordBase),
         ),
+        textScaler: TextScaler.noScaling,
       );
     } else if (lift > 0.01) {
       // A word that just ended, still settling back down.
       wordWidget = Text(
         word.text,
         style: reached ? wordSung : wordUnsung,
+        textScaler: TextScaler.noScaling,
       );
     }
 
@@ -217,6 +219,11 @@ TextStyle _wordStyle(LyricWord word, TextStyle style) {
 
 /// Two copies of [word] in the sung weight — the intermediate one
 /// underneath, the bright one clipped to [fraction] of the word's width.
+///
+/// The copies are laid out unscaled, like every widget in a `WidgetSpan`
+/// here: the paragraph already scales a WidgetSpan by the system text
+/// size, so a Text inside that also applied it was scaled twice — wider
+/// than the box measured for it, and wrapped inside it.
 Widget _sweptWord({
   required LyricWord word,
   required double fraction,
@@ -228,14 +235,22 @@ Widget _sweptWord({
     width: width,
     child: Stack(
       children: [
-        Text(word.text, style: dimSungStyle),
+        Text(
+          word.text,
+          style: dimSungStyle,
+          textScaler: TextScaler.noScaling,
+        ),
         ClipRect(
           child: Align(
             alignment: Alignment.centerLeft,
             widthFactor: fraction.clamp(0.0, 1.0),
             child: SizedBox(
               width: width,
-              child: Text(word.text, style: sungStyle),
+              child: Text(
+                word.text,
+                style: sungStyle,
+                textScaler: TextScaler.noScaling,
+              ),
             ),
           ),
         ),
@@ -249,7 +264,11 @@ double _measureWidth(String text, TextStyle style) {
     text: TextSpan(text: text, style: style),
     textDirection: TextDirection.ltr,
   )..layout();
-  return painter.width;
+  // Measured every frame of the sweep: the native paragraph is released
+  // now, not whenever the garbage collector gets to it.
+  final width = painter.width;
+  painter.dispose();
+  return width;
 }
 
 /// One span per letter of a growing word: the size swells and the
