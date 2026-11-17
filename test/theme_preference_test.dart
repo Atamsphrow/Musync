@@ -32,6 +32,9 @@ void main() {
     late Color color;
     await tester.pumpWidget(
       MaterialApp(
+        // No cross-fade: the second pump must read the new theme at once,
+        // not the first frame of a lerp from the previous one.
+        themeAnimationDuration: Duration.zero,
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
             seedColor: Colors.blue,
