@@ -142,6 +142,10 @@ class AudioPlayerService {
   /// Volume à restaurer quand le fondu est annulé avant la fin.
   double _fadeTargetVolume = 1.0;
 
+  /// Settles a running [fadeOutAndPause]: true when the fade ran to the end,
+  /// false when something cancelled it (pause, skip, a new track…).
+  Completer<bool>? _fadeOutCompleter;
+
   /// Vrai quand la lecture a été mise en pause par le début d'une
   /// interruption audio (appel) : sert à décider de la reprise auto à la fin.
   bool _wasPlayingBeforeInterruption = false;
@@ -674,6 +678,55 @@ class AudioPlayerService {
     _fadeTimer?.cancel();
     _fadeTimer = null;
     unawaited(_player.setVolume(_fadeTargetVolume));
+    final pending = _fadeOutCompleter;
+    _fadeOutCompleter = null;
+    if (pending != null && !pending.isCompleted) pending.complete(false);
+  }
+
+  /// Lowers the volume to silence over [duration], then pauses and puts the
+  /// volume back where it was — the sleep timer's soft landing, instead of
+  /// the music stopping mid-phrase.
+  ///
+  /// Any transport action meanwhile (pause, skip, a new track) cancels the
+  /// fade through [_cancelVolumeFade], which restores the volume; the call
+  /// then returns false without pausing. True when it paused.
+  Future<bool> fadeOutAndPause(Duration duration) async {
+    _cancelVolumeFade();
+    if (!isPlaying) return true; // Nothing to land: already silent.
+    if (duration <= Duration.zero) {
+      await pause();
+      return true;
+    }
+    final from = _player.volume <= 0 ? 1.0 : _player.volume;
+    _fadeTargetVolume = from;
+    final completer = Completer<bool>();
+    _fadeOutCompleter = completer;
+    final clock = Stopwatch()..start();
+    _fadeTimer = Timer.periodic(const Duration(milliseconds: 250), (timer) {
+      final t = clock.elapsedMilliseconds / duration.inMilliseconds;
+      if (t >= 1) {
+        timer.cancel();
+        _fadeTimer = null;
+        _fadeOutCompleter = null;
+        if (!completer.isCompleted) completer.complete(true);
+        return;
+      }
+      // Quadratic, like the wake-up fade: the ear hears volume
+      // logarithmically, so a linear ramp sounds like nothing, then a cliff.
+      final left = 1 - t;
+      unawaited(_player.setVolume(from * left * left));
+    });
+    final ranToEnd = await completer.future;
+    if (!ranToEnd) return false;
+    await pause();
+    await _player.setVolume(from);
+    return true;
+  }
+
+  /// Stops a running [fadeOutAndPause] and restores the volume — the sleep
+  /// timer was switched off or changed mid-fade.
+  void cancelFadeOut() {
+    if (_fadeOutCompleter != null) _cancelVolumeFade();
   }
 
   /// Reprend la lecture.

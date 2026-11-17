@@ -102,4 +102,33 @@ void main() {
       expect(state.remaining, const Duration(minutes: 20));
     });
   });
+
+  group('SleepTimerController.extendBy', () {
+    test('adds five minutes to a running countdown', () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final notifier = container.read(sleepTimerProvider.notifier);
+
+      notifier.setCustomMinutes(20);
+      notifier.extendBy(SleepTimerController.extension);
+
+      final state = container.read(sleepTimerProvider);
+      expect(state.active, isTrue);
+      expect(state.option, SleepTimerOption.custom);
+      expect(state.customMinutes, 25);
+      expect(state.remaining, isNotNull);
+      expect(state.remaining! > const Duration(minutes: 24, seconds: 59),
+          isTrue);
+      expect(state.remaining! <= const Duration(minutes: 25), isTrue);
+    });
+
+    test('does nothing without a countdown', () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      container
+          .read(sleepTimerProvider.notifier)
+          .extendBy(SleepTimerController.extension);
+      expect(container.read(sleepTimerProvider).active, isFalse);
+    });
+  });
 }
