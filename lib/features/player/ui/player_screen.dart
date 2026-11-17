@@ -505,7 +505,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
                     GestureDetector(
                       onVerticalDragUpdate: _onDragUpdate,
                       onVerticalDragEnd: _onDragEnd,
-                      child: _TopBar(song: song),
+                      child: _TopBar(
+                        song: song,
+                        showLyrics: _showLyrics,
+                        onToggleLyrics: _toggleLyrics,
+                      ),
                     ),
                     Expanded(
                       child: GestureDetector(
@@ -555,12 +559,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
               const SizedBox(height: 4),
               const PlayerControls(),
               const SizedBox(height: 8),
-              _PlayerActions(
-                song: song,
-                showLyrics: _showLyrics,
-                onToggleLyrics: _toggleLyrics,
-                onOpenQueue: _openQueue,
-              ),
+              _PlayerActions(song: song, onOpenQueue: _openQueue),
               const SizedBox(height: 12),
             ],
           ),
@@ -694,8 +693,14 @@ class _QueueSlidePanel extends StatelessWidget {
 
 class _TopBar extends ConsumerWidget {
   final Song? song;
+  final bool showLyrics;
+  final VoidCallback onToggleLyrics;
 
-  const _TopBar({required this.song});
+  const _TopBar({
+    required this.song,
+    required this.showLyrics,
+    required this.onToggleLyrics,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -731,7 +736,15 @@ class _TopBar extends ConsumerWidget {
             tooltip: 'Ouvrir dans Musicolet',
             onPressed: song == null ? null : () => _share(context, song!),
           ),
-          // The lyrics toggle moved to the action row, in the thumb's reach.
+          IconButton(
+            isSelected: showLyrics,
+            icon: const Icon(Icons.lyrics_outlined),
+            selectedIcon: const Icon(Icons.lyrics),
+            tooltip: showLyrics
+                ? 'Afficher la pochette'
+                : 'Afficher les paroles',
+            onPressed: song == null ? null : onToggleLyrics,
+          ),
         ],
       ),
     );
@@ -1361,33 +1374,24 @@ class _SeekBarState extends ConsumerState<_SeekBar> {
 /// The row of secondary actions under the transport controls — in the
 /// thumb's reach, one tap each, 48 dp minimum.
 ///
-/// Paroles and File used to live elsewhere: the lyrics toggle in the top bar
-/// (the far end of the screen for a one-handed grip), the queue two taps deep
-/// in a ⋮ menu. Everything rarer than these four sits in the « Plus » sheet,
-/// so the screen keeps one primary action (Play) and a single row below it.
+/// Three buttons, by how often they are wanted while listening:
+///  * Paroles: the lyrics tools (search online, timing, text) and the tag
+///    editor, as one sheet — the toggle between cover and lyrics stays in
+///    the top bar, where it always was;
+///  * Favori: the ♥, one tap;
+///  * Plus: the rest — the queue, the sleep timer, the saved queues and the
+///    « wrong lyrics » mark. A dot on it while the sleep timer runs.
 class _PlayerActions extends ConsumerWidget {
   final Song? song;
-  final bool showLyrics;
-  final VoidCallback onToggleLyrics;
   final VoidCallback onOpenQueue;
 
-  const _PlayerActions({
-    required this.song,
-    required this.showLyrics,
-    required this.onToggleLyrics,
-    required this.onOpenQueue,
-  });
+  const _PlayerActions({required this.song, required this.onOpenQueue});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final timer = ref.watch(sleepTimerProvider);
-    final remaining = timer.remaining;
-    final timerLabel = !timer.active
-        ? 'Minuteur'
-        : remaining != null
-        ? '${remaining.inMinutes} min'
-        : 'Fin du titre';
-    final hasSong = song != null;
+    final timerActive = ref.watch(
+      sleepTimerProvider.select((t) => t.active),
+    );
     final target = song;
     final isFavorite =
         target != null && ref.watch(favoritesProvider).contains(target.filePath);
@@ -1398,17 +1402,11 @@ class _PlayerActions extends ConsumerWidget {
         children: [
           _ActionButton(
             icon: Icons.lyrics_outlined,
-            selectedIcon: Icons.lyrics,
             label: 'Paroles',
-            tooltip: showLyrics ? 'Afficher la pochette' : 'Afficher les paroles',
-            selected: showLyrics,
-            onPressed: hasSong ? onToggleLyrics : null,
-          ),
-          _ActionButton(
-            icon: Icons.queue_music,
-            label: 'File',
-            tooltip: 'File d’attente',
-            onPressed: onOpenQueue,
+            tooltip: 'Outils des paroles et tags',
+            onPressed: target == null
+                ? null
+                : () => _openLyricsTools(context, target),
           ),
           _ActionButton(
             icon: Icons.favorite_border,
@@ -1426,39 +1424,29 @@ class _PlayerActions extends ConsumerWidget {
                   },
           ),
           _ActionButton(
-            icon: Icons.timer_outlined,
-            selectedIcon: Icons.timer,
-            label: timerLabel,
-            tooltip: 'Minuteur d’arrêt',
-            selected: timer.active,
-            onPressed: () => showSleepTimerSheet(context),
-          ),
-          _ActionButton(
             icon: Icons.more_horiz,
             label: 'Plus',
-            tooltip: 'Plus d’actions',
-            onPressed: hasSong ? () => _openMoreSheet(context, ref) : null,
+            tooltip: timerActive
+                ? 'Plus d’actions — minuteur en cours'
+                : 'Plus d’actions',
+            badge: timerActive,
+            onPressed: () => _openMoreSheet(context, ref),
           ),
         ],
       ),
     );
   }
 
-  /// Everything the screen offers that is not one of the four buttons: the
-  /// lyrics tools, the tag editor, the named queues and the « wrong lyrics »
-  /// mark — the former « Paroles » sheet, « Tags » button and ⋮ menu, as one
-  /// bottom sheet.
-  void _openMoreSheet(BuildContext context, WidgetRef ref) {
-    final target = song;
-    if (target == null) return;
+  /// The lyrics tools and the tag editor: the sheet the « Paroles » button
+  /// of the bottom row always opened.
+  void _openLyricsTools(BuildContext context, Song target) {
     showModalBottomSheet<void>(
       context: context,
-      // The list can outgrow a short screen in landscape.
       isScrollControlled: true,
       builder: (sheetContext) {
-        void go(VoidCallback action) {
+        void go(String route, SongRouteArgs args) {
           Navigator.pop(sheetContext);
-          action();
+          Navigator.pushNamed(context, route, arguments: args);
         }
 
         return SafeArea(
@@ -1471,11 +1459,8 @@ class _PlayerActions extends ConsumerWidget {
                   title: const Text('Rechercher des paroles en ligne'),
                   subtitle: const Text('Paroles calées et texte via LRCLIB'),
                   onTap: () => go(
-                    () => Navigator.pushNamed(
-                      context,
-                      AppRoutes.lyricsSearch,
-                      arguments: SongRouteArgs(song: target),
-                    ),
+                    AppRoutes.lyricsSearch,
+                    SongRouteArgs(song: target),
                   ),
                 ),
                 ListTile(
@@ -1483,14 +1468,8 @@ class _PlayerActions extends ConsumerWidget {
                   title: const Text('Ajuster la synchronisation'),
                   subtitle: const Text('Caler chaque ligne sur la lecture'),
                   onTap: () => go(
-                    () => Navigator.pushNamed(
-                      context,
-                      AppRoutes.syncEditor,
-                      arguments: SongRouteArgs(
-                        song: target,
-                        editorMode: SyncMode.synced,
-                      ),
-                    ),
+                    AppRoutes.syncEditor,
+                    SongRouteArgs(song: target, editorMode: SyncMode.synced),
                   ),
                 ),
                 ListTile(
@@ -1499,14 +1478,8 @@ class _PlayerActions extends ConsumerWidget {
                   subtitle: const Text('Saisie ou collage manuel'),
                   // The same screen, opened on its plain-text half (T4).
                   onTap: () => go(
-                    () => Navigator.pushNamed(
-                      context,
-                      AppRoutes.syncEditor,
-                      arguments: SongRouteArgs(
-                        song: target,
-                        editorMode: SyncMode.simple,
-                      ),
-                    ),
+                    AppRoutes.syncEditor,
+                    SongRouteArgs(song: target, editorMode: SyncMode.simple),
                   ),
                 ),
                 ListTile(
@@ -1514,30 +1487,81 @@ class _PlayerActions extends ConsumerWidget {
                   title: const Text('Modifier les tags'),
                   subtitle: const Text('Titre, artiste, album, pochette…'),
                   onTap: () => go(
-                    () => Navigator.pushNamed(
-                      context,
-                      AppRoutes.tagEditor,
-                      arguments: SongRouteArgs(song: target),
-                    ),
-                  ),
-                ),
-                const Divider(),
-                ListTile(
-                  leading: const Icon(Icons.playlist_play),
-                  title: const Text('Files d’attente enregistrées'),
-                  onTap: () => go(() => showQueuesSheet(context)),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.block),
-                  title: const Text('Paroles incorrectes'),
-                  subtitle: const Text(
-                    'Supprimer ces paroles et ne plus en télécharger',
-                  ),
-                  onTap: () => go(
-                    () => unawaited(_markLyricsMismatch(context, ref, target)),
+                    AppRoutes.tagEditor,
+                    SongRouteArgs(song: target),
                   ),
                 ),
               ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Everything else: the queue, the sleep timer, the saved queues and the
+  /// « wrong lyrics » mark.
+  void _openMoreSheet(BuildContext context, WidgetRef ref) {
+    final target = song;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        void go(VoidCallback action) {
+          Navigator.pop(sheetContext);
+          action();
+        }
+
+        return SafeArea(
+          child: SingleChildScrollView(
+            // The sheet's own context dies with the sheet: every action below
+            // runs on the screen's `context` and `ref`, after the pop.
+            child: Consumer(
+              builder: (_, sheetRef, _) {
+                final timer = sheetRef.watch(sleepTimerProvider);
+                final remaining = timer.remaining;
+                final timerSubtitle = !timer.active
+                    ? 'Arrêter la lecture plus tard'
+                    : remaining != null
+                    ? 'Arrêt dans ${remaining.inMinutes} min'
+                    : 'Arrêt à la fin du morceau';
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.queue_music),
+                      title: const Text('File d’attente'),
+                      onTap: () => go(onOpenQueue),
+                    ),
+                    ListTile(
+                      leading: Icon(
+                        timer.active ? Icons.timer : Icons.timer_outlined,
+                      ),
+                      title: const Text('Minuteur d’arrêt'),
+                      subtitle: Text(timerSubtitle),
+                      onTap: () => go(() => showSleepTimerSheet(context)),
+                    ),
+                    ListTile(
+                      leading: const Icon(Icons.playlist_play),
+                      title: const Text('Files d’attente enregistrées'),
+                      onTap: () => go(() => showQueuesSheet(context)),
+                    ),
+                    if (target != null)
+                      ListTile(
+                        leading: const Icon(Icons.block),
+                        title: const Text('Paroles incorrectes'),
+                        subtitle: const Text(
+                          'Supprimer ces paroles et ne plus en télécharger',
+                        ),
+                        onTap: () => go(
+                          () => unawaited(
+                            _markLyricsMismatch(context, ref, target),
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
           ),
         );
@@ -1554,6 +1578,10 @@ class _ActionButton extends StatelessWidget {
   final String label;
   final String tooltip;
   final bool selected;
+
+  /// A small dot on the icon: something runs behind this button (the
+  /// sleep timer, behind « Plus »).
+  final bool badge;
   final VoidCallback? onPressed;
 
   const _ActionButton({
@@ -1562,6 +1590,7 @@ class _ActionButton extends StatelessWidget {
     required this.label,
     required this.tooltip,
     this.selected = false,
+    this.badge = false,
     required this.onPressed,
   });
 
@@ -1608,11 +1637,15 @@ class _ActionButton extends StatelessWidget {
                     ),
                     child: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 200),
-                      child: Icon(
-                        selected ? (selectedIcon ?? icon) : icon,
+                      child: Badge(
                         key: ValueKey<bool>(selected),
-                        size: 22,
-                        color: color,
+                        isLabelVisible: badge,
+                        smallSize: 8,
+                        child: Icon(
+                          selected ? (selectedIcon ?? icon) : icon,
+                          size: 22,
+                          color: color,
+                        ),
                       ),
                     ),
                   ),
