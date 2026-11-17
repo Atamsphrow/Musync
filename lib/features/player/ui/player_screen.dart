@@ -1099,10 +1099,44 @@ class _LyricsPane extends ConsumerWidget {
 
     return lyricsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
+      // A dead end used to be all there was: one grey sentence. The tag may
+      // simply have been mid-write (another app, a batch), so a retry is
+      // the first thing to offer; the online search is the way out when
+      // the file's own lyrics are unreadable for good.
       error: (error, _) => Center(
-        child: Text(
-          'Lecture des paroles impossible.',
-          style: TextStyle(color: scheme.onSurfaceVariant),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.error_outline, size: 48, color: scheme.error),
+              const SizedBox(height: 12),
+              Text(
+                'Les paroles de ce fichier n’ont pas pu être lues.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FilledButton.tonalIcon(
+                    onPressed: () => ref.invalidate(currentLyricsProvider),
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('Réessayer'),
+                  ),
+                  if (song != null)
+                    TextButton.icon(
+                      onPressed: searchOnline,
+                      icon: const Icon(Icons.search, size: 18),
+                      label: const Text('Chercher en ligne'),
+                    ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
       data: (pair) {
