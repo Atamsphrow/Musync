@@ -10,23 +10,12 @@ import 'package:musync/core/id3/models/lyrics.dart';
 const int kLineNudgeMs = 100;
 const String _nudgeBackLabel = 'Reculer de $kLineNudgeMs ms';
 const String _nudgeForwardLabel = 'Avancer de $kLineNudgeMs ms';
-const String _nudgeFromBackLabel =
-    'Reculer cette ligne et les suivantes de $kLineNudgeMs ms';
-const String _nudgeFromForwardLabel =
-    'Avancer cette ligne et les suivantes de $kLineNudgeMs ms';
 
 /// Action chosen from a line's overflow menu.
 enum LyricLineAction {
   editText,
   nudgeBack,
   nudgeForward,
-
-  /// Shift this line and every line after it, leaving earlier lines alone.
-  /// The line's own nudge moves one line only; the global offset moves them
-  /// all. This is the middle case — a track that drifts from a point, where
-  /// the part already timed correctly must not move.
-  nudgeFromBack,
-  nudgeFromForward,
 
   /// Seek to this line and play from there, so a nudge can be heard
   /// instead of guessed at: the ear decides whether the line lands on
@@ -151,15 +140,10 @@ class LyricLineTile extends StatelessWidget {
                     ),
                   ),
                   PopupMenuDivider(),
+                  // One ±100 ms row: this line only. « Décaler à partir
+                  // d'ici » was removed at the user's request — « Caler ici
+                  // et décaler tout » covers a track that drifts.
                   _NudgeMenuEntry(onNudge: onAction),
-                  _NudgeMenuEntry(
-                    onNudge: onAction,
-                    title: "Décaler à partir d'ici",
-                    backAction: LyricLineAction.nudgeFromBack,
-                    forwardAction: LyricLineAction.nudgeFromForward,
-                    backTooltip: _nudgeFromBackLabel,
-                    forwardTooltip: _nudgeFromForwardLabel,
-                  ),
                   PopupMenuItem(
                     value: LyricLineAction.playFromHere,
                     enabled: line.timestamp != null,
@@ -308,33 +292,17 @@ class _TimestampChip extends StatelessWidget {
 /// adjustment takes. Tapping out, or picking any other entry, still closes
 /// it as usual.
 class _NudgeMenuEntry extends PopupMenuEntry<LyricLineAction> {
-  const _NudgeMenuEntry({
-    required this.onNudge,
-    this.title,
-    this.backAction = LyricLineAction.nudgeBack,
-    this.forwardAction = LyricLineAction.nudgeForward,
-    this.backTooltip = _nudgeBackLabel,
-    this.forwardTooltip = _nudgeForwardLabel,
-  });
+  const _NudgeMenuEntry({required this.onNudge});
 
   final ValueChanged<LyricLineAction> onNudge;
 
-  /// Title above the buttons, or null for the bare two-button row. The
-  /// from-here row needs one: two identical ±100 ms rows would be
-  /// indistinguishable.
-  final String? title;
-  final LyricLineAction backAction;
-  final LyricLineAction forwardAction;
-  final String backTooltip;
-  final String forwardTooltip;
-
   @override
-  double get height =>
-      title == null ? kMinInteractiveDimension : kMinInteractiveDimension + 28;
+  double get height => kMinInteractiveDimension;
 
   @override
   bool represents(LyricLineAction? value) =>
-      value == backAction || value == forwardAction;
+      value == LyricLineAction.nudgeBack ||
+      value == LyricLineAction.nudgeForward;
 
   @override
   State<_NudgeMenuEntry> createState() => _NudgeMenuEntryState();
@@ -373,39 +341,20 @@ class _NudgeMenuEntryState extends State<_NudgeMenuEntry> {
 
   @override
   Widget build(BuildContext context) {
-    final buttons = Row(
+    return Row(
       children: [
         _button(
           icon: Icons.fast_rewind,
           label: '\u2212$kLineNudgeMs ms',
-          tooltip: widget.backTooltip,
-          action: widget.backAction,
+          tooltip: _nudgeBackLabel,
+          action: LyricLineAction.nudgeBack,
         ),
         _button(
           icon: Icons.fast_forward,
           label: '+$kLineNudgeMs ms',
-          tooltip: widget.forwardTooltip,
-          action: widget.forwardAction,
+          tooltip: _nudgeForwardLabel,
+          action: LyricLineAction.nudgeForward,
         ),
-      ],
-    );
-    final title = widget.title;
-    if (title == null) return buttons;
-    final scheme = Theme.of(context).colorScheme;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-          child: Text(
-            title,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-          ),
-        ),
-        buttons,
       ],
     );
   }
