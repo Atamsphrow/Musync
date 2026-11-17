@@ -1012,8 +1012,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   _songsBody(tab: tab, libraryIsEmpty: libraryIsEmpty),
                   switch (_section) {
                     LibrarySection.songs => const SizedBox.shrink(),
-                    LibrarySection.artists => const ArtistsSection(),
-                    LibrarySection.albums => const AlbumsSection(),
                     LibrarySection.favorites => const FavoritesSection(),
                     LibrarySection.history => const HistorySection(),
                   },
@@ -1343,13 +1341,6 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
     final textTheme = Theme.of(context).textTheme;
     final counts = ref.watch(lyricsStatusCountsProvider);
 
-    final subtitle = switch (songsAsync) {
-      AsyncData(:final value) =>
-        '${value.length} morceau${value.length > 1 ? 'x' : ''}',
-      AsyncError() => 'Analyse impossible',
-      _ => 'Analyse en cours…',
-    };
-
     // A plain AppBar, not a sliver: the header lives outside the scrollable
     // so the scrollbar spans exactly the song list — never the header above
     // it, never the mini player below.
@@ -1357,14 +1348,8 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
       title: const Text('Musync'),
       backgroundColor: scheme.surface,
       actions: [
-        Center(
-          child: Text(
-            subtitle,
-            style: textTheme.labelMedium?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
-          ),
-        ),
+        // No track count here any more: each tab says it above its list,
+        // with Tout lire / Aléatoire, and the tabs carry their own counts.
         // The batch search moved to the floating button, in the thumb's
         // reach — it is this screen's main action (see LibraryScreen.build).
         PopupMenuButton<LibrarySort>(

@@ -24,10 +24,6 @@ class Song {
   /// the « Ajoutés récemment » sort. Null where unknown (iOS, old rows).
   final int? dateAdded;
 
-  /// MediaStore's track number (disc × 1000 + track), for ordering an
-  /// album's songs. Null where the tag has none.
-  final int? track;
-
   const Song({
     required this.id,
     required this.title,
@@ -37,7 +33,6 @@ class Song {
     required this.filePath,
     this.albumId,
     this.dateAdded,
-    this.track,
   });
 
   // There was an `artworkUri` here, building
@@ -57,7 +52,6 @@ class Song {
     int? duration,
     String? filePath,
     int? dateAdded,
-    int? track,
   }) {
     return Song(
       id: id ?? this.id,
@@ -68,7 +62,6 @@ class Song {
       duration: duration ?? this.duration,
       filePath: filePath ?? this.filePath,
       dateAdded: dateAdded ?? this.dateAdded,
-      track: track ?? this.track,
     );
   }
 

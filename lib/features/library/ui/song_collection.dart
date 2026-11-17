@@ -1,6 +1,5 @@
 /// A plain list of tracks with « Tout lire » / « Aléatoire » on top — the
-/// body of every collection: an artist, an album, the favourites, the
-/// history. Also the route that shows an artist's or an album's tracks.
+/// body of the Favoris and Historique views.
 library;
 
 import 'package:flutter/material.dart';
@@ -9,55 +8,6 @@ import 'package:musync/core/router/app_router.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/ui/play_actions.dart';
 import 'package:musync/features/library/ui/widgets/song_tile.dart';
-import 'package:musync/features/player/ui/mini_player.dart';
-
-/// Arguments of [AppRoutes.collection].
-@immutable
-class CollectionRouteArgs {
-  final String title;
-  final String? subtitle;
-  final List<Song> songs;
-
-  const CollectionRouteArgs({
-    required this.title,
-    required this.songs,
-    this.subtitle,
-  });
-}
-
-/// An artist's or an album's tracks, as their own page — with the mini
-/// player docked at the bottom, like the library.
-class CollectionScreen extends StatelessWidget {
-  const CollectionScreen({super.key, required this.args});
-
-  final CollectionRouteArgs args;
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-    final subtitle = args.subtitle;
-    return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(args.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-            if (subtitle != null)
-              Text(
-                subtitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: textTheme.bodySmall,
-              ),
-          ],
-        ),
-      ),
-      body: SongCollectionList(songs: args.songs),
-      bottomNavigationBar: const DockedMiniPlayer(),
-    );
-  }
-}
 
 /// The list itself: a header (count, Tout lire, Aléatoire) and one
 /// [SongTile] per track. A tap plays the list from that track.

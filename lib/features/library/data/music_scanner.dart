@@ -108,7 +108,6 @@ class MusicScanner {
           duration: s.duration ?? 0,
           filePath: s.data,
           dateAdded: s.dateAdded,
-          track: s.track,
         ),
       );
     }
