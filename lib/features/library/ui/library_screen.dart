@@ -1551,10 +1551,19 @@ class _ScanFailed extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The raw exception used to be the whole message — a PlatformException
+    // dump is not something to read on a phone. Plain words first; the
+    // technical detail stays, small and last, for a bug report (the full
+    // error is in Paramètres › Journal too).
+    final detail = '$error';
     return _CenteredMessage(
       icon: Icons.error_outline,
       title: 'Analyse impossible',
-      message: '$error',
+      message:
+          'Musync n’a pas pu lire la musique de l’appareil. Réessayez ; si '
+          'le problème continue, le détail est dans Paramètres › Journal.'
+          '\n\nDétail : '
+          '${detail.length > 160 ? '${detail.substring(0, 160)}…' : detail}',
       action: FilledButton.icon(
         onPressed: onRetry,
         icon: const Icon(Icons.refresh, size: 18),
