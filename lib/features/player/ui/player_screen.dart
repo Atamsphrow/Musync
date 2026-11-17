@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:musync/core/utils/snackbar.dart';
+import 'package:musync/core/utils/audio_file_replace.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:musync/core/id3/id3_reader.dart';
@@ -908,6 +909,8 @@ class _ArtworkPane extends ConsumerWidget {
     final bytes = await _readCoverBytes(imagePath);
     if (bytes == null || !context.mounted) return;
 
+    // The cache copy, for the cleanup in the catch below.
+    File? workCopy;
     try {
       // 1. System write permission (Android 11+). A refusal aborts silently.
       final granted = await MediaStore.requestWriteAccess(
@@ -920,6 +923,7 @@ class _ArtworkPane extends ConsumerWidget {
       final cacheDir = await getTemporaryDirectory();
       final workPath = p.join(cacheDir.path, 'cover_edit_${target.id}.tmp');
       final workFile = File(workPath);
+      workCopy = workFile;
       if (await workFile.exists()) await workFile.delete();
       await File(target.filePath).copy(workPath);
 
@@ -941,17 +945,17 @@ class _ArtworkPane extends ConsumerWidget {
       ));
 
       // 4. Binary copy over the original, via a sibling temp + atomic rename.
+      //    Neither temp file outlives the call: the cache copy used to stay
+      //    behind after every cover change, a whole audio file each time.
       final original = File(target.filePath);
-      final stage = File('${original.path}.musync.tmp');
-      if (await stage.exists()) await stage.delete();
-      await workFile.copy(stage.path);
-      await stage.rename(original.path);
+      await AudioFileReplace.commit(workFile, original);
 
       // 5. Tell MediaStore the file changed, then drop the cached artwork.
       await MediaStore.rescan(original.path);
       if (!context.mounted) return;
       await ref.read(audioPlayerServiceProvider).forgetArtwork(target);
     } catch (_) {
+      if (workCopy != null) await AudioFileReplace.deleteQuietly(workCopy);
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showOnly(
         const SnackBar(content: Text('Changement de pochette impossible.')),

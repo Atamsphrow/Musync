@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'package:musync/core/utils/audio_file_replace.dart';
 import 'package:musync/core/id3/audio_container.dart';
 import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/id3/id3_writer.dart';
@@ -477,6 +478,8 @@ class _TagEditorScreenState extends ConsumerState<TagEditorScreen> {
       return;
     }
 
+    // The cache copy, for the cleanup in the catch below.
+    File? workCopy;
     try {
       // 1. System write permission (Android 11+). A refusal aborts silently —
       //    no error, no toast.
@@ -494,6 +497,7 @@ class _TagEditorScreenState extends ConsumerState<TagEditorScreen> {
       final cacheDir = await getTemporaryDirectory();
       final workPath = p.join(cacheDir.path, 'tag_edit_${song.id}.tmp');
       final workFile = File(workPath);
+      workCopy = workFile;
       if (await workFile.exists()) await workFile.delete();
       await File(song.filePath).copy(workPath);
 
@@ -514,19 +518,17 @@ class _TagEditorScreenState extends ConsumerState<TagEditorScreen> {
       }
 
       // 4. Binary copy over the original, via a sibling temp + atomic rename:
-      //    the original is never left half-written.
+      //    the original is never left half-written, and neither temp file
+      //    outlives the call.
       final target = File(song.filePath);
-      final stage = File('${target.path}.musync.tmp');
-      if (await stage.exists()) await stage.delete();
-      await workFile.copy(stage.path);
-      await _deleteQuietly(workFile);
-      await stage.rename(target.path);
+      await AudioFileReplace.commit(workFile, target);
 
       // 5. Tell MediaStore the file changed.
       await MediaStore.rescan(target.path);
     } catch (_) {
       // Anything unexpected (copy failure, …): the original is untouched,
-      // say so plainly.
+      // say so plainly — and do not leave a whole audio file in the cache.
+      if (workCopy != null) await AudioFileReplace.deleteQuietly(workCopy);
       if (!mounted) return;
       setState(() => _saving = false);
       messenger.showOnly(
@@ -547,7 +549,7 @@ class _TagEditorScreenState extends ConsumerState<TagEditorScreen> {
     });
     // The editor is gone: toast on the app's messenger, Musicolet-style.
     appMessengerKey.currentState?.showOnly(
-      const SnackBar(content: Text('Tags de la chanson mise à jour')),
+      const SnackBar(content: Text('Tags du morceau mis à jour')),
     );
   }
 
