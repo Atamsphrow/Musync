@@ -91,13 +91,17 @@ class PlayerControls extends ConsumerWidget {
               child: SizedBox(
                 width: 68,
                 height: 68,
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 200),
-                  child: Icon(
-                    isPlaying ? Icons.pause : Icons.play_arrow,
-                    key: ValueKey<bool>(isPlaying),
-                    size: 34,
-                    color: scheme.onPrimaryContainer,
+                child: BufferingRing(
+                  diameter: 60,
+                  color: scheme.onPrimaryContainer,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    child: Icon(
+                      isPlaying ? Icons.pause : Icons.play_arrow,
+                      key: ValueKey<bool>(isPlaying),
+                      size: 34,
+                      color: scheme.onPrimaryContainer,
+                    ),
                   ),
                 ),
               ),
@@ -116,6 +120,86 @@ class PlayerControls extends ConsumerWidget {
           onPressed:
               loopReady ? () => run(playerService.cycleRepeatMode) : null,
         ),
+      ],
+    );
+  }
+}
+
+/// Draws a thin spinning ring around [child] while the player is opening or
+/// buffering a track, so a tap on Play that takes a moment reads as « on its
+/// way » rather than as a tap that did nothing.
+///
+/// Shown only once the wait has lasted [delay]: a local file usually loads
+/// in a few dozen milliseconds, and a ring flashing on every track change
+/// would be noise, not feedback. The child stays visible and tappable — the
+/// ring never replaces the button.
+class BufferingRing extends ConsumerStatefulWidget {
+  const BufferingRing({
+    super.key,
+    required this.child,
+    required this.diameter,
+    required this.color,
+    this.delay = const Duration(milliseconds: 300),
+  });
+
+  final Widget child;
+  final double diameter;
+  final Color color;
+  final Duration delay;
+
+  @override
+  ConsumerState<BufferingRing> createState() => _BufferingRingState();
+}
+
+class _BufferingRingState extends ConsumerState<BufferingRing> {
+  Timer? _delayTimer;
+  bool _visible = false;
+
+  void _onBuffering(bool buffering) {
+    _delayTimer?.cancel();
+    _delayTimer = null;
+    if (!buffering) {
+      if (_visible) setState(() => _visible = false);
+      return;
+    }
+    _delayTimer = Timer(widget.delay, () {
+      if (mounted) setState(() => _visible = true);
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    ref.listenManual<bool>(
+      isBufferingProvider,
+      (_, buffering) => _onBuffering(buffering),
+      fireImmediately: true,
+    );
+  }
+
+  @override
+  void dispose() {
+    _delayTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        widget.child,
+        if (_visible)
+          IgnorePointer(
+            child: SizedBox.square(
+              dimension: widget.diameter,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: widget.color,
+                semanticsLabel: 'Chargement',
+              ),
+            ),
+          ),
       ],
     );
   }

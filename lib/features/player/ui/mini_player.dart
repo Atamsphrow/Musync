@@ -332,9 +332,13 @@ class _MiniPlayPauseButton extends ConsumerWidget {
     final isPlaying = ref.watch(isPlayingProvider);
 
     return IconButton(
-      icon: Icon(
-        isPlaying ? Icons.pause : Icons.play_arrow,
-        color: scheme.onSurface,
+      icon: BufferingRing(
+        diameter: 32,
+        color: scheme.primary,
+        child: Icon(
+          isPlaying ? Icons.pause : Icons.play_arrow,
+          color: scheme.onSurface,
+        ),
       ),
       tooltip: isPlaying ? 'Pause' : 'Lecture',
       onPressed: () {
