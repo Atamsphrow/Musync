@@ -26,6 +26,7 @@ import 'features/settings/providers/lyrics_appearance_provider.dart';
 import 'features/player/providers/player_provider.dart';
 import 'features/ai_assistant/data/automation_runner.dart';
 import 'features/lyrics/providers/background_lyrics_provider.dart';
+import 'features/library/providers/listening_history_provider.dart';
 import 'features/lyrics/providers/lyrics_sweep_worker.dart';
 
 /// Wrapped so that nothing thrown during startup goes unrecorded.
@@ -257,6 +258,8 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
     // écouté assez longtemps se voit proposer une version synchronisée,
     // écrite sans confirmation si la correspondance est sûre.
     ref.read(backgroundLyricsServiceProvider).start();
+    // Historique : compte une écoute au-delà de 30 s de lecture.
+    ref.read(listeningHistoryRecorderProvider).start();
     // Ouverture du lecteur sans à-coup : le schéma de couleurs dérivé de
     // la pochette est calculé dès que le morceau change, pas au moment où
     // l'écran monte. Quand il arrivait en pleine transition, tout l'écran

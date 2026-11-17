@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/ui/library_screen.dart';
+import 'package:musync/features/library/ui/song_collection.dart';
 import 'package:musync/features/lyrics/ui/batch_screen.dart';
 import 'package:musync/features/settings/ui/settings_screen.dart';
 import 'package:musync/features/sync_editor/providers/sync_editor_provider.dart';
@@ -44,6 +45,9 @@ class AppRoutes {
   static const String syncEditor = '/sync-editor';
   static const String settings = '/settings';
   static const String batch = '/batch';
+
+  /// An artist's or an album's tracks (see [CollectionRouteArgs]).
+  static const String collection = '/collection';
 }
 
 /// Arguments for every song-scoped route.
@@ -141,6 +145,15 @@ class AppRouter {
 
       case AppRoutes.player:
         return _buildRoute(settings, const PlayerScreen());
+
+      case AppRoutes.collection:
+        if (args is CollectionRouteArgs) {
+          return _buildRoute(settings, CollectionScreen(args: args));
+        }
+        return _buildRoute(
+          settings,
+          const _RouteError('Aucune liste fournie.'),
+        );
 
       case AppRoutes.lyricsSearch:
         if (args is SongRouteArgs) {

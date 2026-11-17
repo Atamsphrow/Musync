@@ -405,3 +405,37 @@ class _MiniProgressBar extends ConsumerWidget {
     );
   }
 }
+
+/// The mini player as a screen's bottom bar: slides in and out instead of
+/// making the content jump by its height when playback starts or stops.
+///
+/// [bottomSafeArea] is off when something sits below it (the library's
+/// navigation bar pads the system inset itself).
+class DockedMiniPlayer extends ConsumerWidget {
+  const DockedMiniPlayer({
+    super.key,
+    this.onLongPress,
+    this.bottomSafeArea = true,
+  });
+
+  /// The long-press action (the library locates the playing track). Null
+  /// does nothing, for screens with no list to locate it in.
+  final Future<void> Function()? onLongPress;
+  final bool bottomSafeArea;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final hasSong = ref.watch(currentSongProvider.select((s) => s != null));
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOutCubic,
+      alignment: Alignment.topCenter,
+      child: hasSong
+          ? SafeArea(
+              bottom: bottomSafeArea,
+              child: MiniPlayer(onLongPress: onLongPress ?? () async {}),
+            )
+          : const SizedBox.shrink(),
+    );
+  }
+}
