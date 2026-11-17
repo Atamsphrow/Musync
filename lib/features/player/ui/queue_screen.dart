@@ -827,14 +827,25 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
                           // déplacer, droite pour retirer (voir le suivi
                           // de la poignée dans le State).
                           leading: Listener(
+                            // Opaque over a 48 dp square: the handle used to
+                            // answer only on its 24 dp glyph, half the
+                            // minimum touch target — a drag started a few
+                            // pixels off became a list scroll instead.
+                            behavior: HitTestBehavior.opaque,
                             onPointerDown: (e) =>
                                 _handleDragStart(e, song, index, context),
                             onPointerMove: _handleDragMove,
                             onPointerUp: _handleDragEnd,
                             onPointerCancel: _handleDragCancel,
-                            child: Icon(
-                              Icons.drag_handle,
-                              color: scheme.onSurfaceVariant,
+                            child: Semantics(
+                              label: 'Glisser pour déplacer ou retirer',
+                              child: SizedBox.square(
+                                dimension: 48,
+                                child: Icon(
+                                  Icons.drag_handle,
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
                             ),
                           ),
                           title: Text(
