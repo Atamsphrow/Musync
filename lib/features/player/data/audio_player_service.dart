@@ -298,7 +298,22 @@ class AudioPlayerService {
   final ArtworkBytesCache _artworkBytes = ArtworkBytesCache();
   bool get isShuffleEnabled => _player.shuffleModeEnabled;
   LoopMode get loopMode => _player.loopMode;
-  bool get isPlaying => _player.playing;
+  /// Whether audio is actually advancing.
+  ///
+  /// Not `_player.playing` alone: just_audio leaves `playing` true once the
+  /// last track of the queue has finished (`ProcessingState.completed`), so
+  /// the end of a queue read as « still playing » — the main button showed
+  /// Pause over silence, and the headphones automation refused to start.
+  bool get isPlaying => isEffectivelyPlaying(
+    playing: _player.playing,
+    processingState: _player.processingState,
+  );
+
+  /// Pure rule behind [isPlaying], shared with the UI's `isPlayingProvider`.
+  static bool isEffectivelyPlaying({
+    required bool playing,
+    required ProcessingState processingState,
+  }) => playing && processingState != ProcessingState.completed;
   Duration get position => _player.position;
 
   Stream<Duration> get positionStream => _player.positionStream;
@@ -563,6 +578,13 @@ class AudioPlayerService {
   /// gentle, like [playSong] does for a fresh track. A null fade means
   /// an immediate resume at the current volume, as before.
   Future<void> play({Duration? fadeIn}) async {
+    // At the end of the queue just_audio sits on `completed`, where play()
+    // is a silent no-op: the button did nothing. Replay the track the queue
+    // stopped on, from its start — never jump elsewhere, so the sync editor
+    // keeps the track it is editing.
+    if (_player.processingState == ProcessingState.completed) {
+      await _seekWithRecord(Duration.zero, index: _player.currentIndex);
+    }
     await _player.play();
     if (fadeIn != null) _startVolumeFade(fadeIn);
   }
@@ -870,7 +892,7 @@ class AudioPlayerService {
     }
   }
 
-  Future<void> togglePlayPause() => _player.playing ? pause() : _player.play();
+  Future<void> togglePlayPause() => isPlaying ? pause() : play();
 
   /// How far short of the track end a forward seek is allowed to land.
   ///

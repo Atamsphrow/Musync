@@ -328,7 +328,7 @@ class _MiniPlayPauseButton extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
-    final isPlaying = ref.watch(playerStateProvider).value?.playing ?? false;
+    final isPlaying = ref.watch(isPlayingProvider);
 
     return IconButton(
       icon: Icon(

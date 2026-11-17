@@ -772,8 +772,7 @@ class _TransportBar extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
     final service = ref.watch(audioPlayerServiceProvider);
-    final isPlaying =
-        ref.watch(playerStateProvider).valueOrNull?.playing ?? false;
+    final isPlaying = ref.watch(isPlayingProvider);
 
     final offset = state.globalOffset.inMilliseconds;
     final offsetLabel = offset == 0

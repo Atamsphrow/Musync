@@ -28,7 +28,6 @@ class PlayerControls extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     final playerService = ref.watch(audioPlayerServiceProvider);
-    final playerStateAsync = ref.watch(playerStateProvider);
 
     // These drive the shuffle/repeat button states, so the widget has to
     // rebuild when they change — not just when the player state does.
@@ -43,7 +42,7 @@ class PlayerControls extends ConsumerWidget {
     final shuffleReady = shuffleAsync is AsyncData<bool>;
     final loopReady = loopAsync is AsyncData<LoopMode>;
 
-    final isPlaying = playerStateAsync.value?.playing ?? false;
+    final isPlaying = ref.watch(isPlayingProvider);
 
     final repeatIcon = loopMode == LoopMode.one
         ? Icons.repeat_one
