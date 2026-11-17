@@ -57,8 +57,9 @@ class AnimatedKaraokeLine extends ConsumerWidget {
           ?romanization,
         ],
       ),
-      maxLines: 2,
-      overflow: TextOverflow.ellipsis,
+      // No line cap: the lyrics view measures each row for the whole line
+      // (see SyncedLyricsView). A cap with per-word widget spans did not
+      // even ellipsize — the third line was drawn and cut by the next row.
       textAlign: textAlign,
     );
   }

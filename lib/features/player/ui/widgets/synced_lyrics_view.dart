@@ -154,10 +154,78 @@ TextStyle _lyricsTextStyle(TextStyle? base, LyricsAppearance appearance) {
 }
 
 class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
-  // Measuring every line would mean laying the whole song out up front, so
-  // lines are given a fixed extent instead — that also makes centering exact
-  // rather than the running approximation it would otherwise be.
-  static const double _lineExtent = 56;
+  // Each line's row height is measured once per song, width and style, in
+  // the line's widest rendering (bold, as when it is current) — so a long
+  // line gets the room for all its lines, and centring stays exact: the
+  // offsets are known sums, not a running estimate.
+  //
+  // It used to be one fixed 56 px for every row, with the text capped at two
+  // lines: a long line that wrapped onto a third line once bold (current)
+  // spilled out of its row and was cut in half by the next one — right on
+  // the line being sung.
+
+  /// Smallest row: one line of text with breathing room (the old fixed
+  /// extent, so short lines keep their spacing).
+  static const double _minLineExtent = 56;
+
+  /// Room above and below a line's text inside its row — also covers the
+  /// karaoke word lift.
+  static const double _lineVerticalPadding = 16;
+
+  List<double> _extents = const [];
+  List<double> _offsets = const [];
+  Object? _extentsKey;
+
+  double _extentAt(int index) =>
+      index < _extents.length ? _extents[index] : _minLineExtent;
+
+  /// Measures every row for [width], unless the inputs are unchanged.
+  void _measureLines({
+    required double width,
+    required TextStyle style,
+    required TextAlign textAlign,
+    required TextScaler textScaler,
+    required LyricsAppearance appearance,
+    required Color dimColor,
+  }) {
+    final key = (widget.lyrics, width, style, textAlign, textScaler, appearance);
+    if (key == _extentsKey && _extents.length == widget.lyrics.length) return;
+    _extentsKey = key;
+    final extents = <double>[];
+    final offsets = <double>[];
+    var running = 0.0;
+    for (final line in widget.lyrics.lines) {
+      final prefix = voicePrefix(line, widget.lyrics.hasDuet);
+      final painter = TextPainter(
+        text: TextSpan(
+          style: style,
+          children: [
+            if (prefix != null)
+              TextSpan(
+                text: '$prefix · ',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            TextSpan(text: line.text),
+            ?romanizationSpan(line, appearance, dimColor),
+          ],
+        ),
+        textAlign: textAlign,
+        textDirection: TextDirection.ltr,
+        textScaler: textScaler,
+      )..layout(maxWidth: width);
+      final measured = painter.height + _lineVerticalPadding;
+      painter.dispose();
+      final extent = measured > _minLineExtent ? measured : _minLineExtent;
+      offsets.add(running);
+      extents.add(extent);
+      running += extent;
+    }
+    _extents = extents;
+    _offsets = offsets;
+  }
 
   final ScrollController _scrollController = ScrollController();
   int? _lastCenteredIndex;
@@ -226,11 +294,13 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     // the very top and the last at the very bottom — never floating mid-screen.
     // Centring a line's midpoint means scrolling to:
     //
-    //     index * extent + extent / 2 - viewportHeight / 2
+    //     offset + extent / 2 - viewportHeight / 2
     //
     // clamped to what the list can actually scroll.
-    final target =
-        (index * _lineExtent) + (_lineExtent / 2) - (viewportHeight / 2);
+    final offset = index < _offsets.length
+        ? _offsets[index]
+        : index * _minLineExtent;
+    final target = offset + (_extentAt(index) / 2) - (viewportHeight / 2);
 
     final sw = _centerLogged ? null : (Stopwatch()..start());
 
@@ -286,6 +356,18 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
+        _measureLines(
+          // The row's horizontal padding (24 on each side) comes off.
+          width: (constraints.maxWidth - 48).clamp(1.0, double.infinity).toDouble(),
+          style: _lyricsTextStyle(
+            textTheme.bodyLarge,
+            appearance,
+          ).copyWith(fontWeight: FontWeight.w700),
+          textAlign: textAlign,
+          textScaler: MediaQuery.textScalerOf(context),
+          appearance: appearance,
+          dimColor: scheme.onSurfaceVariant.withValues(alpha: 0.55),
+        );
         if (currentIndex != null && !_followPaused) {
           if (!_centerScheduled) {
             _centerScheduled = true;
@@ -299,7 +381,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
         final list = ListView.builder(
           controller: _scrollController,
           itemCount: widget.lyrics.length,
-          itemExtent: _lineExtent,
+          itemExtentBuilder: (index, _) => _extentAt(index),
           itemBuilder: (context, index) {
             final line = widget.lyrics.lines[index];
             final isCurrent = index == currentIndex;
@@ -403,8 +485,6 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                     ?romanization,
                   ],
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
                 textAlign: textAlign,
               );
             } else {
@@ -416,8 +496,6 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                     ?romanization,
                   ],
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
                 textAlign: textAlign,
               );
             }
