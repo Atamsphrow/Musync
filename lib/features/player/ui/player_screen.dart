@@ -140,6 +140,28 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
   bool get _queueOpen => _queueController.value > 0.5;
 
+  /// Whether the queue panel has settled open, for [PopScope.canPop].
+  ///
+  /// `canPop` is read at build time, and the panel slides without
+  /// rebuilding the screen (only the AnimatedBuilder's transform moves).
+  /// Computing it from [_queueOpen] in build therefore froze it at
+  /// whatever it was the last time something else rebuilt the screen —
+  /// almost always « closed » — so Back left the player with the panel
+  /// still open instead of closing the panel. The status listener below
+  /// rebuilds once per settle, never per frame.
+  bool _queuePanelSettledOpen = false;
+
+  void _onQueueStatus(AnimationStatus status) {
+    final open = switch (status) {
+      AnimationStatus.completed => true,
+      AnimationStatus.dismissed => false,
+      _ => _queuePanelSettledOpen,
+    };
+    if (open != _queuePanelSettledOpen && mounted) {
+      setState(() => _queuePanelSettledOpen = open);
+    }
+  }
+
   void _openQueue() => _queueController.animateTo(
         1,
         duration: const Duration(milliseconds: 250),
@@ -304,6 +326,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       value: 0,
     );
     _queueController.addListener(_mountPanelWhenOpening);
+    _queueController.addStatusListener(_onQueueStatus);
     _panelMountTimer = Timer(const Duration(milliseconds: 450), () {
       if (mounted && !_panelContentBuilt.value) {
         _panelContentBuilt.value = true;
@@ -329,6 +352,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       unawaited(ScreenAwake.release());
     }
     _queueController.removeListener(_mountPanelWhenOpening);
+    _queueController.removeStatusListener(_onQueueStatus);
     _queueController.dispose();
     _openProbe?.stop();
     if (_routeSubscribed) {
@@ -431,7 +455,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
     return PopScope(
       // Back closes the queue panel instead of leaving the player.
-      canPop: !_queueOpen,
+      canPop: !_queuePanelSettledOpen && !_queueOpen,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop && _queueOpen) _closeQueue();
       },
