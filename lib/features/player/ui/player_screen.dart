@@ -157,11 +157,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   bool _queuePanelSettledOpen = false;
 
   void _onQueueStatus(AnimationStatus status) {
-    final open = switch (status) {
-      AnimationStatus.completed => true,
-      AnimationStatus.dismissed => false,
-      _ => _queuePanelSettledOpen,
-    };
+    // Read the value, never the status: `animateTo(0)` — how the panel
+    // closes — ends on `completed`, not `dismissed` (animateTo always runs
+    // « forward »). Reading the status left the panel « open » after its
+    // first close, so canPop stayed false: the swipe down to minimise was
+    // refused and the page stayed stuck halfway down.
+    if (_queueController.isAnimating) return;
+    final open = _queueController.value > 0.5;
     if (open != _queuePanelSettledOpen && mounted) {
       setState(() => _queuePanelSettledOpen = open);
     }
@@ -265,7 +267,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     final velocity = details.primaryVelocity ?? 0;
     if (_dragOffset.value >= _dismissDistance ||
         velocity >= _dismissVelocity) {
-      Navigator.maybePop(context);
+      unawaited(
+        Navigator.maybePop(context).then((_) {
+          // A refused pop (the queue panel was open: Back closes it first)
+          // must not leave the page hanging where the finger let go.
+          if (!mounted) return;
+          if (ModalRoute.of(context)?.isCurrent ?? false) {
+            _dragOffset.value = 0;
+          }
+        }),
+      );
       return;
     }
     // Not far enough: snap back, so an abandoned gesture leaves no trace.
