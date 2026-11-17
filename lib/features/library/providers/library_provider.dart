@@ -34,17 +34,39 @@ final ignoredFilesProvider = Provider<List<IgnoredFile>>((ref) {
 });
 
 class SongListNotifier extends AsyncNotifier<List<Song>> {
+  /// The last scan, unsorted, and the sort [build] last ran under.
+  ///
+  /// Changing the sort rebuilds this provider, and the rebuild used to
+  /// rescan the whole library — a MediaStore query on Android, a tag read
+  /// of every file on iOS — with the list blanked to a spinner meanwhile,
+  /// for what is only a reordering of songs already in hand. A rebuild
+  /// whose only change is the sort now re-sorts [_lastScan]. Every other
+  /// rebuild (first build, invalidate after a permission grant) still
+  /// scans: the sort is then unchanged, so it cannot take the shortcut.
+  List<Song>? _lastScan;
+  LibrarySort? _lastSort;
+
   @override
   Future<List<Song>> build() async {
     // Rebuilds when the sort changes, which keeps the ordering logic in one
     // place instead of mutating an already-emitted list.
     final sort = ref.watch(librarySortProvider);
+    final previousSort = _lastSort;
+    _lastSort = sort;
+    final cached = _lastScan;
+    if (cached != null && previousSort != null && previousSort != sort) {
+      return _sorted(cached, sort);
+    }
 
     // Scanning without permission returns an empty list on Android, which is
     // indistinguishable from "no music"; the screen needs to tell them apart.
-    if (!await PermissionService.hasAudioAccess()) return const [];
+    if (!await PermissionService.hasAudioAccess()) {
+      _lastScan = null;
+      return const [];
+    }
 
     final songs = await ref.read(musicScannerProvider).scanAllSongs();
+    _lastScan = songs;
     return _sorted(songs, sort);
   }
 
@@ -57,6 +79,15 @@ class SongListNotifier extends AsyncNotifier<List<Song>> {
       if (index < 0) return;
       final copy = List<Song>.from(songs)..[index] = updated;
       state = AsyncValue.data(_sorted(copy, ref.read(librarySortProvider)));
+      // Keep the raw scan in step, or the next re-sort would bring the old
+      // tags back.
+      final raw = _lastScan;
+      if (raw != null) {
+        final rawIndex = raw.indexOf(updated);
+        if (rawIndex >= 0) {
+          _lastScan = List<Song>.from(raw)..[rawIndex] = updated;
+        }
+      }
     });
   }
 
@@ -67,11 +98,15 @@ class SongListNotifier extends AsyncNotifier<List<Song>> {
     ThumbnailCache.instance.clear();
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
-      if (!await PermissionService.hasAudioAccess()) return const <Song>[];
+      if (!await PermissionService.hasAudioAccess()) {
+        _lastScan = null;
+        return const <Song>[];
+      }
       // Cache only: the refresh re-queries MediaStore, like the initial
       // scan in [build]. No deep re-read of the files' ID3 tags — a
       // pull-to-refresh fired by accident must stay cheap.
       final songs = await ref.read(musicScannerProvider).scanAllSongs();
+      _lastScan = songs;
       return _sorted(songs, ref.read(librarySortProvider));
     });
   }
