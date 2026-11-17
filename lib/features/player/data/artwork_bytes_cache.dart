@@ -17,6 +17,7 @@ library;
 
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:on_audio_query/on_audio_query.dart';
@@ -118,10 +119,15 @@ class ArtworkBytesCache {
     load(song).ignore();
   }
 
+  /// Bumped by [forget]: a cover on screen listens, so a cover edited
+  /// under an open player is redrawn at once — not at the next track.
+  final ValueNotifier<int> revision = ValueNotifier<int>(0);
+
   /// Drops [song]'s settled answer (cover edited): the next [load]
   /// re-queries MediaStore.
   void forget(Song song) {
     _resolved.remove(song.id);
     _pending.remove(song.id);
+    revision.value++;
   }
 }

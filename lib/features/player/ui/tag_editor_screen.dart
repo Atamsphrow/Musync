@@ -25,7 +25,9 @@ import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/id3/tag_metadata.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/core/utils/snackbar.dart';
+import 'package:musync/core/theme/artwork_scheme_provider.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/library/ui/widgets/song_artwork.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
@@ -624,7 +626,12 @@ class _TagEditorScreenState extends ConsumerState<TagEditorScreen> {
           );
       if (_coverEdit != _CoverEdit.keep) {
         ref.read(audioPlayerServiceProvider).forgetArtwork(song);
+        ref.invalidate(artworkSchemeProvider);
       }
+    }
+    if (_coverEdit != _CoverEdit.keep) {
+      // The list thumbnail would keep the old cover until a rescan.
+      ThumbnailCache.instance.evict(song.id);
     }
 
     // The library list, matched by id, keeping the current sort order.

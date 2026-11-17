@@ -21,6 +21,7 @@ import 'package:musync/core/theme/app_theme.dart';
 import 'package:musync/core/theme/artwork_scheme_provider.dart';
 import 'package:musync/core/utils/duration_format.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/library/ui/widgets/song_artwork.dart';
 import 'package:musync/features/library/providers/favorites_provider.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/core/services/permission_service.dart';
@@ -946,6 +947,9 @@ class _ArtworkPane extends ConsumerWidget {
       await MediaStore.rescan(original.path);
       if (!context.mounted) return;
       await ref.read(audioPlayerServiceProvider).forgetArtwork(target);
+      // The list thumbnail and the player's tint come from the old cover too.
+      ThumbnailCache.instance.evict(target.id);
+      ref.invalidate(artworkSchemeProvider);
     } catch (_) {
       if (workCopy != null) await AudioFileReplace.deleteQuietly(workCopy);
       if (!context.mounted) return;
@@ -1026,13 +1030,30 @@ class _CachedArtworkState extends State<_CachedArtwork> {
   @override
   void initState() {
     super.initState();
+    widget.cache.revision.addListener(_onCacheRevision);
     _syncWithCache();
   }
 
   @override
   void didUpdateWidget(_CachedArtwork oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.cache, widget.cache)) {
+      oldWidget.cache.revision.removeListener(_onCacheRevision);
+      widget.cache.revision.addListener(_onCacheRevision);
+    }
     if (oldWidget.song.id != widget.song.id) _syncWithCache();
+  }
+
+  @override
+  void dispose() {
+    widget.cache.revision.removeListener(_onCacheRevision);
+    super.dispose();
+  }
+
+  /// A cover was forgotten (edited): if it is this one, fetch it again. The
+  /// old picture stays up until the new one arrives.
+  void _onCacheRevision() {
+    if (!widget.cache.isResolved(widget.song)) _syncWithCache();
   }
 
   void _syncWithCache() {
