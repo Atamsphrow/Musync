@@ -650,9 +650,8 @@ class _QueueSlidePanel extends StatelessWidget {
                         tooltip: 'Fermer',
                         onPressed: onClose,
                       ),
-                      Text(
-                        'File d\u2019attente',
-                        style: textTheme.titleLarge,
+                      Expanded(
+                        child: QueueSummaryTitle(style: textTheme.titleLarge),
                       ),
                     ],
                   ),

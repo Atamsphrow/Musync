@@ -128,7 +128,7 @@ class _QueueScreenState extends State<QueueScreen>
     // Scaffold or the list inside it.
     final page = Scaffold(
       appBar: AppBar(
-        title: const Text('File d\u2019attente'),
+        title: const QueueSummaryTitle(),
       ),
       backgroundColor: scheme.surface,
       body: SafeArea(
@@ -960,4 +960,54 @@ class _RowExtentProbeState extends State<_RowExtentProbe> {
     }
     return widget.child;
   }
+}
+
+/// « File d'attente » with the queue's size and total length under it —
+/// how long the queue will play is the first thing a long queue hides.
+/// Follows the service's queue, so a removal or a play-next updates it.
+class QueueSummaryTitle extends ConsumerWidget {
+  const QueueSummaryTitle({super.key, this.style});
+
+  /// Style of the main title; the app bar's own when null.
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final service = ref.watch(audioPlayerServiceProvider);
+    final textTheme = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    return ValueListenableBuilder<List<Song>>(
+      valueListenable: service.queueListenable,
+      builder: (context, queue, _) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('File d\u2019attente', style: style),
+          if (queue.isNotEmpty)
+            Text(
+              queueSummary(queue),
+              style: textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// « 12 morceaux · 47 min » — pure, for the header and its test.
+String queueSummary(List<Song> queue) {
+  final count = queue.length;
+  final totalMs = queue.fold<int>(
+    0,
+    (sum, s) => sum + (s.duration > 0 ? s.duration : 0),
+  );
+  final total = Duration(milliseconds: totalMs);
+  final hours = total.inHours;
+  final minutes = total.inMinutes.remainder(60);
+  final length = hours > 0
+      ? '$hours h ${minutes.toString().padLeft(2, '0')}'
+      : '${total.inMinutes} min';
+  return '$count morceau${count > 1 ? 'x' : ''} · $length';
 }

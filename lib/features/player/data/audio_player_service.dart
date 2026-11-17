@@ -68,7 +68,17 @@ class PlaybackFailure {
 class AudioPlayerService {
   final AudioPlayer _player;
 
-  List<Song> _queue = const [];
+  /// The playback queue, observable: the queue screens' headers (track
+  /// count, total length) follow it without each mutation having to tell
+  /// them. Always an unmodifiable list, replaced — never mutated in place —
+  /// so a change is a new value.
+  final ValueNotifier<List<Song>> _queueNotifier =
+      ValueNotifier<List<Song>>(const []);
+  List<Song> get _queue => _queueNotifier.value;
+  set _queue(List<Song> value) => _queueNotifier.value = value;
+
+  /// The queue as a listenable, for widgets that summarise it.
+  ValueListenable<List<Song>> get queueListenable => _queueNotifier;
   Song? _currentSong;
 
   final StreamController<Song?> _currentSongController =
@@ -1254,5 +1264,6 @@ class AudioPlayerService {
     await _player.dispose();
     await _currentSongController.close();
     await _failureController.close();
+    _queueNotifier.dispose();
   }
 }
