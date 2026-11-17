@@ -15,8 +15,6 @@
 /// or opened, a few hundred KB each at 1024 px.
 library;
 
-import 'dart:typed_data';
-
 import 'package:flutter/foundation.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/library/data/models/song.dart';
