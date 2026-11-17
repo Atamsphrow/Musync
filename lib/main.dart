@@ -13,6 +13,7 @@ import 'features/lyrics/ui/batch_screen.dart';
 import 'core/services/audio_backend_check.dart';
 import 'core/services/debug_log.dart';
 import 'core/services/frame_probe.dart';
+import 'core/services/home_widget_bridge.dart';
 import 'core/services/media_store.dart';
 import 'core/utils/snackbar.dart';
 import 'core/services/error_capture.dart';
@@ -260,6 +261,8 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
     ref.read(backgroundLyricsServiceProvider).start();
     // Historique : compte une écoute au-delà de 30 s de lecture.
     ref.read(listeningHistoryRecorderProvider).start();
+    // Widget d'écran d'accueil (Android) : morceau en cours et commandes.
+    startHomeWidgetBridge(ref);
     // Ouverture du lecteur sans à-coup : le schéma de couleurs dérivé de
     // la pochette est calculé dès que le morceau change, pas au moment où
     // l'écran monte. Quand il arrivait en pleine transition, tout l'écran

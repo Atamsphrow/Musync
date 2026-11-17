@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_label">Musync</string>
+    <string name="widget_description">Le morceau en cours, avec Précédent, Lecture et Suivant.</string>
+</resources>

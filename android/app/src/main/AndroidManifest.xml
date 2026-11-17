@@ -160,6 +160,21 @@
             </intent-filter>
         </receiver>
 
+        <!-- Home-screen widget: the playing track, Previous / Play / Next.
+             Its buttons come back to this receiver, never to the media-button
+             receiver below (see MusyncWidgetProvider). -->
+        <receiver
+            android:name=".MusyncWidgetProvider"
+            android:exported="false"
+            android:label="@string/widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/musync_widget_info" />
+        </receiver>
+
         <!-- audio_service: background media playback service -->
         <service
             android:name="com.ryanheise.audioservice.AudioService"
