@@ -13,6 +13,7 @@ import 'package:musync/features/player/data/artwork_bytes_cache.dart';
 import 'package:musync/features/player/data/artwork_cache.dart';
 import 'package:musync/features/player/data/last_song_store.dart';
 import 'package:musync/features/player/data/playback_state_store.dart';
+import 'package:musync/features/player/data/queue_shuffle_order.dart';
 import 'package:musync/features/player/data/volume_fade.dart';
 
 /// A track that could not be played, as reported to the UI.
@@ -72,6 +73,34 @@ class AudioPlayerService {
 
   final StreamController<Song?> _currentSongController =
       StreamController<Song?>.broadcast();
+
+  /// The queue source currently in the player and its shuffle order, kept
+  /// together so a queue mutation can tell the order where the item goes
+  /// (see [QueueShuffleOrder]). Only trusted while [_player.audioSource] is
+  /// still [_queueSource].
+  ConcatenatingAudioSource? _queueSource;
+  QueueShuffleOrder? _queueOrder;
+
+  /// The shuffle order of [source] when it is the queue this service built.
+  QueueShuffleOrder? _orderOf(AudioSource? source) =>
+      identical(source, _queueSource) ? _queueOrder : null;
+
+  /// A queue source with a [QueueShuffleOrder], not yet installed.
+  static (ConcatenatingAudioSource, QueueShuffleOrder) _newQueueSource(
+    List<AudioSource> children,
+  ) {
+    final order = QueueShuffleOrder();
+    final source = ConcatenatingAudioSource(
+      // Lazy preparation: the next track starts loading just before the
+      // current one ends, so automatic advances are gapless instead of
+      // reloading at each boundary — and the stale-position window the
+      // lyrics bubble guards against gets shorter.
+      useLazyPreparation: true,
+      shuffleOrder: order,
+      children: children,
+    );
+    return (source, order);
+  }
 
   /// Playback failures the player reports on its own (see [playbackFailures]).
   final StreamController<PlaybackFailure> _failureController =
@@ -514,18 +543,11 @@ class AudioPlayerService {
     final tBuild = buildSw.elapsedMilliseconds;
     final sourceSw = Stopwatch()..start();
     final probe = FrameProbe.start('playSong', frames: 120);
+    final (queueSource, queueOrder) = _newQueueSource(children);
     try {
-      await _player.setAudioSource(
-        ConcatenatingAudioSource(
-          // Lazy preparation: the next track starts loading just before the
-          // current one ends, so automatic advances are gapless instead of
-          // reloading at each boundary — and the stale-position window the
-          // lyrics bubble guards against gets shorter.
-          useLazyPreparation: true,
-          children: children,
-        ),
-        initialIndex: resolvedIndex,
-      );
+      await _player.setAudioSource(queueSource, initialIndex: resolvedIndex);
+      _queueSource = queueSource;
+      _queueOrder = queueOrder;
     } catch (_) {
       probe.stop();
       // The new queue was announced but never loaded (corrupt/missing file):
@@ -759,13 +781,12 @@ class AudioPlayerService {
         );
         return false;
       }
-      await _player.setAudioSource(
-        ConcatenatingAudioSource(
-          useLazyPreparation: true,
-          children: [for (final s in queue) _toSource(s)],
-        ),
-        initialIndex: index,
-      );
+      final (queueSource, queueOrder) = _newQueueSource([
+        for (final s in queue) _toSource(s),
+      ]);
+      await _player.setAudioSource(queueSource, initialIndex: index);
+      _queueSource = queueSource;
+      _queueOrder = queueOrder;
       // Modes before the seek: the seek lands in plain order, and enabling
       // shuffle afterwards keeps the current item (same as toggleShuffle).
       final repeat = switch (state.repeat) {
@@ -1063,6 +1084,10 @@ class AudioPlayerService {
   Future<void> reorderQueueApply(int oldIndex, int newIndex) async {
     final source = _player.audioSource;
     if (source is! ConcatenatingAudioSource) return;
+    // The list the user drags is the plain order; under shuffle the moved
+    // track keeps its place in the shuffled run instead of landing at a
+    // random one (just_audio's default re-inserts moves randomly).
+    _orderOf(source)?.keepSlotOnNextMove();
     await source.move(oldIndex, newIndex);
     await _reconcileCurrentIndex();
   }
@@ -1142,7 +1167,17 @@ class AudioPlayerService {
     }
     final insertAt = (currentIndex + 1).clamp(0, _queue.length);
     final existing = _queue.indexOf(song);
-    if (existing == insertAt) return; // Already exactly next: nothing to do.
+    final shuffling = _player.shuffleModeEnabled;
+    // Already exactly next: nothing to do. Under shuffle « next » is the
+    // shuffled successor, not the plain-order neighbour.
+    final alreadyNext = shuffling
+        ? existing >= 0 && _player.nextIndex == existing
+        : existing == insertAt;
+    if (alreadyNext) return;
+    // Under shuffle, just_audio would drop the track at a random spot of the
+    // shuffled run: « Lire ensuite » then played it whenever. Pin it right
+    // after the current track instead.
+    if (shuffling) _orderOf(source)?.placeNextInsertAfter(currentIndex);
     final updated = List<Song>.of(_queue);
     if (existing >= 0) {
       final moved = updated.removeAt(existing);
