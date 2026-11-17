@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:musync/core/utils/snackbar.dart';
@@ -20,6 +21,7 @@ import 'package:musync/core/theme/app_theme.dart';
 import 'package:musync/core/theme/artwork_scheme_provider.dart';
 import 'package:musync/core/utils/duration_format.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/library/providers/favorites_provider.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/core/services/permission_service.dart';
 import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
@@ -1354,6 +1356,9 @@ class _PlayerActions extends ConsumerWidget {
         ? '${remaining.inMinutes} min'
         : 'Fin du titre';
     final hasSong = song != null;
+    final target = song;
+    final isFavorite =
+        target != null && ref.watch(favoritesProvider).contains(target.filePath);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1372,6 +1377,21 @@ class _PlayerActions extends ConsumerWidget {
             label: 'File',
             tooltip: 'File d’attente',
             onPressed: onOpenQueue,
+          ),
+          _ActionButton(
+            icon: Icons.favorite_border,
+            selectedIcon: Icons.favorite,
+            label: 'Favori',
+            tooltip: isFavorite ? 'Retirer des favoris' : 'Ajouter aux favoris',
+            selected: isFavorite,
+            onPressed: target == null
+                ? null
+                : () {
+                    HapticFeedback.selectionClick();
+                    unawaited(
+                      ref.read(favoritesProvider.notifier).toggle(target),
+                    );
+                  },
           ),
           _ActionButton(
             icon: Icons.timer_outlined,
