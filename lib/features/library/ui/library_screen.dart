@@ -934,6 +934,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     final libraryIsEmpty =
         ref.watch(songListProvider).valueOrNull?.isEmpty ?? false;
 
+    final showBatchButton = permissionIssue == null &&
+        !_showChat &&
+        tab != LyricsStatus.synced &&
+        (songsAsync.valueOrNull?.isNotEmpty ?? false);
+
     // The header bottom (search field + tabs) grows with the system font:
     // a fixed 124 overflows past ~2x text scale. Scale it with the text
     // scaler, capped at 2x, and hand it to the app bar so its preferred
@@ -960,7 +965,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                 searchController: _searchController,
                 searchFocusNode: _searchFocusNode,
                 tabController: _tabController,
-                onBatch: () => _startBatch(songsAsync.valueOrNull),
                 onChatSubmit: _submitChatCommand,
                 onExitChat: _exitChatMode,
               ),
@@ -1018,6 +1022,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                       ],
                     ),
                   ),
+        // The screen's main action, where the thumb rests: search the lyrics
+        // of what this tab shows. Not on « Synchronisées » (nothing left to
+        // find there), not over the chat or the permission screen, and not
+        // on an empty tab.
+        floatingActionButton: showBatchButton
+            ? FloatingActionButton.extended(
+                onPressed: () => _startBatch(songsAsync.valueOrNull),
+                icon: const Icon(Icons.manage_search),
+                label: const Text('Chercher les paroles'),
+                tooltip: 'Chercher les paroles de cet onglet',
+              )
+            : null,
         bottomNavigationBar: _DockedMiniPlayer(onLongPress: _locateCurrentSong),
       ),
     );
@@ -1154,9 +1170,16 @@ class _TabSongListState extends ConsumerState<_TabSongList>
                   ),
                 ],
               },
-              // Keeps the last song reachable above the mini player.
+              // Keeps the last song reachable above the mini player — and,
+              // on the tabs that carry it, above the floating batch button.
               SliverToBoxAdapter(
-                child: SizedBox(height: hasCurrentSong ? 8 : 24),
+                child: SizedBox(
+                  height: status != LyricsStatus.synced
+                      ? 88
+                      : hasCurrentSong
+                      ? 8
+                      : 24,
+                ),
               ),
             ],
           ),
@@ -1212,8 +1235,6 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
   /// Owned by the screen, so a tap and a swipe drive the same indicator.
   final TabController tabController;
 
-  final VoidCallback onBatch;
-
   final ValueChanged<String> onChatSubmit;
   final VoidCallback onExitChat;
 
@@ -1223,7 +1244,6 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
     required this.searchController,
     required this.searchFocusNode,
     required this.tabController,
-    required this.onBatch,
     required this.onChatSubmit,
     required this.onExitChat,
   });
@@ -1256,14 +1276,8 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
             ),
           ),
         ),
-        // No batch search on the Synchronisées tab: those tracks already
-        // have synced lyrics, there is nothing to search for.
-        if (ref.watch(libraryTabProvider) != LyricsStatus.synced)
-          IconButton(
-            icon: const Icon(Icons.playlist_add_check),
-            tooltip: 'Chercher les paroles de cet onglet',
-            onPressed: songsAsync.valueOrNull?.isEmpty ?? true ? null : onBatch,
-          ),
+        // The batch search moved to the floating button, in the thumb's
+        // reach — it is this screen's main action (see LibraryScreen.build).
         PopupMenuButton<LibrarySort>(
           icon: const Icon(Icons.sort),
           tooltip: 'Trier',

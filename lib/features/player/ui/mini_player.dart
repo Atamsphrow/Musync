@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:on_audio_query/on_audio_query.dart';
 import 'package:musync/core/router/app_router.dart';
+import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/player/ui/widgets/player_controls.dart';
@@ -33,6 +34,24 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
   /// the timer fired delivers no tap — without the reset the flag would
   /// wrongly swallow the *next* tap).
   bool _suppressNextTap = false;
+
+  void _openPlayer(Song currentSong) {
+    // TEMPORARY (chasse au gel) : 120 frames couvrent la glissade
+    // de 350 ms même à 120 Hz.
+    FrameProbe.start('ouverture mini', frames: 120);
+    final service = ref.read(audioPlayerServiceProvider);
+    Navigator.pushNamed(
+      context,
+      AppRoutes.player,
+      // Passing the live queue means reopening the player never restarts
+      // playback — it recognises the song as the one already playing.
+      arguments: SongRouteArgs(
+        song: currentSong,
+        queue: service.queue,
+        index: service.currentIndex,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -66,46 +85,39 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
         HapticFeedback.lightImpact();
         unawaited(widget.onLongPress());
       },
-      child: Material(
-        color: scheme.surfaceContainerHigh,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () {
-            if (_suppressNextTap) {
-              _suppressNextTap = false;
-              return;
-            }
-            // TEMPORARY (chasse au gel) : 120 frames couvrent la glissade
-            // de 350 ms même à 120 Hz.
-            FrameProbe.start('ouverture mini', frames: 120);
-            final service = ref.read(audioPlayerServiceProvider);
-            Navigator.pushNamed(
-              context,
-              AppRoutes.player,
-              // Passing the live queue means reopening the player never restarts
-              // playback — it recognises the song as the one already playing.
-              arguments: SongRouteArgs(
-                song: currentSong,
-                queue: service.queue,
-                index: service.currentIndex,
-              ),
-            );
-          },
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const _MiniProgressBar(),
-              // The current synced line, right under the progress bar — the
-              // inline replacement for the floating bubble inside the app.
-              // Collapses when there is no active line, so the player keeps its
-              // compact height on lyrics-less songs.
-              const _MiniLyricLine(),
-              const SizedBox(
-                height: 62,
-                child: _MiniContentRow(),
-              ),
-            ],
+      // Swipe up opens the player too: the gesture mirrors the player's own
+      // swipe-down-to-minimise, so the two screens move the same way.
+      child: GestureDetector(
+        onVerticalDragEnd: (details) {
+          if ((details.primaryVelocity ?? 0) < -300) _openPlayer(currentSong);
+        },
+        child: Material(
+          color: scheme.surfaceContainerHigh,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: () {
+              if (_suppressNextTap) {
+                _suppressNextTap = false;
+                return;
+              }
+              _openPlayer(currentSong);
+            },
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const _MiniProgressBar(),
+                // The current synced line, right under the progress bar — the
+                // inline replacement for the floating bubble inside the app.
+                // Collapses when there is no active line, so the player keeps its
+                // compact height on lyrics-less songs.
+                const _MiniLyricLine(),
+                const SizedBox(
+                  height: 62,
+                  child: _MiniContentRow(),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -263,6 +275,16 @@ class _MiniContentRow extends ConsumerWidget {
           ),
         ),
         const _MiniPlayPauseButton(),
+        // Next in reach without opening the player — the one transport action
+        // besides Play that a thumb wants from the library.
+        IconButton(
+          icon: Icon(Icons.skip_next, color: scheme.onSurface),
+          tooltip: 'Suivant',
+          onPressed: () {
+            final service = ref.read(audioPlayerServiceProvider);
+            unawaited(PlayerControls.run(service.next));
+          },
+        ),
         const SizedBox(width: 4),
       ],
     );
