@@ -35,6 +35,7 @@ class ListeningHistoryNotifier extends Notifier<Map<String, ListenEntry>> {
       await ref.read(listeningHistoryStoreProvider).load(),
     );
     // Listens recorded while the file was still loading are replayed on top.
+    final hadPending = _beforeLoad.isNotEmpty;
     for (final (path, atMs) in _beforeLoad) {
       loaded[path] =
           (loaded[path] ?? ListenEntry(count: 0, lastPlayedMs: atMs))
@@ -43,6 +44,7 @@ class ListeningHistoryNotifier extends Notifier<Map<String, ListenEntry>> {
     _beforeLoad.clear();
     _loaded = true;
     state = Map.unmodifiable(loaded);
+    if (hadPending) await _save();
   }
 
   /// Counts one listen of [path] at [atMs].
