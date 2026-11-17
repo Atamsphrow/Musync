@@ -59,6 +59,11 @@ class ArtworkBytesCache {
   /// Never throws: a failed query settles as "no cover" for the session
   /// rather than hammering MediaStore on every open.
   Future<Uint8List?> load(Song song) {
+    // Settled answers are served from [_resolved]; [_pending] only holds the
+    // queries still in flight (see below).
+    if (_resolved.containsKey(song.id)) {
+      return Future<Uint8List?>.value(_resolved[song.id]);
+    }
     final existing = _pending[song.id];
     if (existing != null) return existing;
     // Chrono « Perf » : une requête n'a lieu que sur un cache froid
@@ -87,7 +92,16 @@ class ArtworkBytesCache {
           _trimResolved();
           return null;
         });
-    return _pending[song.id] = future;
+    _pending[song.id] = future;
+    // The in-flight entry goes once the answer is settled. Kept, a completed
+    // future still holds its bytes: [_pending] grew with every track ever
+    // opened and silently defeated the [_maxResolved] cap — a 1024 px cover
+    // per played track, for the whole session. `identical`: a forget() and
+    // a fresh load may have replaced this entry meanwhile.
+    future.whenComplete(() {
+      if (identical(_pending[song.id], future)) _pending.remove(song.id);
+    }).ignore();
+    return future;
   }
 
   /// Drops the oldest settled answers past [_maxResolved]. The map

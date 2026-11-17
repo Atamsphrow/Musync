@@ -94,6 +94,22 @@ void main() {
       expect(query.calls, 2);
     });
 
+    test('the session cap really evicts: no hidden copy left in flight',
+        () async {
+      // 41 tracks: one past the cap. The first one's bytes must be gone —
+      // a completed in-flight future used to keep them (and answer for
+      // them) forever, which made the cap decorative.
+      for (var id = 100; id <= 140; id++) {
+        await cache.load(_song(id));
+      }
+      // Let the in-flight cleanups run.
+      await Future<void>.delayed(Duration.zero);
+      expect(query.calls, 41);
+      expect(cache.isResolved(_song(100)), isFalse);
+      await cache.load(_song(100));
+      expect(query.calls, 42);
+    });
+
     test('prefetch warms without a caller awaiting it', () async {
       final song = _song(6);
       cache.prefetch(song);
