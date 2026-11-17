@@ -1222,6 +1222,8 @@ String _sortLabel(LibrarySort sort) => switch (sort) {
   LibrarySort.title => 'Par titre',
   LibrarySort.artist => 'Par artiste',
   LibrarySort.album => 'Par album',
+  LibrarySort.dateAdded => 'Ajoutés récemment',
+  LibrarySort.duration => 'Par durée',
 };
 
 class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {

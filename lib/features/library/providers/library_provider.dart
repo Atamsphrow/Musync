@@ -15,7 +15,7 @@ final libraryPermissionDeniedProvider = StateProvider<PermissionOutcome?>(
 
 /// How the library is ordered. Sorting is state rather than a one-off mutation
 /// so it survives a rescan.
-enum LibrarySort { title, artist, album }
+enum LibrarySort { title, artist, album, dateAdded, duration }
 
 final librarySortProvider = StateProvider<LibrarySort>(
   (ref) => LibrarySort.title,
@@ -111,18 +111,32 @@ class SongListNotifier extends AsyncNotifier<List<Song>> {
     });
   }
 
-  static List<Song> _sorted(List<Song> songs, LibrarySort sort) {
-    final compare = switch (sort) {
-      LibrarySort.title => (Song a, Song b) => a.title.toLowerCase().compareTo(
-        b.title.toLowerCase(),
-      ),
-      LibrarySort.artist =>
-        (Song a, Song b) =>
-            a.artist.toLowerCase().compareTo(b.artist.toLowerCase()),
-      LibrarySort.album => (Song a, Song b) => a.album.toLowerCase().compareTo(
-        b.album.toLowerCase(),
-      ),
-    };
-    return List<Song>.from(songs)..sort(compare);
-  }
+  static List<Song> _sorted(List<Song> songs, LibrarySort sort) =>
+      sortedSongs(songs, sort);
+}
+
+/// [songs] ordered by [sort]. Pure, for the library and its tests.
+///
+/// Ties fall back to the title, so the new sorts (date, length) still read
+/// in a stable order. The newest additions come first, the shortest tracks
+/// first; a track without a date goes after every dated one.
+List<Song> sortedSongs(List<Song> songs, LibrarySort sort) {
+  int byTitle(Song a, Song b) =>
+      a.title.toLowerCase().compareTo(b.title.toLowerCase());
+  final compare = switch (sort) {
+    LibrarySort.title => byTitle,
+    LibrarySort.artist => (Song a, Song b) =>
+        a.artist.toLowerCase().compareTo(b.artist.toLowerCase()),
+    LibrarySort.album => (Song a, Song b) =>
+        a.album.toLowerCase().compareTo(b.album.toLowerCase()),
+    LibrarySort.dateAdded => (Song a, Song b) {
+      final byDate = (b.dateAdded ?? -1).compareTo(a.dateAdded ?? -1);
+      return byDate != 0 ? byDate : byTitle(a, b);
+    },
+    LibrarySort.duration => (Song a, Song b) {
+      final byLength = a.duration.compareTo(b.duration);
+      return byLength != 0 ? byLength : byTitle(a, b);
+    },
+  };
+  return List<Song>.from(songs)..sort(compare);
 }
