@@ -1,0 +1,107 @@
+name: Vérification de la branche de revue
+
+# TEMPORAIRE — à supprimer avant de fusionner la branche de revue.
+#
+# Chaque poussée sur une branche `review/**` lance l'analyse statique, les
+# tests et une compilation APK de debug (sans clé de signature), avec la même
+# version de Flutter que build-apk.yml. Les journaux sont publiés sur la
+# branche `ci/review-results` : l'agent qui travaille sur la revue n'a pas
+# accès à l'API GitHub, mais il peut lire une branche avec git.
+on:
+  push:
+    branches:
+      - "review/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.6"
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze Dart
+        id: analyze
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          flutter analyze --fatal-infos 2>&1 | tee "$RUNNER_TEMP/analyze.log"
+
+      - name: Run Flutter tests
+        id: test
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          flutter test --reporter expanded 2>&1 | tee "$RUNNER_TEMP/test.log"
+
+      - name: Build APK (debug, arm64)
+        id: build
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          chmod +x android/gradlew
+          flutter build apk --debug --target-platform android-arm64 2>&1 \
+            | tee "$RUNNER_TEMP/build.log"
+
+      - name: Publish results
+        if: always()
+        env:
+          ANALYZE: ${{ steps.analyze.outcome }}
+          TEST: ${{ steps.test.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+        run: |
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          for f in analyze test build; do
+            if [ -f "$RUNNER_TEMP/$f.log" ]; then cp "$RUNNER_TEMP/$f.log" "$out/"; fi
+          done
+          {
+            echo "branch: $GITHUB_REF_NAME"
+            echo "commit: $GITHUB_SHA"
+            echo "analyze: $ANALYZE"
+            echo "test: $TEST"
+            echo "build: $BUILD"
+            echo "run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$out/summary.txt"
+          if [ -f "$out/test.log" ]; then
+            grep -E "\[E\]|Some tests failed|All tests passed" "$out/test.log" \
+              > "$out/test-failures.txt" || true
+          fi
+          cd "$out"
+          git init -q
+          git config user.name "musync-ci"
+          git config user.email "musync-ci@users.noreply.github.com"
+          git add -A
+          git commit -q -m "CI $GITHUB_REF_NAME @ $GITHUB_SHA"
+          git push -q -f \
+            "https://x-access-token:${{ github.token }}@github.com/$GITHUB_REPOSITORY.git" \
+            HEAD:refs/heads/ci/review-results
+
+      - name: Fail when a check failed
+        if: steps.analyze.outcome != 'success' || steps.test.outcome != 'success' || steps.build.outcome != 'success'
+        run: |
+          echo "analyze=${{ steps.analyze.outcome }} test=${{ steps.test.outcome }} build=${{ steps.build.outcome }}"
+          exit 1
