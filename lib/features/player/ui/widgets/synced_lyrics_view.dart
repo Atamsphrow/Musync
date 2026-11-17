@@ -161,6 +161,30 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
 
   final ScrollController _scrollController = ScrollController();
   int? _lastCenteredIndex;
+
+  /// Set when the user scrolls the lyrics by hand: the view stops pulling
+  /// the list back to the current line on every line change — which made
+  /// reading ahead (or back) impossible — and offers a button to return.
+  bool _followPaused = false;
+
+  void _pauseFollow() {
+    if (!_followPaused) setState(() => _followPaused = true);
+  }
+
+  /// Back to following the playback, re-centring at once.
+  void _resumeFollow() {
+    if (!_followPaused && _lastCenteredIndex != null) return;
+    setState(() {
+      _followPaused = false;
+      _lastCenteredIndex = null;
+    });
+  }
+
+  /// A line or word tap is a seek: the user wants to be where the music is.
+  void _seekTo(Duration position) {
+    ref.read(audioPlayerServiceProvider).seekTo(position);
+    _resumeFollow();
+  }
   // A build schedules at most one post-frame centering: without the flag,
   // every rebuild re-scheduled one while the previous was still pending.
   bool _centerScheduled = false;
@@ -237,7 +261,10 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     super.didUpdateWidget(oldWidget);
     // A new song (or retimed lyrics) must not inherit the old scroll anchor:
     // the next line change re-centres from wherever the list happens to be.
-    if (oldWidget.lyrics != widget.lyrics) _lastCenteredIndex = null;
+    if (oldWidget.lyrics != widget.lyrics) {
+      _lastCenteredIndex = null;
+      _followPaused = false;
+    }
   }
 
   @override
@@ -259,7 +286,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (currentIndex != null) {
+        if (currentIndex != null && !_followPaused) {
           if (!_centerScheduled) {
             _centerScheduled = true;
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -269,7 +296,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
           }
         }
 
-        return ListView.builder(
+        final list = ListView.builder(
           controller: _scrollController,
           itemCount: widget.lyrics.length,
           itemExtent: _lineExtent,
@@ -356,8 +383,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                 wordIndex: wordIndex,
                 sungStyle: sungStyle,
                 unsungStyle: unsungStyle,
-                onWordTap: (position) =>
-                    ref.read(audioPlayerServiceProvider).seekTo(position),
+                onWordTap: _seekTo,
                 prefix: prefixSpan,
                 romanization: romanization,
                 textAlign: textAlign,
@@ -370,9 +396,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                     ...karaokeWordSpans(
                       line: line,
                       wordIndex: wordIndex,
-                      onWordTap: (position) => ref
-                          .read(audioPlayerServiceProvider)
-                          .seekTo(position),
+                      onWordTap: _seekTo,
                       sungStyle: sungStyle,
                       unsungStyle: unsungStyle,
                     ),
@@ -400,8 +424,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
 
             return InkWell(
               // Non-null: this view renders SyncedLyrics, which is timed-only.
-              onTap: () =>
-                  ref.read(audioPlayerServiceProvider).seekTo(line.timestamp!),
+              onTap: () => _seekTo(line.timestamp!),
               // Long-press: nudge this line's timing directly (±100 ms),
               // without opening the full sync editor. The editor stays
               // available from the player's "Ajuster la synchronisation"
@@ -439,6 +462,38 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
               ),
             );
           },
+        );
+
+        return Stack(
+          children: [
+            NotificationListener<ScrollStartNotification>(
+              // A start with drag details is a finger on the list; the
+              // view's own animateTo starts without them.
+              onNotification: (notification) {
+                if (notification.dragDetails != null) _pauseFollow();
+                return false;
+              },
+              child: list,
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 12,
+              child: Center(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  child: _followPaused && currentIndex != null
+                      ? FilledButton.tonalIcon(
+                          key: const ValueKey('resume-follow'),
+                          onPressed: _resumeFollow,
+                          icon: const Icon(Icons.my_location, size: 18),
+                          label: const Text('Revenir à la ligne en cours'),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+              ),
+            ),
+          ],
         );
       },
     );
