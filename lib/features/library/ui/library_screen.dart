@@ -18,6 +18,7 @@ import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/catalogue_provider.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
+import 'package:musync/features/library/ui/play_actions.dart';
 import 'package:musync/features/library/ui/widgets/song_tile.dart';
 import 'package:musync/features/ai_assistant/data/assistant_controller.dart';
 import 'package:musync/features/ai_assistant/ui/ai_chat_view.dart';
@@ -348,7 +349,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       if (index >= 0 &&
           controller.hasClients &&
           (controller.position.maxScrollExtent == 0 ||
-              controller.position.maxScrollExtent >= index * rowH)) {
+              controller.position.maxScrollExtent >=
+                  kLibraryListHeaderHeight + index * rowH)) {
         settledIndex = index;
         break;
       }
@@ -380,7 +382,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     if (useIndex != index && mounted) setState(() => _locateIndex = useIndex);
 
     if (controller.hasClients) {
-      final target = (useIndex * rowH)
+      // The list header (count, Tout lire, Aléatoire) sits above row 0.
+      final target = (kLibraryListHeaderHeight + useIndex * rowH)
           .clamp(0.0, controller.position.maxScrollExtent);
       DebugLog.instance.info(
         'Appui long',
@@ -1127,10 +1130,11 @@ class _TabSongListState extends ConsumerState<_TabSongList>
                   ),
                 ],
                 AsyncData(:final value) => [
-                  if (query.isNotEmpty && value.isNotEmpty)
-                    SliverToBoxAdapter(
-                      child: _SearchQueueHeader(songs: value, query: query),
-                    ),
+                  // Always there on a non-empty list, at a fixed height:
+                  // the locate jump adds it to the row offset.
+                  SliverToBoxAdapter(
+                    child: _ListHeader(songs: value, query: query),
+                  ),
                   SliverFixedExtentList.builder(
                     // Fixed extent: every row is exactly kSongTileHeight
                     // tall, so the locate jump is precise.
@@ -1467,38 +1471,52 @@ class _SearchField extends ConsumerWidget {
   }
 }
 
-/// Header shown above search results: result count plus a one-tap way to
-/// turn the results into a named queue (e.g. search "Juice WRLD" →
-/// "Créer une file" → a "Juice WRLD" queue).
-class _SearchQueueHeader extends ConsumerWidget {
+/// Height of [_ListHeader]: fixed, so the locate jump can add it to the
+/// row offset and still land exactly on the row.
+const double kLibraryListHeaderHeight = 56;
+
+/// Header above every non-empty library list: the count, « Tout lire »,
+/// « Aléatoire » — and, on a search, a one-tap way to turn the results
+/// into a named queue (search « Juice WRLD » → « Créer une file » → a
+/// « Juice WRLD » queue).
+class _ListHeader extends ConsumerWidget {
   final List<Song> songs;
   final String query;
 
-  const _SearchQueueHeader({required this.songs, required this.query});
+  const _ListHeader({required this.songs, required this.query});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              '${songs.length} résultat${songs.length > 1 ? 's' : ''}',
-              style: Theme.of(context).textTheme.bodySmall,
+    final count = songs.length;
+    final noun = query.isEmpty
+        ? 'morceau${count > 1 ? 'x' : ''}'
+        : 'résultat${count > 1 ? 's' : ''}';
+    return SizedBox(
+      height: kLibraryListHeaderHeight,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '$count $noun',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             ),
-          ),
-          FilledButton.tonalIcon(
-            onPressed: () => createQueueFromSongs(
-              context,
-              ref,
-              songs,
-              suggestedName: query,
-            ),
-            icon: const Icon(Icons.playlist_add, size: 18),
-            label: const Text('Créer une file'),
-          ),
-        ],
+            if (query.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.playlist_add),
+                tooltip: 'Créer une file avec ces résultats',
+                onPressed: () => createQueueFromSongs(
+                  context,
+                  ref,
+                  songs,
+                  suggestedName: query,
+                ),
+              ),
+            PlaySongsButtons(songs: songs),
+          ],
+        ),
       ),
     );
   }
