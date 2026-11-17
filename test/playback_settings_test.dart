@@ -17,6 +17,21 @@ void main() {
       expect(lineRefreshInterval.inMilliseconds, lessThanOrEqualTo(16));
       expect(lineRefreshInterval.inMilliseconds, greaterThan(0));
     });
+
+    test('playing samples every frame; paused falls back to a slow poll', () {
+      // Playing must stay at one frame — the T22 pin above. Paused must not:
+      // sixty wake-ups a second over a frozen position is pure battery.
+      expect(lyricSamplingInterval(playing: true), lineRefreshInterval);
+      expect(
+        lyricSamplingInterval(playing: false),
+        greaterThan(lineRefreshInterval),
+      );
+      // Still quick enough to follow a seek made while paused.
+      expect(
+        lyricSamplingInterval(playing: false).inMilliseconds,
+        lessThanOrEqualTo(250),
+      );
+    });
   });
 
   group('the offset model', () {

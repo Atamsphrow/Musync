@@ -222,6 +222,21 @@ void refreshLyricsOnForeground(WidgetRef ref) {
 /// would have needed for each of those four cases.
 const Duration lineRefreshInterval = Duration(milliseconds: 16);
 
+/// Sampling period while nothing plays.
+///
+/// The 16 ms tickers below used to run all the time — paused, and with the
+/// app in the background, as long as anything watched them (the mini player
+/// does, permanently). Sixty wake-ups a second over a frozen position keep
+/// the CPU out of its sleep states for hours of « paused ». A slow poll is
+/// enough to follow a seek made while paused (a tap on a line, the seek
+/// bar), and the moment playback resumes the providers rebuild at
+/// [lineRefreshInterval].
+const Duration pausedRefreshInterval = Duration(milliseconds: 200);
+
+/// The period the lyric tickers sample at, given whether audio advances.
+Duration lyricSamplingInterval({required bool playing}) =>
+    playing ? lineRefreshInterval : pausedRefreshInterval;
+
 /// The word being sung at [position]: the latest word of the current line
 /// whose start has passed — or null before the first word of the line (or
 /// before the first line at all).
@@ -267,6 +282,8 @@ final currentWordIndexProvider = StreamProvider.autoDispose<
   // words as it is dragged, like it moves the lines.
   final offset = ref.watch(lyricsOffsetProvider);
 
+  final playing = ref.watch(isPlayingProvider);
+
   ({int lineIndex, int wordIndex})? last;
   Duration? lastPosition;
   // One clock per provider, fresh on every rebuild (song change): the raw
@@ -276,7 +293,7 @@ final currentWordIndexProvider = StreamProvider.autoDispose<
   // at once, not be absorbed as jitter.
   final clock = LyricClock();
   return Stream<({int lineIndex, int wordIndex})?>.periodic(
-    lineRefreshInterval,
+    lyricSamplingInterval(playing: playing),
     (_) {
       final position = clock.tick(service.position) + offset;
       if (position == lastPosition) return last;
@@ -300,9 +317,10 @@ final lyricPositionProvider = StreamProvider.autoDispose<Duration>((ref) {
   // Watched, not read: dragging the compensation slider has to move the
   // animation as it is dragged, like it moves the lines.
   final offset = ref.watch(lyricsOffsetProvider);
+  final playing = ref.watch(isPlayingProvider);
   final clock = LyricClock();
   return Stream<Duration>.periodic(
-    lineRefreshInterval,
+    lyricSamplingInterval(playing: playing),
     (_) => clock.tick(service.position) + offset,
   ).distinct();
 });
@@ -339,7 +357,8 @@ final currentLineIndexProvider = StreamProvider.autoDispose<int?>((ref) {
   // lines at once, not be absorbed as jitter. The bubble and the
   // mini-player read this provider, so they get the clocked position too.
   final clock = LyricClock();
-  return Stream<int?>.periodic(lineRefreshInterval, (_) {
+  final playing = ref.watch(isPlayingProvider);
+  return Stream<int?>.periodic(lyricSamplingInterval(playing: playing), (_) {
     final position = clock.tick(service.position) + offset;
     if (position == lastPosition) return lastIndex;
     lastPosition = position;
