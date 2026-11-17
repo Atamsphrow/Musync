@@ -106,7 +106,11 @@ class AppRouter {
 
       case AppRoutes.batch:
         if (args is BatchRequest) {
-          if (args.songs.isEmpty) {
+          // La relecture (notification « recherche terminée ») n'apporte
+          // aucun morceau : les résultats sont déjà dans le provider. Sans
+          // cette exception, toucher la notification ouvrait « Aucun
+          // morceau à traiter. » au lieu des résultats.
+          if (args.songs.isEmpty && !args.reviewOnly) {
             return _buildRoute(
               settings,
               const _RouteError('Aucun morceau à traiter.'),
