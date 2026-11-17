@@ -1335,7 +1335,11 @@ class _LyricsActions extends ConsumerWidget {
               case 'timer':
                 showSleepTimerSheet(context);
               case 'mismatch':
-                unawaited(_markLyricsMismatch(context, ref, song!));
+                // The menu stays reachable with no track (queue emptied
+                // under an open player): `song!` crashed here.
+                final target = song;
+                if (target == null) return;
+                unawaited(_markLyricsMismatch(context, ref, target));
             }
           },
           itemBuilder: (context) => [
@@ -1359,9 +1363,10 @@ class _LyricsActions extends ConsumerWidget {
                 ],
               ),
             ),
-            const PopupMenuItem(
+            PopupMenuItem(
               value: 'mismatch',
-              child: Row(
+              enabled: song != null,
+              child: const Row(
                 children: [
                   Icon(Icons.block, size: 20),
                   SizedBox(width: 12),
