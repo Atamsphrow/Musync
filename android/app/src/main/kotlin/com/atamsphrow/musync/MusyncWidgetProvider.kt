@@ -6,11 +6,15 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.widget.RemoteViews
 
-/// Home-screen widget: the playing track, Previous · Play/Pause · Next.
+/// Home-screen widget: the playing track and its cover, Previous ·
+/// Play/Pause · Next.
 ///
 /// The buttons do not go through audio_service's media-button receiver:
 /// pressed with Musync's process dead, that path starts the playback
@@ -61,6 +65,58 @@ class MusyncWidgetProvider : AppWidgetProvider() {
         private const val KEY_ARTIST = "artist"
         private const val KEY_PLAYING = "playing"
 
+        /// Longest side of the cover kept for the widget, in pixels: the
+        /// 40 dp slot at the densest screens, with room to spare. Sent with
+        /// every widget update, so it is kept small.
+        private const val ARTWORK_MAX_PX = 192
+
+        /// The playing track's cover, decoded once per cover. In memory
+        /// only: it is drawn only while a live player feeds the widget
+        /// (the same process); otherwise the widget shows its « open the
+        /// app » face, without a cover.
+        @Volatile
+        private var artwork: Bitmap? = null
+
+        fun setArtwork(bytes: ByteArray?) {
+            artwork = bytes?.let { decodeArtwork(it) }
+        }
+
+        /// [bytes] decoded at about [ARTWORK_MAX_PX]: subsampled while
+        /// decoding (a 1024 px cover never sits in memory at full size),
+        /// then scaled to fit. Null for bytes that are not an image.
+        private fun decodeArtwork(bytes: ByteArray): Bitmap? = try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= ARTWORK_MAX_PX &&
+                bounds.outHeight / (sample * 2) >= ARTWORK_MAX_PX
+            ) {
+                sample *= 2
+            }
+            val options = BitmapFactory.Options().apply { inSampleSize = sample }
+            val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            if (decoded == null) {
+                null
+            } else {
+                val side = maxOf(decoded.width, decoded.height)
+                if (side <= ARTWORK_MAX_PX) {
+                    decoded
+                } else {
+                    val scale = ARTWORK_MAX_PX.toFloat() / side
+                    Bitmap.createScaledBitmap(
+                        decoded,
+                        maxOf(1, (decoded.width * scale).toInt()),
+                        maxOf(1, (decoded.height * scale).toInt()),
+                        true,
+                    ).also { if (it !== decoded) decoded.recycle() }
+                }
+            }
+        } catch (error: Exception) {
+            null
+        } catch (error: OutOfMemoryError) {
+            null
+        }
+
         fun saveState(
             context: Context,
             title: String?,
@@ -109,6 +165,16 @@ class MusyncWidgetProvider : AppWidgetProvider() {
                 R.id.widget_play,
                 if (playing) "Pause" else "Lecture",
             )
+            // The cover in place of the app icon, while it plays.
+            val cover = if (controls) artwork else null
+            if (cover != null) {
+                views.setImageViewBitmap(R.id.widget_art, cover)
+                views.setViewVisibility(R.id.widget_art, View.VISIBLE)
+                views.setViewVisibility(R.id.widget_icon, View.GONE)
+            } else {
+                views.setViewVisibility(R.id.widget_art, View.GONE)
+                views.setViewVisibility(R.id.widget_icon, View.VISIBLE)
+            }
 
             val open = openAppIntent(context)
             views.setOnClickPendingIntent(R.id.widget_root, open)

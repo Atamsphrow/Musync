@@ -5,7 +5,9 @@ import io.flutter.plugin.common.MethodChannel
 
 /// The link between the home-screen widget and the Dart player.
 ///
-/// Dart pushes what is playing (`update`); the widget's buttons call back
+/// Dart pushes what is playing (`update`, with the cover's bytes only when
+/// the cover changed: an absent `artwork` keeps the current picture, a null
+/// one clears it); the widget's buttons call back
 /// into Dart (`action`, handled by `HomeWidgetBridge` on the Dart side).
 /// Attached by MainActivity on the engine that audio_service keeps alive
 /// with the playback, so it survives the UI being closed while music plays.
@@ -26,6 +28,11 @@ object WidgetBridge {
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "update" -> {
+                    if (call.hasArgument("artwork")) {
+                        MusyncWidgetProvider.setArtwork(
+                            call.argument<ByteArray>("artwork"),
+                        )
+                    }
                     MusyncWidgetProvider.saveState(
                         appContext,
                         title = call.argument<String>("title"),
