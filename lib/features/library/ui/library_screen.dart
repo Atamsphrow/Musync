@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io' show File, FileStat, FileSystemEntityType, Platform;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:musync/core/utils/snackbar.dart';
