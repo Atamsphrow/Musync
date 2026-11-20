@@ -24,13 +24,16 @@ class ListeningHistoryNotifier extends Notifier<Map<String, ListenEntry>> {
   bool _loaded = false;
   final List<(String, int)> _beforeLoad = [];
 
+  /// The load in flight, which [movePath] waits for.
+  Future<void> _hydration = Future.value();
+
   @override
   Map<String, ListenEntry> build() {
     // The notifier outlives a rebuild (an import invalidates it): until the
     // file is read again, listens wait in [_beforeLoad] — saved now, the
     // empty state would overwrite the history just imported.
     _loaded = false;
-    unawaited(_hydrate());
+    _hydration = _hydrate();
     return const {};
   }
 
@@ -61,6 +64,26 @@ class ListeningHistoryNotifier extends Notifier<Map<String, ListenEntry>> {
     final next = Map<String, ListenEntry>.of(state);
     next[path] =
         (next[path] ?? ListenEntry(count: 0, lastPlayedMs: at)).counted(at);
+    state = Map.unmodifiable(next);
+    await _save();
+  }
+
+  /// The app renamed or moved a file: its listens follow it. Added to the
+  /// new path's own, if it already had some.
+  Future<void> movePath(String oldPath, String newPath) async {
+    await _hydration;
+    final moved = state[oldPath];
+    if (oldPath == newPath || moved == null) return;
+    final next = Map<String, ListenEntry>.of(state)..remove(oldPath);
+    final there = next[newPath];
+    next[newPath] = there == null
+        ? moved
+        : ListenEntry(
+            count: there.count + moved.count,
+            lastPlayedMs: there.lastPlayedMs > moved.lastPlayedMs
+                ? there.lastPlayedMs
+                : moved.lastPlayedMs,
+          );
     state = Map.unmodifiable(next);
     await _save();
   }

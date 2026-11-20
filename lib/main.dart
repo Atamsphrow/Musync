@@ -27,6 +27,7 @@ import 'features/settings/providers/lyrics_appearance_provider.dart';
 import 'features/player/providers/player_provider.dart';
 import 'features/ai_assistant/data/automation_runner.dart';
 import 'features/lyrics/providers/background_lyrics_provider.dart';
+import 'features/library/providers/favorites_provider.dart';
 import 'features/library/providers/listening_history_provider.dart';
 import 'features/lyrics/providers/lyrics_sweep_worker.dart';
 
@@ -261,6 +262,8 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
     ref.read(backgroundLyricsServiceProvider).start();
     // Historique : compte une écoute au-delà de 30 s de lecture.
     ref.read(listeningHistoryRecorderProvider).start();
+    // Favoris : suivent leur morceau renommé ou déplacé hors de l'appli.
+    ref.read(favoritesReconcilerProvider);
     // Widget d'écran d'accueil (Android) : morceau en cours et commandes.
     startHomeWidgetBridge(ref);
     // Ouverture du lecteur sans à-coup : le schéma de couleurs dérivé de

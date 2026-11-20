@@ -24,6 +24,7 @@ import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:musync/features/ai_assistant/data/tools/library_path_guard.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
+import 'package:musync/features/library/providers/song_path_moves.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
@@ -803,6 +804,7 @@ class BatchRenameFilesTool extends AiTool {
           ctx.ref
               .read(audioPlayerServiceProvider)
               .updateSongPath(song.filePath, target);
+          await followMovedSong(ctx.ref, song.filePath, target);
           await MediaStore.rescan(target);
           renamed++;
         } else {
@@ -1123,6 +1125,7 @@ class MoveSongsTool extends AiTool {
           ctx.ref
               .read(audioPlayerServiceProvider)
               .updateSongPath(song.filePath, target);
+          await followMovedSong(ctx.ref, song.filePath, target);
           await MediaStore.rescan(target);
           moved++;
         } else {

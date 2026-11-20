@@ -83,6 +83,28 @@ void main() {
     );
   });
 
+  test('a rename by the app carries the listens over', () async {
+    final dir = await Directory.systemTemp.createTemp('musync_history_');
+    addTearDown(() => dir.delete(recursive: true));
+    final store = ListeningHistoryStore(root: dir);
+    await store.save({
+      '/old.mp3': const ListenEntry(count: 3, lastPlayedMs: 30),
+      '/new.mp3': const ListenEntry(count: 1, lastPlayedMs: 10),
+    });
+    final container = ProviderContainer(
+      overrides: [listeningHistoryStoreProvider.overrideWithValue(store)],
+    );
+    addTearDown(container.dispose);
+
+    await container
+        .read(listeningHistoryProvider.notifier)
+        .movePath('/old.mp3', '/new.mp3');
+
+    final expected = {'/new.mp3': const ListenEntry(count: 4, lastPlayedMs: 30)};
+    expect(container.read(listeningHistoryProvider), expected);
+    expect(await store.load(), expected);
+  });
+
   test('a reload (import) reads the file again, never overwrites it', () async {
     final dir = await Directory.systemTemp.createTemp('musync_history_');
     addTearDown(() => dir.delete(recursive: true));
