@@ -1,0 +1,6 @@
+branch: review/audit-ux-2.15.0
+commit: 2c2128cc7817d445ae61f5e22912d40a9692ca9f
+analyze: success
+test: success
+build: success
+run: https://github.com/Atamsphrow/Musync/actions/runs/44808447656
