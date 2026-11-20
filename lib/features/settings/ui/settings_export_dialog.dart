@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/utils/snackbar.dart';
+import 'package:musync/features/library/data/favorites_store.dart';
 import 'package:musync/features/settings/data/settings_export.dart';
 import 'package:musync/features/settings/data/ai_provider_config.dart';
 import 'package:path_provider/path_provider.dart';
@@ -13,11 +14,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Preferences worth carrying to another install. The last-played track and its
 /// position travel along: on the target phone they re-open the same track when
-/// it is there, and are simply ignored when the file does not exist.
+/// it is there, and are simply ignored when the file does not exist. The
+/// favourites too: by path, so they come back on the tracks found at the
+/// same place.
 const List<String> _exportedPreferences = [
   'bubble_lines',
   'last_song_path',
   'last_song_position_ms',
+  FavoritesStore.prefsKey,
 ];
 
 /// Asks what to include, writes the file and says where it went.

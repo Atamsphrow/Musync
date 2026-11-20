@@ -20,6 +20,8 @@ import 'package:musync/features/settings/data/ai_provider_config.dart';
 import 'package:musync/core/id3/tag_backup.dart';
 import 'package:musync/features/settings/data/lyrics_source_config.dart';
 import 'package:musync/core/utils/atomic_file.dart';
+import 'package:musync/features/library/data/favorites_store.dart';
+import 'package:musync/features/library/data/listening_history_store.dart';
 import 'package:musync/features/settings/data/settings_export.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -33,7 +35,16 @@ const Map<String, bool> _knownFiles = {
   'lyrics_appearance.json': false,
   'ai_providers.json': false,
   'lyrics_sources.json': true,
+  kListeningHistoryFile: false,
 };
+
+/// The listening history (« Historique »), cleaned entry by entry (see
+/// [_validListeningHistory]).
+const String kListeningHistoryFile = 'listening_history.json';
+
+/// More entries than any real history: a hand-edited bundle must not fill
+/// the phone's storage through it.
+const int _maxPathEntries = 20000;
 
 /// The one file whose secrets are merged rather than replaced outright.
 const String _aiProvidersFile = 'ai_providers.json';
@@ -68,6 +79,37 @@ String? _validSongPath(Object? value) {
 
 int? _validSongPosition(Object? value) =>
     value is int && value >= 0 ? value : null;
+
+/// The favourites, as the store keeps them: valid paths, in order, without
+/// duplicates. An empty list is valid — it is what an export made with no
+/// favourite carries, and importing it means « no favourite ».
+List<String>? _validFavorites(Object? value) {
+  if (value is! List) return null;
+  final seen = <String>{};
+  final paths = <String>[];
+  for (final entry in value) {
+    final path = _validSongPath(entry);
+    if (path != null && seen.add(path)) paths.add(path);
+    if (paths.length >= _maxPathEntries) break;
+  }
+  return paths;
+}
+
+/// The listening history with its unreadable entries dropped — a bad
+/// count, a path that is not one — rather than the whole file refused: one
+/// corrupt row must not cost every other one.
+Map<String, Object>? _validListeningHistory(Object? value) {
+  if (value is! Map) return null;
+  final entries = <String, Object>{};
+  for (final entry in value.entries) {
+    final path = _validSongPath(entry.key);
+    final listen = ListenEntry.fromJson(entry.value);
+    if (path == null || listen == null) continue;
+    entries[path] = listen.toJson();
+    if (entries.length >= _maxPathEntries) break;
+  }
+  return entries;
+}
 
 /// Thrown when the picked file is not a Musync settings export. The [message]
 /// is shown to the user as-is, so it is written in French.
@@ -104,8 +146,9 @@ class ImportBundle {
   /// What was inside `files`, keyed by file name.
   final Map<String, Object?> files;
 
-  /// Validated preferences (`bubble_lines`, the last-played track and friends).
-  /// Values are the ints and strings the export wrote.
+  /// Validated preferences (`bubble_lines`, the last-played track and friends,
+  /// the favourites). Values are the ints, strings and string lists the
+  /// export wrote.
   final Map<String, Object> preferences;
 
   /// When the bundle was exported, as written in the file.
@@ -234,6 +277,16 @@ class SettingsImporter {
       if (entry.value is! Map && entry.value is! List) {
         throw ImportFormatException('Le réglage « $name » est illisible.');
       }
+      if (name == kListeningHistoryFile) {
+        final history = _validListeningHistory(entry.value);
+        if (history == null) {
+          throw const ImportFormatException(
+            'L’historique d’écoute est illisible.',
+          );
+        }
+        files[name] = history;
+        continue;
+      }
       files[name] = entry.value;
     }
     final preferences = <String, Object>{};
@@ -245,6 +298,8 @@ class SettingsImporter {
       if (path != null) preferences['last_song_path'] = path;
       final position = _validSongPosition(rawPrefs['last_song_position_ms']);
       if (position != null) preferences['last_song_position_ms'] = position;
+      final favorites = _validFavorites(rawPrefs[FavoritesStore.prefsKey]);
+      if (favorites != null) preferences[FavoritesStore.prefsKey] = favorites;
     }
 
     final tagBackups = _parseTagBackups(bundle['tagBackups']);
@@ -438,6 +493,10 @@ class SettingsImporter {
           }
         } else if (value is String) {
           if (!await prefs.setString(entry.key, value)) {
+            throw StateError('Préférence non enregistrée.');
+          }
+        } else if (value is List<String>) {
+          if (!await prefs.setStringList(entry.key, value)) {
             throw StateError('Préférence non enregistrée.');
           }
         } else {

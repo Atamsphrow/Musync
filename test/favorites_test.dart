@@ -50,6 +50,23 @@ void main() {
     expect(container.read(favoritesProvider), isEmpty);
   });
 
+  test('a reload (import) replaces the list, it does not merge', () async {
+    SharedPreferences.setMockInitialValues({});
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    container.read(favoritesProvider);
+    await Future<void>.delayed(Duration.zero);
+    await container.read(favoritesProvider.notifier).toggle(_song(1));
+
+    // An import writes the preference, then invalidates the provider.
+    await const FavoritesStore().save(['/imported.mp3']);
+    container.invalidate(favoritesProvider);
+    container.read(favoritesProvider);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(container.read(favoritesProvider), ['/imported.mp3']);
+  });
+
   test('the view lists library tracks only, most recent first', () async {
     SharedPreferences.setMockInitialValues({
       FavoritesStore.prefsKey: ['/music/1.mp3', '/gone.mp3', '/music/2.mp3'],

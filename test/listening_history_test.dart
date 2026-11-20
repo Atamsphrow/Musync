@@ -82,4 +82,38 @@ void main() {
       const ListenEntry(count: 2, lastPlayedMs: 50),
     );
   });
+
+  test('a reload (import) reads the file again, never overwrites it', () async {
+    final dir = await Directory.systemTemp.createTemp('musync_history_');
+    addTearDown(() => dir.delete(recursive: true));
+    final store = ListeningHistoryStore(root: dir);
+    await store.save({'/old.mp3': const ListenEntry(count: 1, lastPlayedMs: 1)});
+    final container = ProviderContainer(
+      overrides: [listeningHistoryStoreProvider.overrideWithValue(store)],
+    );
+    addTearDown(container.dispose);
+    container.read(listeningHistoryProvider);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    // An import writes the file, then invalidates the provider.
+    await store.save({
+      '/imported.mp3': const ListenEntry(count: 4, lastPlayedMs: 7),
+    });
+    container.invalidate(listeningHistoryProvider);
+    container.read(listeningHistoryProvider);
+    // A listen landing before the reload is kept, on top of the import.
+    await container
+        .read(listeningHistoryProvider.notifier)
+        .record('/new.mp3', atMs: 9);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(container.read(listeningHistoryProvider), {
+      '/imported.mp3': const ListenEntry(count: 4, lastPlayedMs: 7),
+      '/new.mp3': const ListenEntry(count: 1, lastPlayedMs: 9),
+    });
+    expect(
+      (await store.load()).keys,
+      unorderedEquals(['/imported.mp3', '/new.mp3']),
+    );
+  });
 }

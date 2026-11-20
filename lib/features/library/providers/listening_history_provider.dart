@@ -26,6 +26,10 @@ class ListeningHistoryNotifier extends Notifier<Map<String, ListenEntry>> {
 
   @override
   Map<String, ListenEntry> build() {
+    // The notifier outlives a rebuild (an import invalidates it): until the
+    // file is read again, listens wait in [_beforeLoad] — saved now, the
+    // empty state would overwrite the history just imported.
+    _loaded = false;
     unawaited(_hydrate());
     return const {};
   }

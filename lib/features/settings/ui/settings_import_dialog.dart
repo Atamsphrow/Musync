@@ -1,8 +1,9 @@
 /// The "Importer les paramètres" action of the Settings screen.
 ///
 /// Picks a JSON file written by the export, shows what it holds, and applies
-/// it after confirmation. The settings tabs reload from disk afterwards, and
-/// the bubble picks up its line count straight away.
+/// it after confirmation. The settings tabs, the favourites and the listening
+/// history reload from disk afterwards, and the bubble picks up its line
+/// count straight away.
 library;
 
 import 'dart:io';
@@ -13,6 +14,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/utils/snackbar.dart';
 import 'package:musync/features/bubble/providers/bubble_provider.dart';
+import 'package:musync/features/library/data/favorites_store.dart';
+import 'package:musync/features/library/providers/favorites_provider.dart';
+import 'package:musync/features/library/providers/listening_history_provider.dart';
 import 'package:musync/features/settings/data/settings_import.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
 import 'package:musync/features/settings/providers/playback_settings_provider.dart';
@@ -24,9 +28,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// Human labels for the files of a bundle.
 const Map<String, String> _fileLabels = {
   'playback_settings.json': 'Lecture',
+  'lyrics_appearance.json': 'Apparence',
   'ai_providers.json': 'Fournisseurs IA',
   'lyrics_sources.json': 'Sources de paroles',
+  kListeningHistoryFile: 'Historique d’écoute',
 };
+
+String _tracks(int n) => n == 1 ? '1 morceau' : '$n morceaux';
 
 Future<void> importSettings(BuildContext context) async {
   final chosen = await FilePicker.pickFile(
@@ -81,7 +89,11 @@ Future<void> importSettings(BuildContext context) async {
       ..invalidate(lyricsSourcesProvider)
       ..invalidate(aiSettingsProvider)
       ..invalidate(playbackSettingsProvider)
-      ..invalidate(lyricsAppearanceProvider);
+      ..invalidate(lyricsAppearanceProvider)
+      // Both reload from what was just written; their notifiers start over
+      // instead of saving their old in-memory list on top of it.
+      ..invalidate(favoritesProvider)
+      ..invalidate(listeningHistoryProvider);
     // The bubble reads its line count at start; applying it live too keeps a
     // visible bubble in sync instead of waiting for its next start.
     final lines = report.appliedPreferences.contains('bubble_lines')
@@ -115,6 +127,7 @@ String _summary(ImportReport report) {
     for (final file in report.appliedFiles) _fileLabels[file] ?? file,
     if (report.appliedPreferences.contains('bubble_lines')) 'Bulle flottante',
     if (report.appliedPreferences.contains('last_song_path')) 'Dernier morceau',
+    if (report.appliedPreferences.contains(FavoritesStore.prefsKey)) 'Favoris',
   ];
   var text = 'Importé : ${parts.join(', ')}.';
   if (report.tagBackupsRestored > 0) {
@@ -146,12 +159,19 @@ class _ImportConfirmDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final history = bundle.tagBackups;
+    final favorites = bundle.preferences[FavoritesStore.prefsKey];
+    final listens = bundle.files[kListeningHistoryFile];
     final contents = [
-      for (final file in bundle.files.keys) _fileLabels[file] ?? file,
+      for (final file in bundle.files.keys)
+        if (file == kListeningHistoryFile && listens is Map)
+          'Historique d’écoute : ${_tracks(listens.length)}'
+        else
+          _fileLabels[file] ?? file,
       for (final entry in bundle.preferences.entries)
         if (entry.key == 'bubble_lines')
           'Bulle flottante : ${entry.value} lignes',
       if (bundle.preferences.containsKey('last_song_path')) 'Dernier morceau',
+      if (favorites is List) 'Favoris : ${_tracks(favorites.length)}',
       if (history != null)
         'Historique : ${history.entries.length} sauvegarde(s)'
             '${history.skipped.isEmpty ? '' : ' (${history.skipped.length} sans contenu)'}',
@@ -192,8 +212,9 @@ class _ImportConfirmDialog extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             const Text(
-              "Les réglages actuels seront remplacés ; l'historique des "
-              'sauvegardes aussi, quand le fichier en contient un.',
+              'Les réglages actuels seront remplacés ; les favoris, '
+              "l'historique d'écoute et celui des sauvegardes aussi, quand "
+              'le fichier en contient.',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
           ],

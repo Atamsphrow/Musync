@@ -27,6 +27,9 @@ class FavoritesNotifier extends Notifier<List<String>> {
 
   @override
   List<String> build() {
+    // The notifier outlives a rebuild (an import invalidates it): start
+    // over, so the reload replaces the list instead of merging the old one.
+    _touched = false;
     unawaited(_hydrate());
     return const [];
   }

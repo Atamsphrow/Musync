@@ -1,7 +1,8 @@
 /// Export of the app's settings and configuration to a single JSON file.
 ///
 /// The bundle holds the settings stores as they are on disk (playback, lyrics
-/// sources, AI providers), the few values kept in SharedPreferences, and the
+/// sources, AI providers, the listening history), the few values kept in
+/// SharedPreferences (the favourites among them), and the
 /// tag-backup history (`tag_backups/`): the index plus every referenced backup,
 /// base64-encoded. The backups only make sense on the phone whose files they
 /// belong to — restoring them elsewhere would point at tracks that are not
@@ -58,6 +59,9 @@ const List<_Source> _sources = [
   _Source('lyrics_appearance.json'),
   _Source('ai_providers.json'),
   _Source('lyrics_sources.json', inDocuments: true),
+  // The « Historique » view: what a reinstall wipes, like the favourites
+  // carried in the preferences.
+  _Source('listening_history.json'),
 ];
 
 class SettingsExporter {
