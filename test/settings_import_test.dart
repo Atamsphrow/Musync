@@ -358,6 +358,75 @@ void main() {
       );
     });
 
+    test('accepts the favourites, cleaned like the store keeps them', () async {
+      final bundle = await importer.parse(
+        await bundleFile(
+          validBundle()
+            ..['preferences'] = {
+              'favorite_songs': [
+                '/music/a.mp3',
+                '  ',
+                '/music//b.mp3',
+                '/music/a.mp3',
+                42,
+              ],
+            },
+        ),
+      );
+      expect(bundle.preferences, {
+        'favorite_songs': ['/music/a.mp3', '/music/b.mp3'],
+      });
+
+      final none = await importer.parse(
+        await bundleFile(
+          validBundle()..['preferences'] = {'favorite_songs': <String>[]},
+        ),
+      );
+      expect(none.preferences, {'favorite_songs': <String>[]});
+
+      final bad = await importer.parse(
+        await bundleFile(
+          validBundle()..['preferences'] = {'favorite_songs': 'a.mp3'},
+        ),
+      );
+      expect(bad.preferences, isEmpty);
+    });
+
+    test('keeps the readable entries of the listening history', () async {
+      final bundle = await importer.parse(
+        await bundleFile(
+          validBundle(
+            files: {
+              'listening_history.json': {
+                '/music/a.mp3': {'count': 3, 'last': 10},
+                '/music/b.mp3': {'count': 'x', 'last': 10},
+                '': {'count': 1, 'last': 1},
+                '/music/c.mp3': {'count': 0, 'last': 5},
+              },
+            },
+          ),
+        ),
+      );
+      expect(bundle.files['listening_history.json'], {
+        '/music/a.mp3': {'count': 3, 'last': 10},
+      });
+    });
+
+    test('refuses a listening history that is not a map', () async {
+      await expectLater(
+        importer.parse(
+          await bundleFile(
+            validBundle(
+              files: {
+                'listening_history.json': ['/music/a.mp3'],
+              },
+            ),
+          ),
+        ),
+        throwsA(isA<ImportFormatException>()),
+      );
+    });
+
     test('drops invalid last-played track values and unknown keys', () async {
       final bundle = await importer.parse(
         await bundleFile(
@@ -421,6 +490,43 @@ void main() {
       ]);
       expect(prefs.getInt('bubble_lines'), 3);
       expect(report.appliedPreferences, ['bubble_lines']);
+    });
+
+    test('writes the favourites and the listening history back', () async {
+      final bundle = await importer.parse(
+        await bundleFile(
+          validBundle(
+            files: {
+              'listening_history.json': {
+                '/music/a.mp3': {'count': 3, 'last': 10},
+              },
+            },
+          )..['preferences'] = {
+              'favorite_songs': ['/music/a.mp3', '/music/b.mp3'],
+            },
+        ),
+      );
+      SharedPreferences.setMockInitialValues({
+        'favorite_songs': ['/old.mp3'],
+      });
+      final prefs = await SharedPreferences.getInstance();
+
+      final report = await importer.apply(bundle, prefs);
+
+      expect(prefs.getStringList('favorite_songs'), [
+        '/music/a.mp3',
+        '/music/b.mp3',
+      ]);
+      expect(report.appliedPreferences, ['favorite_songs']);
+      expect(report.appliedFiles, ['listening_history.json']);
+      final history = jsonDecode(
+        await File(
+          '${support.path}${Platform.pathSeparator}listening_history.json',
+        ).readAsString(),
+      );
+      expect(history, {
+        '/music/a.mp3': {'count': 3, 'last': 10},
+      });
     });
 
     test('round-trips the last-played track through parse and apply', () async {

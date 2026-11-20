@@ -237,8 +237,12 @@ class _BatchScreenState extends ConsumerState<BatchScreen> with RouteAware {
             ),
           // Now that leaving the screen no longer clears the batch, this is the
           // only way to throw one away and look again.
-          if (state.phase == BatchPhase.review ||
-              state.phase == BatchPhase.done)
+          // Not when opened for review only (done notification): there is
+          // no track list to search again, and resetting would throw the
+          // results away for nothing.
+          if (widget.songs.isNotEmpty &&
+              (state.phase == BatchPhase.review ||
+                  state.phase == BatchPhase.done))
             IconButton(
               onPressed: () {
                 _batch.reset();
@@ -253,6 +257,10 @@ class _BatchScreenState extends ConsumerState<BatchScreen> with RouteAware {
         ],
       ),
       body: switch (state.phase) {
+        // Opened from the done notification after the process was killed:
+        // the results died with it. Saying so beats an empty 0 / 0 spinner
+        // that never moves.
+        BatchPhase.idle when widget.reviewOnly => const _NothingToReview(),
         BatchPhase.idle || BatchPhase.searching => _Searching(state: state),
         BatchPhase.review => _Review(state: state),
         BatchPhase.writing => _Writing(state: state, onResume: _writeSelected),
@@ -265,6 +273,46 @@ class _BatchScreenState extends ConsumerState<BatchScreen> with RouteAware {
               label: Text('Écrire ${state.selected.length}'),
             )
           : null,
+    );
+  }
+}
+
+class _NothingToReview extends StatelessWidget {
+  const _NothingToReview();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.history_toggle_off,
+              size: 56,
+              color: scheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Plus de résultats à relire',
+              textAlign: TextAlign.center,
+              style: textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Musync a été fermé depuis la fin de la recherche. Relancez-la '
+              'depuis un onglet de la bibliothèque.',
+              textAlign: TextAlign.center,
+              style: textTheme.bodyMedium?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

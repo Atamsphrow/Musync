@@ -49,6 +49,29 @@ final playerStateProvider = StreamProvider<PlayerState>((ref) {
   return service.playerStateStream;
 });
 
+/// Whether audio is actually advancing — what every play/pause button shows.
+///
+/// `PlayerState.playing` stays true once the queue has completed, which
+/// painted Pause over silence at the end of every queue. Same rule as
+/// [AudioPlayerService.isPlaying].
+final isPlayingProvider = Provider<bool>((ref) {
+  final state = ref.watch(playerStateProvider).valueOrNull;
+  if (state == null) return false;
+  return AudioPlayerService.isEffectivelyPlaying(
+    playing: state.playing,
+    processingState: state.processingState,
+  );
+});
+
+/// True while the player is opening or buffering a track: the play button
+/// shows a spinner instead of looking like a tap that did nothing.
+final isBufferingProvider = Provider<bool>((ref) {
+  final state = ref.watch(playerStateProvider).valueOrNull;
+  if (state == null) return false;
+  return state.processingState == ProcessingState.loading ||
+      state.processingState == ProcessingState.buffering;
+});
+
 /// True while the now-playing screen is the visible route, published by the
 /// screen itself through the app's route observer. The floating bubble hides
 /// then: the screen already shows the synced lyrics.

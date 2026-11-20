@@ -6,8 +6,10 @@ import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/lyrics/data/lyrics_word_timings_store.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/player/data/karaoke_words.dart';
 import 'package:musync/features/player/data/lyric_clock.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
+import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 import 'package:musync/features/settings/providers/playback_settings_provider.dart';
 
 /// Lyrics for the current song, tagged with the song they were read for.
@@ -222,6 +224,21 @@ void refreshLyricsOnForeground(WidgetRef ref) {
 /// would have needed for each of those four cases.
 const Duration lineRefreshInterval = Duration(milliseconds: 16);
 
+/// Sampling period while nothing plays.
+///
+/// The 16 ms tickers below used to run all the time — paused, and with the
+/// app in the background, as long as anything watched them (the mini player
+/// does, permanently). Sixty wake-ups a second over a frozen position keep
+/// the CPU out of its sleep states for hours of « paused ». A slow poll is
+/// enough to follow a seek made while paused (a tap on a line, the seek
+/// bar), and the moment playback resumes the providers rebuild at
+/// [lineRefreshInterval].
+const Duration pausedRefreshInterval = Duration(milliseconds: 200);
+
+/// The period the lyric tickers sample at, given whether audio advances.
+Duration lyricSamplingInterval({required bool playing}) =>
+    playing ? lineRefreshInterval : pausedRefreshInterval;
+
 /// The word being sung at [position]: the latest word of the current line
 /// whose start has passed — or null before the first word of the line (or
 /// before the first line at all).
@@ -243,6 +260,25 @@ const Duration lineRefreshInterval = Duration(milliseconds: 16);
   return (lineIndex: lineIndex, wordIndex: wordIndex);
 }
 
+/// [synced] as the karaoke view lights it: every timing unit one word, and
+/// estimated words on line-only lines when the karaoke mode and its « mot
+/// à mot sur toutes les chansons » option are on (see
+/// [prepareKaraokeWords]). Display-side only: the nudge sheet and the file
+/// keep the lyrics as they are.
+///
+/// Keyed by the lyrics themselves (value equality): the view and
+/// [currentWordIndexProvider] get one shared result, so a word index means
+/// the same word in both.
+final karaokeLyricsProvider = Provider.autoDispose
+    .family<SyncedLyrics, SyncedLyrics>((ref, synced) {
+      final estimate = ref.watch(
+        lyricsAppearanceProvider.select(
+          (a) => a.karaokeAnimations && a.karaokeEstimatedWords,
+        ),
+      );
+      return prepareKaraokeWords(synced, estimateUntimed: estimate);
+    });
+
 /// The word to light right now, or null when there is none.
 ///
 /// Mirrors [currentLineIndexProvider]: one 16 ms sample, one binary search
@@ -257,15 +293,22 @@ final currentWordIndexProvider = StreamProvider.autoDispose<
   // old lines with the new position would light the wrong word.
   final song = ref.watch(currentSongProvider);
   final pair = ref.watch(currentLyricsProvider).valueOrNull;
-  final synced = pair?.song?.id == song?.id ? pair?.synced : null;
-  if (synced == null || synced.isEmpty || !synced.hasWordTimings) {
-    return Stream.value(null);
-  }
+  final raw = pair?.song?.id == song?.id ? pair?.synced : null;
+  // The karaoke mode off, the view lights whole lines and never reads the
+  // word: no 16 ms ticker for it.
+  final karaoke = ref.watch(
+    lyricsAppearanceProvider.select((a) => a.karaokeAnimations),
+  );
+  if (!karaoke || raw == null || raw.isEmpty) return Stream.value(null);
+  final synced = ref.watch(karaokeLyricsProvider(raw));
+  if (!synced.hasWordTimings) return Stream.value(null);
 
   final service = ref.watch(audioPlayerServiceProvider);
   // Watched, not read: dragging the compensation slider has to move the
   // words as it is dragged, like it moves the lines.
   final offset = ref.watch(lyricsOffsetProvider);
+
+  final playing = ref.watch(isPlayingProvider);
 
   ({int lineIndex, int wordIndex})? last;
   Duration? lastPosition;
@@ -276,7 +319,7 @@ final currentWordIndexProvider = StreamProvider.autoDispose<
   // at once, not be absorbed as jitter.
   final clock = LyricClock();
   return Stream<({int lineIndex, int wordIndex})?>.periodic(
-    lineRefreshInterval,
+    lyricSamplingInterval(playing: playing),
     (_) {
       final position = clock.tick(service.position) + offset;
       if (position == lastPosition) return last;
@@ -300,9 +343,10 @@ final lyricPositionProvider = StreamProvider.autoDispose<Duration>((ref) {
   // Watched, not read: dragging the compensation slider has to move the
   // animation as it is dragged, like it moves the lines.
   final offset = ref.watch(lyricsOffsetProvider);
+  final playing = ref.watch(isPlayingProvider);
   final clock = LyricClock();
   return Stream<Duration>.periodic(
-    lineRefreshInterval,
+    lyricSamplingInterval(playing: playing),
     (_) => clock.tick(service.position) + offset,
   ).distinct();
 });
@@ -339,7 +383,8 @@ final currentLineIndexProvider = StreamProvider.autoDispose<int?>((ref) {
   // lines at once, not be absorbed as jitter. The bubble and the
   // mini-player read this provider, so they get the clocked position too.
   final clock = LyricClock();
-  return Stream<int?>.periodic(lineRefreshInterval, (_) {
+  final playing = ref.watch(isPlayingProvider);
+  return Stream<int?>.periodic(lyricSamplingInterval(playing: playing), (_) {
     final position = clock.tick(service.position) + offset;
     if (position == lastPosition) return lastIndex;
     lastPosition = position;

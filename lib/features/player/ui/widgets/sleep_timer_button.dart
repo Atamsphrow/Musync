@@ -85,6 +85,26 @@ class _SleepTimerSheet extends ConsumerWidget {
           child: ListView(
             shrinkWrap: true,
             children: [
+              // A running countdown can be pushed back without starting over —
+              // the « five more minutes » reach from bed.
+              if (timerState.remaining != null) ...[
+                ListTile(
+                  leading: const Icon(Icons.more_time),
+                  title: const Text('Prolonger de 5 min'),
+                  subtitle: Text(
+                    'Il reste ${timerState.remaining!.inMinutes} min. La '
+                    'musique baisse doucement pendant les 10 dernières '
+                    'secondes.',
+                  ),
+                  onTap: () {
+                    ref
+                        .read(sleepTimerProvider.notifier)
+                        .extendBy(SleepTimerController.extension);
+                    Navigator.pop(context);
+                  },
+                ),
+                const Divider(),
+              ],
               for (final option in SleepTimerOption.values.where(
                   (o) => o != SleepTimerOption.custom))
                 ListTile(

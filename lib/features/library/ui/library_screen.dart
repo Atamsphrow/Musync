@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io' show File, FileStat, FileSystemEntityType, Platform;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:musync/core/utils/snackbar.dart';
@@ -10,7 +9,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/router/app_router.dart';
 import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/services/debug_log.dart';
-import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/core/services/permission_service.dart';
 import 'package:musync/features/library/data/lyrics_status.dart';
@@ -18,6 +16,8 @@ import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/catalogue_provider.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
 import 'package:musync/features/player/providers/lyrics_provider.dart';
+import 'package:musync/features/library/ui/library_sections.dart';
+import 'package:musync/features/library/ui/play_actions.dart';
 import 'package:musync/features/library/ui/widgets/song_tile.dart';
 import 'package:musync/features/ai_assistant/data/assistant_controller.dart';
 import 'package:musync/features/ai_assistant/ui/ai_chat_view.dart';
@@ -72,10 +72,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// disposed once.
   late final List<ScrollController> _scrollControllers;
 
-  /// TEMPORARY diagnostic (the lag hunt): slow frames while the library
-  /// scrolls, in the in-app journal (tag « Perf »).
-  FrameProbe? _scrollProbe;
-
   /// The scroll controller of the page for [status].
   ScrollController _controllerFor(LyricsStatus status) =>
       _scrollControllers[LyricsStatus.values.indexOf(status)];
@@ -118,6 +114,17 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   /// The last-played track is restored once, when the library first loads —
   /// never on a manual refresh.
   bool _restoreAttempted = false;
+
+  /// Which view the bottom navigation bar shows. « Morceaux » is the
+  /// historical screen (search, lyrics-status tabs); the others are the
+  /// Artistes / Albums / Favoris / Historique views.
+  LibrarySection _section = LibrarySection.songs;
+
+  void _selectSection(LibrarySection section) {
+    if (section == _section) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() => _section = section);
+  }
 
   void _onSearchTextChanged() {
     if (!mounted) return;
@@ -272,6 +279,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     }
     DebugLog.instance.info('Appui long', 'départ : ${song.filePath}');
 
+    // The track is located in « Morceaux »: bring that view back first.
+    if (_section != LibrarySection.songs) {
+      setState(() => _section = LibrarySection.songs);
+    }
+
     if (_chatMode) _exitChatMode();
     if (ref.read(librarySearchProvider).isNotEmpty) {
       _searchController.clear();
@@ -348,7 +360,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       if (index >= 0 &&
           controller.hasClients &&
           (controller.position.maxScrollExtent == 0 ||
-              controller.position.maxScrollExtent >= index * rowH)) {
+              controller.position.maxScrollExtent >=
+                  kLibraryListHeaderHeight + index * rowH)) {
         settledIndex = index;
         break;
       }
@@ -380,7 +393,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     if (useIndex != index && mounted) setState(() => _locateIndex = useIndex);
 
     if (controller.hasClients) {
-      final target = (useIndex * rowH)
+      // The list header (count, Tout lire, Aléatoire) sits above row 0.
+      final target = (kLibraryListHeaderHeight + useIndex * rowH)
           .clamp(0.0, controller.position.maxScrollExtent);
       DebugLog.instance.info(
         'Appui long',
@@ -505,7 +519,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   @override
   void dispose() {
     _locateClearTimer?.cancel();
-    _scrollProbe?.stop();
     appRouteObserver.unsubscribe(this);
     MediaStore.stopListeningForSharedAudio();
     WidgetsBinding.instance.removeObserver(this);
@@ -934,6 +947,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     final libraryIsEmpty =
         ref.watch(songListProvider).valueOrNull?.isEmpty ?? false;
 
+    final showBatchButton = permissionIssue == null &&
+        _section == LibrarySection.songs &&
+        !_showChat &&
+        tab != LyricsStatus.synced &&
+        (songsAsync.valueOrNull?.isNotEmpty ?? false);
+
     // The header bottom (search field + tabs) grows with the system font:
     // a fixed 124 overflows past ~2x text scale. Scale it with the text
     // scaler, capped at 2x, and hand it to the app bar so its preferred
@@ -949,18 +968,26 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       // it.
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _confirmExit();
+        if (didPop) return;
+        // Back from another view returns to « Morceaux » before it ever
+        // offers to leave the app.
+        if (_section != LibrarySection.songs) {
+          _selectSection(LibrarySection.songs);
+          return;
+        }
+        _confirmExit();
       },
       child: Scaffold(
         appBar: permissionIssue != null
             ? null
+            : _section != LibrarySection.songs
+            ? _SectionAppBar(section: _section)
             : _LibraryAppBar(
                 songsAsync: songsAsync,
                 bottomHeight: bottomHeight,
                 searchController: _searchController,
                 searchFocusNode: _searchFocusNode,
                 tabController: _tabController,
-                onBatch: () => _startBatch(songsAsync.valueOrNull),
                 onChatSubmit: _submitChatCommand,
                 onExitChat: _exitChatMode,
               ),
@@ -969,57 +996,123 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                 outcome: permissionIssue,
                 onRetry: _requestPermissions,
               )
-            : _showChat
-                ? AiChatView(
-                    messages: _chatMessages,
-                    thinking: _chatThinking,
-                    scrollController: _chatScrollController,
-                  )
-                : NotificationListener<ScrollNotification>(
-                    onNotification: (notification) {
-                      // TEMPORARY probe (the lag hunt): observe the
-                      // frames of any library scroll, stop at rest.
-                      // Debug only: in release this sampled every scroll
-                      // and persisted a journal line per frame batch.
-                      if (!kDebugMode) return false;
-                      // Vertical only: the TabBarView's own page swipes
-                      // bubble up here too and would pollute the series.
-                      if (notification.metrics.axis != Axis.vertical) {
-                        return false;
-                      }
-                      if (notification is ScrollStartNotification) {
-                        _scrollProbe?.stop();
-                        _scrollProbe = FrameProbe.start(
-                          'bibliothèque défilement',
-                          frames: 100000,
-                        );
-                      } else if (notification is ScrollEndNotification) {
-                        _scrollProbe?.stop();
-                        _scrollProbe = null;
-                      }
-                      return false;
-                    },
-                    child: TabBarView(
-                      controller: _tabController,
-                      children: [
-                      for (final status in LyricsStatus.values)
-                        _TabSongList(
-                          status: status,
-                          scrollController: _controllerFor(status),
-                          // Only the located song's own tab may flash a
-                          // row; a neighbouring page would outline
-                          // whatever happens to sit at the same index.
-                          highlightIndex: status == tab ? _locateIndex : -1,
-                          libraryIsEmpty: libraryIsEmpty,
-                          onRefresh: _refreshLibrary,
-                          onRetry: () =>
-                              ref.read(songListProvider.notifier).refresh(),
-                        ),
-                      ],
+            // « Morceaux » stays mounted under the other views, so coming
+            // back finds each tab where it was scrolled; the other views are
+            // built only while shown.
+            : IndexedStack(
+                index: _section == LibrarySection.songs ? 0 : 1,
+                children: [
+                  _songsBody(tab: tab, libraryIsEmpty: libraryIsEmpty),
+                  switch (_section) {
+                    LibrarySection.songs => const SizedBox.shrink(),
+                    LibrarySection.favorites => const FavoritesSection(),
+                    LibrarySection.history => const HistorySection(),
+                  },
+                ],
+              ),
+        // The screen's main action, where the thumb rests: search the lyrics
+        // of what this tab shows. Not on « Synchronisées » (nothing left to
+        // find there), not over the chat or the permission screen, and not
+        // on an empty tab.
+        floatingActionButton: showBatchButton
+            ? FloatingActionButton.extended(
+                onPressed: () => _startBatch(songsAsync.valueOrNull),
+                icon: const Icon(Icons.manage_search),
+                label: const Text('Chercher les paroles'),
+                tooltip: 'Chercher les paroles de cet onglet',
+              )
+            : null,
+        // Mini player above the navigation bar, both in the thumb's reach.
+        bottomNavigationBar: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DockedMiniPlayer(
+              onLongPress: _locateCurrentSong,
+              bottomSafeArea: permissionIssue != null,
+            ),
+            if (permissionIssue == null)
+              NavigationBar(
+                height: 68,
+                selectedIndex: _section.index,
+                onDestinationSelected: (index) =>
+                    _selectSection(LibrarySection.values[index]),
+                destinations: [
+                  for (final section in LibrarySection.values)
+                    NavigationDestination(
+                      icon: Icon(section.icon),
+                      selectedIcon: Icon(section.selectedIcon),
+                      label: section.label,
                     ),
-                  ),
-        bottomNavigationBar: _DockedMiniPlayer(onLongPress: _locateCurrentSong),
+                ],
+              ),
+          ],
+        ),
       ),
+    );
+  }
+
+  /// The « Morceaux » view: the AI chat while a `!` command is on, the three
+  /// lyrics-status tabs otherwise.
+  Widget _songsBody({
+    required LyricsStatus tab,
+    required bool libraryIsEmpty,
+  }) {
+    return _showChat
+        ? AiChatView(
+            messages: _chatMessages,
+            thinking: _chatThinking,
+            scrollController: _chatScrollController,
+          )
+        : TabBarView(
+            controller: _tabController,
+            children: [
+              for (final status in LyricsStatus.values)
+                _TabSongList(
+                  status: status,
+                  scrollController: _controllerFor(status),
+                  // Only the located song's own tab may flash a
+                  // row; a neighbouring page would outline
+                  // whatever happens to sit at the same index.
+                  highlightIndex: status == tab ? _locateIndex : -1,
+                  libraryIsEmpty: libraryIsEmpty,
+                  onRefresh: _refreshLibrary,
+                  onRetry: () =>
+                      ref.read(songListProvider.notifier).refresh(),
+                ),
+            ],
+          );
+  }
+}
+
+/// The app bar of the Artistes / Albums / Favoris / Historique views: the
+/// view's name and Paramètres — plus « Effacer l'historique » on Historique.
+class _SectionAppBar extends ConsumerWidget implements PreferredSizeWidget {
+  const _SectionAppBar({required this.section});
+
+  final LibrarySection section;
+
+  @override
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    return AppBar(
+      title: Text(section.label),
+      backgroundColor: scheme.surface,
+      actions: [
+        if (section == LibrarySection.history)
+          IconButton(
+            icon: const Icon(Icons.delete_sweep_outlined),
+            tooltip: 'Effacer l’historique',
+            onPressed: () => confirmClearHistory(context, ref),
+          ),
+        IconButton(
+          icon: const Icon(Icons.settings_outlined),
+          tooltip: 'Paramètres',
+          onPressed: () => Navigator.pushNamed(context, AppRoutes.settings),
+        ),
+      ],
     );
   }
 }
@@ -1111,10 +1204,11 @@ class _TabSongListState extends ConsumerState<_TabSongList>
                   ),
                 ],
                 AsyncData(:final value) => [
-                  if (query.isNotEmpty && value.isNotEmpty)
-                    SliverToBoxAdapter(
-                      child: _SearchQueueHeader(songs: value, query: query),
-                    ),
+                  // Always there on a non-empty list, at a fixed height:
+                  // the locate jump adds it to the row offset.
+                  SliverToBoxAdapter(
+                    child: _ListHeader(songs: value, query: query),
+                  ),
                   SliverFixedExtentList.builder(
                     // Fixed extent: every row is exactly kSongTileHeight
                     // tall, so the locate jump is precise.
@@ -1154,9 +1248,16 @@ class _TabSongListState extends ConsumerState<_TabSongList>
                   ),
                 ],
               },
-              // Keeps the last song reachable above the mini player.
+              // Keeps the last song reachable above the mini player — and,
+              // on the tabs that carry it, above the floating batch button.
               SliverToBoxAdapter(
-                child: SizedBox(height: hasCurrentSong ? 8 : 24),
+                child: SizedBox(
+                  height: status != LyricsStatus.synced
+                      ? 88
+                      : hasCurrentSong
+                      ? 8
+                      : 24,
+                ),
               ),
             ],
           ),
@@ -1166,35 +1267,12 @@ class _TabSongListState extends ConsumerState<_TabSongList>
   }
 }
 
-/// Slides the mini player in and out instead of making the list jump by 66 px
-/// the moment playback starts.
-class _DockedMiniPlayer extends ConsumerWidget {
-  const _DockedMiniPlayer({required this.onLongPress});
-
-  /// The library screen's locate-the-playing-track routine, handed straight
-  /// to the mini player — a direct callback, no provider round-trip.
-  final Future<void> Function() onLongPress;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final hasSong =
-        ref.watch(currentSongProvider.select((s) => s != null));
-
-    return AnimatedSize(
-      duration: const Duration(milliseconds: 250),
-      curve: Curves.easeOutCubic,
-      alignment: Alignment.topCenter,
-      child: hasSong
-          ? SafeArea(child: MiniPlayer(onLongPress: onLongPress))
-          : const SizedBox.shrink(),
-    );
-  }
-}
-
 String _sortLabel(LibrarySort sort) => switch (sort) {
   LibrarySort.title => 'Par titre',
   LibrarySort.artist => 'Par artiste',
   LibrarySort.album => 'Par album',
+  LibrarySort.dateAdded => 'Ajoutés récemment',
+  LibrarySort.duration => 'Par durée',
 };
 
 class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
@@ -1212,8 +1290,6 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
   /// Owned by the screen, so a tap and a swipe drive the same indicator.
   final TabController tabController;
 
-  final VoidCallback onBatch;
-
   final ValueChanged<String> onChatSubmit;
   final VoidCallback onExitChat;
 
@@ -1223,7 +1299,6 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
     required this.searchController,
     required this.searchFocusNode,
     required this.tabController,
-    required this.onBatch,
     required this.onChatSubmit,
     required this.onExitChat,
   });
@@ -1234,13 +1309,6 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
     final textTheme = Theme.of(context).textTheme;
     final counts = ref.watch(lyricsStatusCountsProvider);
 
-    final subtitle = switch (songsAsync) {
-      AsyncData(:final value) =>
-        '${value.length} morceau${value.length > 1 ? 'x' : ''}',
-      AsyncError() => 'Analyse impossible',
-      _ => 'Analyse en cours…',
-    };
-
     // A plain AppBar, not a sliver: the header lives outside the scrollable
     // so the scrollbar spans exactly the song list — never the header above
     // it, never the mini player below.
@@ -1248,22 +1316,10 @@ class _LibraryAppBar extends ConsumerWidget implements PreferredSizeWidget {
       title: const Text('Musync'),
       backgroundColor: scheme.surface,
       actions: [
-        Center(
-          child: Text(
-            subtitle,
-            style: textTheme.labelMedium?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
-          ),
-        ),
-        // No batch search on the Synchronisées tab: those tracks already
-        // have synced lyrics, there is nothing to search for.
-        if (ref.watch(libraryTabProvider) != LyricsStatus.synced)
-          IconButton(
-            icon: const Icon(Icons.playlist_add_check),
-            tooltip: 'Chercher les paroles de cet onglet',
-            onPressed: songsAsync.valueOrNull?.isEmpty ?? true ? null : onBatch,
-          ),
+        // No track count here any more: each tab says it above its list,
+        // with Tout lire / Aléatoire, and the tabs carry their own counts.
+        // The batch search moved to the floating button, in the thumb's
+        // reach — it is this screen's main action (see LibraryScreen.build).
         PopupMenuButton<LibrarySort>(
           icon: const Icon(Icons.sort),
           tooltip: 'Trier',
@@ -1453,38 +1509,52 @@ class _SearchField extends ConsumerWidget {
   }
 }
 
-/// Header shown above search results: result count plus a one-tap way to
-/// turn the results into a named queue (e.g. search "Juice WRLD" →
-/// "Créer une file" → a "Juice WRLD" queue).
-class _SearchQueueHeader extends ConsumerWidget {
+/// Height of [_ListHeader]: fixed, so the locate jump can add it to the
+/// row offset and still land exactly on the row.
+const double kLibraryListHeaderHeight = 56;
+
+/// Header above every non-empty library list: the count, « Tout lire »,
+/// « Aléatoire » — and, on a search, a one-tap way to turn the results
+/// into a named queue (search « Juice WRLD » → « Créer une file » → a
+/// « Juice WRLD » queue).
+class _ListHeader extends ConsumerWidget {
   final List<Song> songs;
   final String query;
 
-  const _SearchQueueHeader({required this.songs, required this.query});
+  const _ListHeader({required this.songs, required this.query});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              '${songs.length} résultat${songs.length > 1 ? 's' : ''}',
-              style: Theme.of(context).textTheme.bodySmall,
+    final count = songs.length;
+    final noun = query.isEmpty
+        ? 'morceau${count > 1 ? 'x' : ''}'
+        : 'résultat${count > 1 ? 's' : ''}';
+    return SizedBox(
+      height: kLibraryListHeaderHeight,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '$count $noun',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             ),
-          ),
-          FilledButton.tonalIcon(
-            onPressed: () => createQueueFromSongs(
-              context,
-              ref,
-              songs,
-              suggestedName: query,
-            ),
-            icon: const Icon(Icons.playlist_add, size: 18),
-            label: const Text('Créer une file'),
-          ),
-        ],
+            if (query.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.playlist_add),
+                tooltip: 'Créer une file avec ces résultats',
+                onPressed: () => createQueueFromSongs(
+                  context,
+                  ref,
+                  songs,
+                  suggestedName: query,
+                ),
+              ),
+            PlaySongsButtons(songs: songs),
+          ],
+        ),
       ),
     );
   }
@@ -1551,10 +1621,19 @@ class _ScanFailed extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The raw exception used to be the whole message — a PlatformException
+    // dump is not something to read on a phone. Plain words first; the
+    // technical detail stays, small and last, for a bug report (the full
+    // error is in Paramètres › Journal too).
+    final detail = '$error';
     return _CenteredMessage(
       icon: Icons.error_outline,
       title: 'Analyse impossible',
-      message: '$error',
+      message:
+          'Musync n’a pas pu lire la musique de l’appareil. Réessayez ; si '
+          'le problème continue, le détail est dans Paramètres › Journal.'
+          '\n\nDétail : '
+          '${detail.length > 160 ? '${detail.substring(0, 160)}…' : detail}',
       action: FilledButton.icon(
         onPressed: onRetry,
         icon: const Icon(Icons.refresh, size: 18),

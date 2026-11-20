@@ -29,6 +29,10 @@ enum LyricsColorMode { white, materialYou }
 /// starts. Off means no word animation at all — the line lights up whole.
 enum KaraokeAnimationStyle { sweep, instant }
 
+/// The app's light/dark choice. Dark is the default: Musync was dark-only
+/// until this setting existed, so nobody's app changes on update.
+enum AppThemePreference { system, light, dark }
+
 @immutable
 class LyricsAppearance {
   final LyricsFontSize fontSize;
@@ -54,6 +58,17 @@ class LyricsAppearance {
   /// [karaokeAnimations] is on.
   final KaraokeAnimationStyle karaokeAnimationStyle;
 
+  /// Word by word on every song: lyrics timed per line only get estimated
+  /// word timings (see `prepareKaraokeWords`). On by default — without
+  /// it, the karaoke mode only moves on the rare word-timed lyrics. Only
+  /// read when [karaokeAnimations] is on; never written to the file.
+  final bool karaokeEstimatedWords;
+
+  /// Light, dark, or following the system — the whole app, not just the
+  /// lyrics. Lives here because « Apparence » is where it is set and where
+  /// it is exported/imported from.
+  final AppThemePreference themePreference;
+
   const LyricsAppearance({
     this.fontSize = LyricsFontSize.medium,
     this.textAlign = LyricsTextAlign.center,
@@ -64,6 +79,8 @@ class LyricsAppearance {
     this.showRomanization = true,
     this.karaokeAnimations = false,
     this.karaokeAnimationStyle = KaraokeAnimationStyle.sweep,
+    this.karaokeEstimatedWords = true,
+    this.themePreference = AppThemePreference.dark,
   });
 
   /// Font scale applied on top of the theme size and the system text scale.
@@ -83,6 +100,8 @@ class LyricsAppearance {
     bool? showRomanization,
     bool? karaokeAnimations,
     KaraokeAnimationStyle? karaokeAnimationStyle,
+    bool? karaokeEstimatedWords,
+    AppThemePreference? themePreference,
   }) => LyricsAppearance(
     fontSize: fontSize ?? this.fontSize,
     textAlign: textAlign ?? this.textAlign,
@@ -94,6 +113,9 @@ class LyricsAppearance {
     karaokeAnimations: karaokeAnimations ?? this.karaokeAnimations,
     karaokeAnimationStyle:
         karaokeAnimationStyle ?? this.karaokeAnimationStyle,
+    karaokeEstimatedWords:
+        karaokeEstimatedWords ?? this.karaokeEstimatedWords,
+    themePreference: themePreference ?? this.themePreference,
   );
 
   // Value equality, like LyricsSourceConfig and PlaybackSettings: the
@@ -112,7 +134,9 @@ class LyricsAppearance {
           other.bubbleColorMode == bubbleColorMode &&
           other.showRomanization == showRomanization &&
           other.karaokeAnimations == karaokeAnimations &&
-          other.karaokeAnimationStyle == karaokeAnimationStyle;
+          other.karaokeAnimationStyle == karaokeAnimationStyle &&
+          other.karaokeEstimatedWords == karaokeEstimatedWords &&
+          other.themePreference == themePreference;
 
   @override
   int get hashCode => Object.hash(
@@ -125,6 +149,8 @@ class LyricsAppearance {
     showRomanization,
     karaokeAnimations,
     karaokeAnimationStyle,
+    karaokeEstimatedWords,
+    themePreference,
   );
 
   Map<String, Object?> toJson() => {
@@ -137,6 +163,8 @@ class LyricsAppearance {
     'showRomanization': showRomanization,
     'karaokeAnimations': karaokeAnimations,
     'karaokeAnimationStyle': karaokeAnimationStyle.name,
+    'karaokeEstimatedWords': karaokeEstimatedWords,
+    'themePreference': themePreference.name,
   };
 
   static T _enumOf<T>(List<T> values, Object? raw, T fallback) {
@@ -188,6 +216,16 @@ class LyricsAppearance {
         KaraokeAnimationStyle.values,
         m['karaokeAnimationStyle'],
         KaraokeAnimationStyle.sweep,
+      ),
+      karaokeEstimatedWords: m['karaokeEstimatedWords'] is bool
+          ? m['karaokeEstimatedWords'] as bool
+          : true,
+      // Absent from every file written before the setting existed: those
+      // stay dark, as they always were.
+      themePreference: _enumOf(
+        AppThemePreference.values,
+        m['themePreference'],
+        AppThemePreference.dark,
       ),
     );
   }

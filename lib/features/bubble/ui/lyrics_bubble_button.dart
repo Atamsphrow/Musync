@@ -53,8 +53,8 @@ class LyricsBubbleButton extends ConsumerWidget {
             // The bubble only shows while playing: if the track is paused or
             // stopped, start it first — otherwise the app would go to the
             // background with nothing to show.
-            final playing =
-                ref.read(playerStateProvider).valueOrNull?.playing ?? false;
+            // Effective playing: a finished queue still says `playing`.
+            final playing = ref.read(isPlayingProvider);
             if (!playing) {
               // Fire and forget: awaiting play() here once wedged the whole
               // sequence — the track started playing but the app never went

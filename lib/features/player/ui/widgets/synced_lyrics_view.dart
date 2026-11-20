@@ -154,13 +154,105 @@ TextStyle _lyricsTextStyle(TextStyle? base, LyricsAppearance appearance) {
 }
 
 class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
-  // Measuring every line would mean laying the whole song out up front, so
-  // lines are given a fixed extent instead — that also makes centering exact
-  // rather than the running approximation it would otherwise be.
-  static const double _lineExtent = 56;
+  // Each line's row height is measured once per song, width and style, in
+  // the line's widest rendering (bold, as when it is current) — so a long
+  // line gets the room for all its lines, and centring stays exact: the
+  // offsets are known sums, not a running estimate.
+  //
+  // It used to be one fixed 56 px for every row, with the text capped at two
+  // lines: a long line that wrapped onto a third line once bold (current)
+  // spilled out of its row and was cut in half by the next one — right on
+  // the line being sung.
+
+  /// Smallest row: one line of text with breathing room (the old fixed
+  /// extent, so short lines keep their spacing).
+  static const double _minLineExtent = 56;
+
+  /// Room above and below a line's text inside its row — also covers the
+  /// karaoke word lift.
+  static const double _lineVerticalPadding = 16;
+
+  List<double> _extents = const [];
+  List<double> _offsets = const [];
+  Object? _extentsKey;
+
+  double _extentAt(int index) =>
+      index < _extents.length ? _extents[index] : _minLineExtent;
+
+  /// Measures every row for [width], unless the inputs are unchanged.
+  void _measureLines({
+    required double width,
+    required TextStyle style,
+    required TextAlign textAlign,
+    required TextScaler textScaler,
+    required LyricsAppearance appearance,
+    required Color dimColor,
+  }) {
+    final key = (widget.lyrics, width, style, textAlign, textScaler, appearance);
+    if (key == _extentsKey && _extents.length == widget.lyrics.length) return;
+    _extentsKey = key;
+    final extents = <double>[];
+    final offsets = <double>[];
+    var running = 0.0;
+    for (final line in widget.lyrics.lines) {
+      final prefix = voicePrefix(line, widget.lyrics.hasDuet);
+      final painter = TextPainter(
+        text: TextSpan(
+          style: style,
+          children: [
+            if (prefix != null)
+              TextSpan(
+                text: '$prefix · ',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            TextSpan(text: line.text),
+            ?romanizationSpan(line, appearance, dimColor),
+          ],
+        ),
+        textAlign: textAlign,
+        textDirection: TextDirection.ltr,
+        textScaler: textScaler,
+      )..layout(maxWidth: width);
+      final measured = painter.height + _lineVerticalPadding;
+      painter.dispose();
+      final extent = measured > _minLineExtent ? measured : _minLineExtent;
+      offsets.add(running);
+      extents.add(extent);
+      running += extent;
+    }
+    _extents = extents;
+    _offsets = offsets;
+  }
 
   final ScrollController _scrollController = ScrollController();
   int? _lastCenteredIndex;
+
+  /// Set when the user scrolls the lyrics by hand: the view stops pulling
+  /// the list back to the current line on every line change — which made
+  /// reading ahead (or back) impossible — and offers a button to return.
+  bool _followPaused = false;
+
+  void _pauseFollow() {
+    if (!_followPaused) setState(() => _followPaused = true);
+  }
+
+  /// Back to following the playback, re-centring at once.
+  void _resumeFollow() {
+    if (!_followPaused && _lastCenteredIndex != null) return;
+    setState(() {
+      _followPaused = false;
+      _lastCenteredIndex = null;
+    });
+  }
+
+  /// A line or word tap is a seek: the user wants to be where the music is.
+  void _seekTo(Duration position) {
+    ref.read(audioPlayerServiceProvider).seekTo(position);
+    _resumeFollow();
+  }
   // A build schedules at most one post-frame centering: without the flag,
   // every rebuild re-scheduled one while the previous was still pending.
   bool _centerScheduled = false;
@@ -202,11 +294,13 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     // the very top and the last at the very bottom — never floating mid-screen.
     // Centring a line's midpoint means scrolling to:
     //
-    //     index * extent + extent / 2 - viewportHeight / 2
+    //     offset + extent / 2 - viewportHeight / 2
     //
     // clamped to what the list can actually scroll.
-    final target =
-        (index * _lineExtent) + (_lineExtent / 2) - (viewportHeight / 2);
+    final offset = index < _offsets.length
+        ? _offsets[index]
+        : index * _minLineExtent;
+    final target = offset + (_extentAt(index) / 2) - (viewportHeight / 2);
 
     final sw = _centerLogged ? null : (Stopwatch()..start());
 
@@ -237,7 +331,10 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     super.didUpdateWidget(oldWidget);
     // A new song (or retimed lyrics) must not inherit the old scroll anchor:
     // the next line change re-centres from wherever the list happens to be.
-    if (oldWidget.lyrics != widget.lyrics) _lastCenteredIndex = null;
+    if (oldWidget.lyrics != widget.lyrics) {
+      _lastCenteredIndex = null;
+      _followPaused = false;
+    }
   }
 
   @override
@@ -256,10 +353,27 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
     if (widget.lyrics.isEmpty) {
       return _EmptyLyrics(onSearchOnline: widget.onSearchOnline);
     }
+    // The words as they are lit — split into real words, estimated on
+    // line-only lines when the option asks for it. Same lines, same texts
+    // and timestamps as [widget.lyrics], which stays the one handed to the
+    // nudge sheet: estimated words must never reach the file.
+    final karaokeLyrics = ref.watch(karaokeLyricsProvider(widget.lyrics));
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (currentIndex != null) {
+        _measureLines(
+          // The row's horizontal padding (24 on each side) comes off.
+          width: (constraints.maxWidth - 48).clamp(1.0, double.infinity).toDouble(),
+          style: _lyricsTextStyle(
+            textTheme.bodyLarge,
+            appearance,
+          ).copyWith(fontWeight: FontWeight.w700),
+          textAlign: textAlign,
+          textScaler: MediaQuery.textScalerOf(context),
+          appearance: appearance,
+          dimColor: scheme.onSurfaceVariant.withValues(alpha: 0.55),
+        );
+        if (currentIndex != null && !_followPaused) {
           if (!_centerScheduled) {
             _centerScheduled = true;
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -269,12 +383,12 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
           }
         }
 
-        return ListView.builder(
+        final list = ListView.builder(
           controller: _scrollController,
           itemCount: widget.lyrics.length,
-          itemExtent: _lineExtent,
+          itemExtentBuilder: (index, _) => _extentAt(index),
           itemBuilder: (context, index) {
-            final line = widget.lyrics.lines[index];
+            final line = karaokeLyrics.lines[index];
             final isCurrent = index == currentIndex;
 
             // The active line is bold in the chosen color, everything else
@@ -356,8 +470,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                 wordIndex: wordIndex,
                 sungStyle: sungStyle,
                 unsungStyle: unsungStyle,
-                onWordTap: (position) =>
-                    ref.read(audioPlayerServiceProvider).seekTo(position),
+                onWordTap: _seekTo,
                 prefix: prefixSpan,
                 romanization: romanization,
                 textAlign: textAlign,
@@ -370,17 +483,13 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                     ...karaokeWordSpans(
                       line: line,
                       wordIndex: wordIndex,
-                      onWordTap: (position) => ref
-                          .read(audioPlayerServiceProvider)
-                          .seekTo(position),
+                      onWordTap: _seekTo,
                       sungStyle: sungStyle,
                       unsungStyle: unsungStyle,
                     ),
                     ?romanization,
                   ],
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
                 textAlign: textAlign,
               );
             } else {
@@ -392,16 +501,13 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
                     ?romanization,
                   ],
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
                 textAlign: textAlign,
               );
             }
 
             return InkWell(
               // Non-null: this view renders SyncedLyrics, which is timed-only.
-              onTap: () =>
-                  ref.read(audioPlayerServiceProvider).seekTo(line.timestamp!),
+              onTap: () => _seekTo(line.timestamp!),
               // Long-press: nudge this line's timing directly (±100 ms),
               // without opening the full sync editor. The editor stays
               // available from the player's "Ajuster la synchronisation"
@@ -439,6 +545,38 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView> {
               ),
             );
           },
+        );
+
+        return Stack(
+          children: [
+            NotificationListener<ScrollStartNotification>(
+              // A start with drag details is a finger on the list; the
+              // view's own animateTo starts without them.
+              onNotification: (notification) {
+                if (notification.dragDetails != null) _pauseFollow();
+                return false;
+              },
+              child: list,
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 12,
+              child: Center(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  child: _followPaused && currentIndex != null
+                      ? FilledButton.tonalIcon(
+                          key: const ValueKey('resume-follow'),
+                          onPressed: _resumeFollow,
+                          icon: const Icon(Icons.my_location, size: 18),
+                          label: const Text('Revenir à la ligne en cours'),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+              ),
+            ),
+          ],
         );
       },
     );

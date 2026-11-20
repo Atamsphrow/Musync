@@ -156,19 +156,8 @@ final artworkSchemeProvider =
       if (bytes == null || bytes.isEmpty) return null;
 
       try {
-        // TEMPORARY timing (the lag hunt): wall time from artwork bytes to
-        // scheme. The quantization now runs in a background isolate, so this
-        // no longer measures main-isolate blocking at all — it says how long
-        // after a track change the player's tint is ready. FrameProbe gaps
-        // around these lines should now be flat.
-        final schemeSw = Stopwatch()..start();
-        final scheme = await artworkSchemeFromBytes(bytes, request.brightness);
-        DebugLog.instance.info(
-          'Perf',
-          'schéma pochette (morceau ${request.songId}) : '
-          '${schemeSw.elapsedMilliseconds}ms (quantification hors UI)',
-        );
-        return scheme;
+        // The quantization runs in a background isolate.
+        return await artworkSchemeFromBytes(bytes, request.brightness);
       } catch (error) {
         // Corrupt or unsupported artwork — fall back to the app-wide scheme.
         //

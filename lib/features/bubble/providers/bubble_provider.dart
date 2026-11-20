@@ -432,8 +432,10 @@ class LyricsBubbleController extends Notifier<BubbleState> {
 
   // ---- visibility -------------------------------------------------------
 
-  bool get _playing =>
-      ref.read(playerStateProvider).valueOrNull?.playing ?? false;
+  /// Effective playing: just_audio keeps `playing` true once the queue has
+  /// completed, which left the bubble floating over silence at the end of
+  /// every queue.
+  bool get _playing => ref.read(isPlayingProvider);
 
   /// Whether the current song is confirmed to carry synced lyrics.
   /// Returns null while the answer is not known yet (lyrics still loading,

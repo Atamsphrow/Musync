@@ -219,6 +219,17 @@ class MainActivity : AudioServiceActivity() {
             batchReviewHandler.postDelayed(batchReviewRetry, 1200)
         }
 
+        // Home-screen widget: Dart pushes the playing track, the widget's
+        // buttons call back. On this engine — the one audio_service keeps
+        // with the playback — so the widget keeps working with the UI closed.
+        WidgetBridge.attach(
+            MethodChannel(
+                flutterEngine.dartExecutor.binaryMessenger,
+                WidgetBridge.CHANNEL,
+            ),
+            this,
+        )
+
         // Keep-screen-on for the lyrics displays (player lyrics pane;
         // the floating bubble sets the same flag on its own overlay
         // window in the vendored overlay plugin). A window flag, not a

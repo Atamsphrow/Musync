@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show File;
 
 import 'package:flutter/foundation.dart';
 import 'package:audio_session/audio_session.dart';
@@ -6,13 +7,56 @@ import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:musync/core/services/audio_backend_check.dart';
 import 'package:musync/core/services/debug_log.dart';
-import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/data/artwork_bytes_cache.dart';
 import 'package:musync/features/player/data/artwork_cache.dart';
 import 'package:musync/features/player/data/last_song_store.dart';
 import 'package:musync/features/player/data/playback_state_store.dart';
+import 'package:musync/features/player/data/queue_shuffle_order.dart';
 import 'package:musync/features/player/data/volume_fade.dart';
+
+/// A track that could not be played, as reported to the UI.
+@immutable
+class PlaybackFailure {
+  /// The track the player was on when it failed; null when none was known.
+  final Song? song;
+
+  /// True when the file is gone from disk (moved, deleted, SD card removed),
+  /// as opposed to present but unreadable.
+  final bool missingFile;
+
+  /// Whether a next track exists, so the message can offer to skip to it.
+  final bool canSkip;
+
+  const PlaybackFailure({
+    required this.song,
+    required this.missingFile,
+    required this.canSkip,
+  });
+
+  /// What the user is told.
+  String get message {
+    final target = song;
+    final name = target == null ? 'ce morceau' : '« ${target.title} »';
+    return missingFile
+        ? 'Fichier introuvable : $name a été déplacé ou supprimé. '
+              'Tirez la bibliothèque vers le bas pour l’actualiser.'
+        : 'Lecture impossible : $name est illisible ou corrompu.';
+  }
+
+  /// Builds the failure for [song], checking the disk for the file.
+  static PlaybackFailure of(Song? song, {required bool canSkip}) {
+    var missing = false;
+    if (song != null) {
+      try {
+        missing = !File(song.filePath).existsSync();
+      } catch (_) {
+        // Unreadable path: report it as unreadable, not as missing.
+      }
+    }
+    return PlaybackFailure(song: song, missingFile: missing, canSkip: canSkip);
+  }
+}
 
 /// Wraps [AudioPlayer] and owns the playback queue.
 ///
@@ -23,11 +67,53 @@ import 'package:musync/features/player/data/volume_fade.dart';
 class AudioPlayerService {
   final AudioPlayer _player;
 
-  List<Song> _queue = const [];
+  /// The playback queue, observable: the queue screens' headers (track
+  /// count, total length) follow it without each mutation having to tell
+  /// them. Always an unmodifiable list, replaced — never mutated in place —
+  /// so a change is a new value.
+  final ValueNotifier<List<Song>> _queueNotifier =
+      ValueNotifier<List<Song>>(const []);
+  List<Song> get _queue => _queueNotifier.value;
+  set _queue(List<Song> value) => _queueNotifier.value = value;
+
+  /// The queue as a listenable, for widgets that summarise it.
+  ValueListenable<List<Song>> get queueListenable => _queueNotifier;
   Song? _currentSong;
 
   final StreamController<Song?> _currentSongController =
       StreamController<Song?>.broadcast();
+
+  /// The queue source currently in the player and its shuffle order, kept
+  /// together so a queue mutation can tell the order where the item goes
+  /// (see [QueueShuffleOrder]). Only trusted while [_player.audioSource] is
+  /// still [_queueSource].
+  ConcatenatingAudioSource? _queueSource;
+  QueueShuffleOrder? _queueOrder;
+
+  /// The shuffle order of [source] when it is the queue this service built.
+  QueueShuffleOrder? _orderOf(AudioSource? source) =>
+      identical(source, _queueSource) ? _queueOrder : null;
+
+  /// A queue source with a [QueueShuffleOrder], not yet installed.
+  static (ConcatenatingAudioSource, QueueShuffleOrder) _newQueueSource(
+    List<AudioSource> children,
+  ) {
+    final order = QueueShuffleOrder();
+    final source = ConcatenatingAudioSource(
+      // Lazy preparation: the next track starts loading just before the
+      // current one ends, so automatic advances are gapless instead of
+      // reloading at each boundary — and the stale-position window the
+      // lyrics bubble guards against gets shorter.
+      useLazyPreparation: true,
+      shuffleOrder: order,
+      children: children,
+    );
+    return (source, order);
+  }
+
+  /// Playback failures the player reports on its own (see [playbackFailures]).
+  final StreamController<PlaybackFailure> _failureController =
+      StreamController<PlaybackFailure>.broadcast();
 
   /// Held so it can be cancelled before the controller closes — see [dispose].
   late final StreamSubscription<int?> _indexSubscription;
@@ -55,6 +141,10 @@ class AudioPlayerService {
   /// Volume à restaurer quand le fondu est annulé avant la fin.
   double _fadeTargetVolume = 1.0;
 
+  /// Settles a running [fadeOutAndPause]: true when the fade ran to the end,
+  /// false when something cancelled it (pause, skip, a new track…).
+  Completer<bool>? _fadeOutCompleter;
+
   /// Vrai quand la lecture a été mise en pause par le début d'une
   /// interruption audio (appel) : sert à décider de la reprise auto à la fin.
   bool _wasPlayingBeforeInterruption = false;
@@ -80,15 +170,7 @@ class AudioPlayerService {
         _artworkBytes.prefetch(_queue[index]);
         // Track change (tap, next/prev, auto-advance, notification): the
         // restored launch needs this index, not just the song.
-        // TEMPORARY timing (the lag hunt): this persist encodes the
-        // whole queue on EVERY track change — the journal says its cost.
-        final persistSw = Stopwatch()..start();
         _persistPlaybackState();
-        DebugLog.instance.info(
-          'Perf',
-          'persist (changement de morceau) : '
-              '${persistSw.elapsedMilliseconds}ms',
-        );
       } else if (index != null) {
         // Never silent: a dropped index means _queue and just_audio disagree,
         // and the now-playing screen freezes on the old track while the audio
@@ -116,6 +198,11 @@ class AudioPlayerService {
     });
     _loopWatchSubscription = _player.playbackEventStream.listen(
       _onPlaybackEvent,
+      // just_audio reports a track it cannot open (deleted, moved, corrupt)
+      // as an error on this stream. Nothing listened for it: an automatic
+      // advance onto a missing file simply stopped the music, with no word
+      // to the user and no line in the Journal.
+      onError: _onPlaybackError,
     );
     unawaited(_watchBecomingNoisy());
   }
@@ -188,6 +275,27 @@ class AudioPlayerService {
       unawaited(LastSongStore().save(song.filePath, Duration.zero));
     }
   }
+
+  /// Failures the player hits by itself — chiefly an automatic advance (or a
+  /// notification skip) onto a file that is gone or unreadable. The app
+  /// shows each one as a message. Failures of an explicit [playSong] are
+  /// also reported to its caller.
+  Stream<PlaybackFailure> get playbackFailures => _failureController.stream;
+
+  void _onPlaybackError(Object error, StackTrace stack) {
+    final song = _currentSong;
+    DebugLog.instance.error(
+      'Player',
+      'Erreur de lecture${song == null ? '' : ' : ${song.filePath}'}',
+      error: error,
+      stackTrace: stack,
+    );
+    if (_failureController.isClosed) return;
+    _failureController.add(PlaybackFailure.of(song, canSkip: _player.hasNext));
+  }
+
+  /// Whether the queue has a track after the current one.
+  bool get hasNext => _player.hasNext;
 
   Song? get currentSong => _currentSong;
   List<Song> get queue => _queue;
@@ -298,7 +406,22 @@ class AudioPlayerService {
   final ArtworkBytesCache _artworkBytes = ArtworkBytesCache();
   bool get isShuffleEnabled => _player.shuffleModeEnabled;
   LoopMode get loopMode => _player.loopMode;
-  bool get isPlaying => _player.playing;
+  /// Whether audio is actually advancing.
+  ///
+  /// Not `_player.playing` alone: just_audio leaves `playing` true once the
+  /// last track of the queue has finished (`ProcessingState.completed`), so
+  /// the end of a queue read as « still playing » — the main button showed
+  /// Pause over silence, and the headphones automation refused to start.
+  bool get isPlaying => isEffectivelyPlaying(
+    playing: _player.playing,
+    processingState: _player.processingState,
+  );
+
+  /// Pure rule behind [isPlaying], shared with the UI's `isPlayingProvider`.
+  static bool isEffectivelyPlaying({
+    required bool playing,
+    required ProcessingState processingState,
+  }) => playing && processingState != ProcessingState.completed;
   Duration get position => _player.position;
 
   Stream<Duration> get positionStream => _player.positionStream;
@@ -416,29 +539,13 @@ class AudioPlayerService {
     // time the source is built.
     unawaited(_warmArtwork(resolvedIndex));
 
-    // TEMPORARY timing (the lag hunt): building one AudioSource per
-    // queued track is synchronous main-isolate work, and the persist
-    // below encodes the whole queue — the journal entries split the
-    // three costs so they are numbers, not suspicions.
-    final buildSw = Stopwatch()..start();
     final children = [for (final s in _queue) _toSource(s)];
-    final tBuild = buildSw.elapsedMilliseconds;
-    final sourceSw = Stopwatch()..start();
-    final probe = FrameProbe.start('playSong', frames: 120);
+    final (queueSource, queueOrder) = _newQueueSource(children);
     try {
-      await _player.setAudioSource(
-        ConcatenatingAudioSource(
-          // Lazy preparation: the next track starts loading just before the
-          // current one ends, so automatic advances are gapless instead of
-          // reloading at each boundary — and the stale-position window the
-          // lyrics bubble guards against gets shorter.
-          useLazyPreparation: true,
-          children: children,
-        ),
-        initialIndex: resolvedIndex,
-      );
+      await _player.setAudioSource(queueSource, initialIndex: resolvedIndex);
+      _queueSource = queueSource;
+      _queueOrder = queueOrder;
     } catch (_) {
-      probe.stop();
       // The new queue was announced but never loaded (corrupt/missing file):
       // put the old state back so the UI, the index subscription and the real
       // source agree again, then let the caller report the failure.
@@ -446,18 +553,8 @@ class AudioPlayerService {
       _setCurrentSong(previousSong);
       rethrow;
     }
-    DebugLog.instance.info(
-      'Perf',
-      'playSong : ${_queue.length} sources — construction ${tBuild}ms, '
-          'setAudioSource ${sourceSw.elapsedMilliseconds}ms',
-    );
     // The queue actually changed: the next launch restores all of it.
-    final persistSw = Stopwatch()..start();
     _persistPlaybackState();
-    DebugLog.instance.info(
-      'Perf',
-      'persist file : ${persistSw.elapsedMilliseconds}ms',
-    );
   }
 
   /// Prefers the caller's index, since a library list can legitimately hold the
@@ -553,6 +650,55 @@ class AudioPlayerService {
     _fadeTimer?.cancel();
     _fadeTimer = null;
     unawaited(_player.setVolume(_fadeTargetVolume));
+    final pending = _fadeOutCompleter;
+    _fadeOutCompleter = null;
+    if (pending != null && !pending.isCompleted) pending.complete(false);
+  }
+
+  /// Lowers the volume to silence over [duration], then pauses and puts the
+  /// volume back where it was — the sleep timer's soft landing, instead of
+  /// the music stopping mid-phrase.
+  ///
+  /// Any transport action meanwhile (pause, skip, a new track) cancels the
+  /// fade through [_cancelVolumeFade], which restores the volume; the call
+  /// then returns false without pausing. True when it paused.
+  Future<bool> fadeOutAndPause(Duration duration) async {
+    _cancelVolumeFade();
+    if (!isPlaying) return true; // Nothing to land: already silent.
+    if (duration <= Duration.zero) {
+      await pause();
+      return true;
+    }
+    final from = _player.volume <= 0 ? 1.0 : _player.volume;
+    _fadeTargetVolume = from;
+    final completer = Completer<bool>();
+    _fadeOutCompleter = completer;
+    final clock = Stopwatch()..start();
+    _fadeTimer = Timer.periodic(const Duration(milliseconds: 250), (timer) {
+      final t = clock.elapsedMilliseconds / duration.inMilliseconds;
+      if (t >= 1) {
+        timer.cancel();
+        _fadeTimer = null;
+        _fadeOutCompleter = null;
+        if (!completer.isCompleted) completer.complete(true);
+        return;
+      }
+      // Quadratic, like the wake-up fade: the ear hears volume
+      // logarithmically, so a linear ramp sounds like nothing, then a cliff.
+      final left = 1 - t;
+      unawaited(_player.setVolume(from * left * left));
+    });
+    final ranToEnd = await completer.future;
+    if (!ranToEnd) return false;
+    await pause();
+    await _player.setVolume(from);
+    return true;
+  }
+
+  /// Stops a running [fadeOutAndPause] and restores the volume — the sleep
+  /// timer was switched off or changed mid-fade.
+  void cancelFadeOut() {
+    if (_fadeOutCompleter != null) _cancelVolumeFade();
   }
 
   /// Reprend la lecture.
@@ -563,6 +709,13 @@ class AudioPlayerService {
   /// gentle, like [playSong] does for a fresh track. A null fade means
   /// an immediate resume at the current volume, as before.
   Future<void> play({Duration? fadeIn}) async {
+    // At the end of the queue just_audio sits on `completed`, where play()
+    // is a silent no-op: the button did nothing. Replay the track the queue
+    // stopped on, from its start — never jump elsewhere, so the sync editor
+    // keeps the track it is editing.
+    if (_player.processingState == ProcessingState.completed) {
+      await _seekWithRecord(Duration.zero, index: _player.currentIndex);
+    }
     await _player.play();
     if (fadeIn != null) _startVolumeFade(fadeIn);
   }
@@ -663,13 +816,12 @@ class AudioPlayerService {
         );
         return false;
       }
-      await _player.setAudioSource(
-        ConcatenatingAudioSource(
-          useLazyPreparation: true,
-          children: [for (final s in queue) _toSource(s)],
-        ),
-        initialIndex: index,
-      );
+      final (queueSource, queueOrder) = _newQueueSource([
+        for (final s in queue) _toSource(s),
+      ]);
+      await _player.setAudioSource(queueSource, initialIndex: index);
+      _queueSource = queueSource;
+      _queueOrder = queueOrder;
       // Modes before the seek: the seek lands in plain order, and enabling
       // shuffle afterwards keeps the current item (same as toggleShuffle).
       final repeat = switch (state.repeat) {
@@ -870,7 +1022,7 @@ class AudioPlayerService {
     }
   }
 
-  Future<void> togglePlayPause() => _player.playing ? pause() : _player.play();
+  Future<void> togglePlayPause() => isPlaying ? pause() : play();
 
   /// How far short of the track end a forward seek is allowed to land.
   ///
@@ -967,6 +1119,10 @@ class AudioPlayerService {
   Future<void> reorderQueueApply(int oldIndex, int newIndex) async {
     final source = _player.audioSource;
     if (source is! ConcatenatingAudioSource) return;
+    // The list the user drags is the plain order; under shuffle the moved
+    // track keeps its place in the shuffled run instead of landing at a
+    // random one (just_audio's default re-inserts moves randomly).
+    _orderOf(source)?.keepSlotOnNextMove();
     await source.move(oldIndex, newIndex);
     await _reconcileCurrentIndex();
   }
@@ -1046,7 +1202,17 @@ class AudioPlayerService {
     }
     final insertAt = (currentIndex + 1).clamp(0, _queue.length);
     final existing = _queue.indexOf(song);
-    if (existing == insertAt) return; // Already exactly next: nothing to do.
+    final shuffling = _player.shuffleModeEnabled;
+    // Already exactly next: nothing to do. Under shuffle « next » is the
+    // shuffled successor, not the plain-order neighbour.
+    final alreadyNext = shuffling
+        ? existing >= 0 && _player.nextIndex == existing
+        : existing == insertAt;
+    if (alreadyNext) return;
+    // Under shuffle, just_audio would drop the track at a random spot of the
+    // shuffled run: « Lire ensuite » then played it whenever. Pin it right
+    // after the current track instead.
+    if (shuffling) _orderOf(source)?.placeNextInsertAfter(currentIndex);
     final updated = List<Song>.of(_queue);
     if (existing >= 0) {
       final moved = updated.removeAt(existing);
@@ -1122,5 +1288,7 @@ class AudioPlayerService {
     await _indexSubscription.cancel();
     await _player.dispose();
     await _currentSongController.close();
+    await _failureController.close();
+    _queueNotifier.dispose();
   }
 }

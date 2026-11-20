@@ -25,6 +25,38 @@ class AppearanceTab extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
       children: [
+        Text('Thème', style: textTheme.titleSmall),
+        const SizedBox(height: 8),
+        SegmentedButton<AppThemePreference>(
+          segments: const [
+            ButtonSegment(
+              value: AppThemePreference.system,
+              icon: Icon(Icons.brightness_auto),
+              label: Text('Système'),
+            ),
+            ButtonSegment(
+              value: AppThemePreference.light,
+              icon: Icon(Icons.light_mode_outlined),
+              label: Text('Clair'),
+            ),
+            ButtonSegment(
+              value: AppThemePreference.dark,
+              icon: Icon(Icons.dark_mode_outlined),
+              label: Text('Sombre'),
+            ),
+          ],
+          selected: {appearance.themePreference},
+          onSelectionChanged: (s) =>
+              update(appearance.copyWith(themePreference: s.first)),
+          showSelectedIcon: false,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'La bulle flottante reste sombre : elle s’affiche par-dessus les '
+          'autres applications.',
+          style: textTheme.bodySmall,
+        ),
+        const Divider(height: 32),
         Text('Taille du texte', style: textTheme.titleSmall),
         const SizedBox(height: 8),
         SegmentedButton<LyricsFontSize>(
@@ -143,6 +175,18 @@ class AppearanceTab extends ConsumerWidget {
             ),
             showSelectedIcon: false,
           ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            value: appearance.karaokeEstimatedWords,
+            onChanged: (v) =>
+                update(appearance.copyWith(karaokeEstimatedWords: v)),
+            title: const Text('Mot à mot sur toutes les chansons'),
+            subtitle: const Text(
+              'Pour les paroles calées ligne par ligne, le moment de chaque '
+              'mot est estimé. Le fichier n\'est pas modifié.',
+            ),
+            contentPadding: EdgeInsets.zero,
+          ),
         ],
         const Divider(height: 32),
         Text('Couleur des paroles', style: textTheme.titleSmall),
@@ -156,7 +200,8 @@ class AppearanceTab extends ConsumerWidget {
           segments: const [
             ButtonSegment(
               value: LyricsColorMode.white,
-              label: Text('Blanc'),
+              // White on the dark theme, near-black on the light one.
+              label: Text('Neutre'),
             ),
             ButtonSegment(
               value: LyricsColorMode.materialYou,

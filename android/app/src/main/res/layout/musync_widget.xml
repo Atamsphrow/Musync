@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Home-screen widget: track and transport, 4 × 1 cells.
+
+  Every button is 48 dp, the minimum touch target. Fixed dark colours: the
+  widget sits on a wallpaper the app knows nothing about, and the same dark
+  plate as the launcher icon reads on any of them.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_background"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="16dp"
+    android:paddingEnd="8dp">
+
+    <!-- The playing track's cover, or the app icon when there is none. -->
+    <FrameLayout
+        android:layout_width="40dp"
+        android:layout_height="40dp">
+
+        <ImageView
+            android:id="@+id/widget_icon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_gravity="center"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_notification" />
+
+        <ImageView
+            android:id="@+id/widget_art"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/widget_art_background"
+            android:clipToOutline="true"
+            android:importantForAccessibility="no"
+            android:scaleType="centerCrop"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/widget_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="Musync"
+            android:textColor="#FFFFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_artist"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="Touchez pour ouvrir"
+            android:textColor="#B3FFFFFF"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/widget_previous"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="@android:color/transparent"
+        android:contentDescription="Précédent"
+        android:scaleType="center"
+        android:src="@drawable/ic_widget_previous" />
+
+    <ImageButton
+        android:id="@+id/widget_play"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="@android:color/transparent"
+        android:contentDescription="Lecture"
+        android:scaleType="center"
+        android:src="@drawable/ic_widget_play" />
+
+    <ImageButton
+        android:id="@+id/widget_next"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="@android:color/transparent"
+        android:contentDescription="Suivant"
+        android:scaleType="center"
+        android:src="@drawable/ic_widget_next" />
+</LinearLayout>

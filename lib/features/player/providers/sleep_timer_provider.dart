@@ -79,8 +79,29 @@ final sleepTimerProvider =
 /// even while paused — pausing the player does not postpone bedtime. Expiry
 /// pauses playback through [AudioPlayerService.pause].
 class SleepTimerController extends Notifier<SleepTimerState> {
+  /// How long the music fades out before a fixed-duration timer stops it.
+  /// Timers shorter than twice this stop without a fade.
+  static const Duration fadeOutDuration = Duration(seconds: 10);
+
+  /// How much « Prolonger » adds.
+  static const Duration extension = Duration(minutes: 5);
+
   Timer? _timer;
   Timer? _ticker;
+
+  /// The running fixed-duration timer's length and elapsed clock, for
+  /// [extendBy]. Null for end-of-track and when idle.
+  Duration? _total;
+  Stopwatch? _elapsed;
+
+  /// Bumped by every [_cancelAll], so a fade started by an older timer can
+  /// tell it no longer owns the state when it lands.
+  int _generation = 0;
+
+  /// The service running this timer's fade, held so [_cancelAll] can stop it
+  /// without touching `ref` — it also runs from `onDispose`, where `ref` is
+  /// off limits.
+  AudioPlayerService? _fadingService;
   StreamSubscription<PlayerState>? _completionSub;
   StreamSubscription<Duration>? _positionSub;
   StreamSubscription<PositionDiscontinuity>? _discontinuitySub;
@@ -187,7 +208,14 @@ class SleepTimerController extends Notifier<SleepTimerState> {
     // fires (itself monotone). A `Stopwatch` measures the same elapsed time
     // the `Timer` does.
     final elapsed = Stopwatch()..start();
-    _timer = Timer(duration, _onExpired);
+    _total = duration;
+    _elapsed = elapsed;
+    // The last [fadeOutDuration] fades the music out instead of cutting it
+    // mid-phrase; the fade itself pauses at the end (and restores the
+    // volume for the next play). Short timers keep the plain cut.
+    _timer = duration > fadeOutDuration * 2
+        ? Timer(duration - fadeOutDuration, _startFadeOut)
+        : Timer(duration, _onExpired);
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       final left = duration - elapsed.elapsed;
       if (left <= Duration.zero) return; // [_onExpired] owns the landing.
@@ -217,6 +245,56 @@ class SleepTimerController extends Notifier<SleepTimerState> {
     unawaited(ref.read(audioPlayerServiceProvider).pause());
   }
 
+  /// The fade before a fixed-duration expiry. When it lands (or is cut short
+  /// by the user touching the transport) the timer is over either way.
+  void _startFadeOut() {
+    final generation = _generation;
+    final service = ref.read(audioPlayerServiceProvider);
+    if (!service.isPlaying) {
+      // Paused right now: nothing to fade. Keep the plain stop at the exact
+      // end, so a resume in the last seconds is still stopped on time —
+      // pausing never postpones bedtime.
+      _timer = Timer(fadeOutDuration, _onExpired);
+      return;
+    }
+    _fadingService = service;
+    unawaited(
+      service.fadeOutAndPause(fadeOutDuration).then(
+        (landed) {
+          if (generation != _generation) return; // Replaced or cancelled.
+          _cancelAll();
+          state = const SleepTimerState();
+          // Cut short by a skip (a pause ends it too, but then nothing
+          // plays): bedtime still means silence.
+          if (!landed && service.isPlaying) unawaited(service.pause());
+        },
+        onError: (Object _) {
+          if (generation != _generation) return;
+          _onExpired(); // The fade failed: stop the plain way.
+        },
+      ),
+    );
+  }
+
+  /// Adds [extra] to a running fixed-duration timer (« Prolonger de 5 min »),
+  /// cancelling a fade in progress — the music comes back up at once. The
+  /// timer becomes a custom one of the new length. No-op for end-of-track
+  /// or when no timer runs.
+  void extendBy(Duration extra) {
+    final total = _total;
+    final elapsed = _elapsed;
+    if (total == null || elapsed == null || extra <= Duration.zero) return;
+    var left = total - elapsed.elapsed;
+    if (left.isNegative) left = Duration.zero;
+    final next = left + extra;
+    _cancelAll();
+    _startDurationTimer(
+      SleepTimerOption.custom,
+      next,
+      customMinutes: (next.inSeconds / 60).ceil(),
+    );
+  }
+
   void _onTrackEnded() {
     _cancelAll();
     state = const SleepTimerState();
@@ -224,6 +302,13 @@ class SleepTimerController extends Notifier<SleepTimerState> {
   }
 
   void _cancelAll() {
+    _generation++;
+    // A fade in progress belongs to the timer being replaced: put the volume
+    // back. A no-op when the fade already landed.
+    _fadingService?.cancelFadeOut();
+    _fadingService = null;
+    _total = null;
+    _elapsed = null;
     _timer?.cancel();
     _ticker?.cancel();
     _completionSub?.cancel();

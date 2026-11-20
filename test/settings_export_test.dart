@@ -39,6 +39,18 @@ void main() {
     expect(bundle['version'], isNotEmpty);
   });
 
+  test('carries the listening history', () async {
+    await put(
+      support,
+      'listening_history.json',
+      '{"/music/a.mp3": {"count": 3, "last": 10}}',
+    );
+    final files = (await exporter.build())['files'] as Map;
+    expect(files['listening_history.json'], {
+      '/music/a.mp3': {'count': 3, 'last': 10},
+    });
+  });
+
   test('a file that is not there is left out, not an error', () async {
     final bundle = await exporter.build();
     expect(bundle['files'], isEmpty);

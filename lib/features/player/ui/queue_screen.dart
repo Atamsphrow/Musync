@@ -1,12 +1,11 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/debug_log.dart';
-import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/player/data/audio_player_service.dart';
 import 'package:musync/features/player/providers/named_queue_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 
@@ -62,9 +61,6 @@ class _QueueScreenState extends State<QueueScreen>
   /// ValueListenableBuilder in [build] now moves just the Transform.
   final ValueNotifier<double> _dragOffset = ValueNotifier<double>(0);
 
-  /// TEMPORARY diagnostic (the lag hunt): this screen's slow frames.
-  FrameProbe? _openProbe;
-
   /// Drives the page out (on a committed return swipe) or back to rest.
   late final AnimationController _settleAnim;
   double _settleFrom = 0;
@@ -88,14 +84,10 @@ class _QueueScreenState extends State<QueueScreen>
       _settlePops = false;
       Navigator.of(context).pop();
     });
-    // Debug only: in release this sampled every opening and persisted a
-    // journal line per frame batch.
-    if (kDebugMode) _openProbe = FrameProbe.start('ouverture file', frames: 40);
   }
 
   @override
   void dispose() {
-    _openProbe?.stop();
     _settleAnim.dispose();
     _dragOffset.dispose();
     super.dispose();
@@ -127,7 +119,7 @@ class _QueueScreenState extends State<QueueScreen>
     // Scaffold or the list inside it.
     final page = Scaffold(
       appBar: AppBar(
-        title: const Text('File d\u2019attente'),
+        title: const QueueSummaryTitle(),
       ),
       backgroundColor: scheme.surface,
       body: SafeArea(
@@ -419,26 +411,23 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
 
   // ── Poignée ≡ : la direction décide, comme Musicolet ──
   //
-  // Le drag framework ne démarre plus au pointer-down : les premiers
-  // pixels disent où va le geste, et seulement alors —
-  //   • franchement vertical : le reorder du framework démarre, depuis
-  //     l'événement d'appui d'origine (démarrage différé, le même
-  //     schéma que ReorderableDelayedDragStartListener) ;
+  // Au pointer-down, le reorder du framework entre dans l'arène avec un
+  // reconnaisseur VERTICAL uniquement (comme ReorderableDragStartListener,
+  // mais sans l'axe horizontal) — puis les premiers pixels disent où va
+  // le geste :
+  //   • vers le haut ou le bas : ce reorder l'emporte sur le défilement
+  //     de la liste, inscrit lui aussi dès l'appui ; démarré plus tard,
+  //     il arrivait souvent après lui et la liste défilait à la place ;
   //   • franchement à droite : la ligne elle-même suit le doigt,
   //     rigidement, pendant que le défilement de la liste est tenu —
   //     au relâcher, passé le seuil elle finit de sortir et elle est
-  //     retirée ; en dessous, elle revient à sa place.
-  // Avant ce découpage, le proxy de reorder partait dans les deux axes
-  // et le retrait attendait la fin de l'animation de dépôt pour
-  // supprimer la ligne d'un coup — rien à voir avec Musicolet.
+  //     retirée ; en dessous, elle revient à sa place. Le reconnaisseur
+  //     vertical, jamais accepté, est rejeté au relâcher.
   static const double _handleDecisionSlop = 12;
   static const double _removeThreshold = 120;
 
   int? _handlePointer;
-  PointerDownEvent? _handleDownEvent;
-  BuildContext? _handleContext;
   Song? _handleSong;
-  int _handleIndex = -1;
   double _handleDx = 0;
   double _handleDy = 0;
   bool _handleDecided = false;
@@ -462,14 +451,34 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
   ) {
     if (_handlePointer != null || _removeAnim.isAnimating) return;
     _handlePointer = event.pointer;
-    _handleDownEvent = event;
-    _handleContext = handleContext;
     _handleSong = song;
-    _handleIndex = index;
     _handleDx = 0;
     _handleDy = 0;
     _handleDecided = false;
     _handleReorder = false;
+
+    // The reorder joins the gesture arena NOW, on the down event — as
+    // Flutter's own ReorderableDragStartListener does. It used to be
+    // started later, once the drag had been judged vertical: by then the
+    // list's own scroll recognizer, in the arena since the down, had often
+    // won, and dragging the handle up or down scrolled the queue instead of
+    // moving the track. A *vertical* recognizer, so a drag to the right is
+    // left alone for the remove gesture below.
+    final sliver = SliverReorderableList.maybeOf(handleContext);
+    if (sliver == null) return;
+    try {
+      sliver.startItemDragReorder(
+        index: index,
+        event: event,
+        recognizer: VerticalMultiDragGestureRecognizer(debugOwner: this),
+      );
+    } catch (e) {
+      DebugLog.instance.warning(
+        'QueueScreen',
+        'Reorder start failed on the handle',
+        error: e,
+      );
+    }
   }
 
   void _handleDragMove(PointerMoveEvent event) {
@@ -489,42 +498,9 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
     if (adx < _handleDecisionSlop && ady < _handleDecisionSlop) return;
     _handleDecided = true;
     if (ady >= adx) {
-      // Vertical: hand the gesture to the framework reorder, started
-      // from the ORIGINAL down event. The sliver state takes ownership
-      // of the recognizer (it registers the pointer and disposes it at
-      // the end of the drag) — nothing to clean up here.
-      final down = _handleDownEvent;
-      final handleContext = _handleContext;
-      if (down != null && handleContext != null && handleContext.mounted) {
-        try {
-          // Only claim the reorder when the framework actually started
-          // it: `maybeOf` can be null (no `SliverReorderableList`
-          // above), and an unconditional `_handleReorder = true` made
-          // `_handleDragMove` return early for the rest of the gesture,
-          // killing it outright. (There is no bool to check here:
-          // `startItemDragReorder` returns void and throws on a
-          // non-visible item, which the catch below already covers.)
-          final sliver = SliverReorderableList.maybeOf(handleContext);
-          if (sliver != null) {
-            sliver.startItemDragReorder(
-              index: _handleIndex,
-              event: down,
-              recognizer: ImmediateMultiDragGestureRecognizer(),
-            );
-            _handleReorder = true;
-          }
-        } catch (e) {
-          // The row vanished mid-gesture (queue mutated under the
-          // finger): let the gesture die quietly — but log it, so a
-          // systematic failure here is visible in the journal instead of
-          // silently swallowed.
-          DebugLog.instance.warning(
-            'QueueScreen',
-            'Drag start failed: row vanished mid-gesture',
-            error: e,
-          );
-        }
-      }
+      // Vertical: the reorder recognizer registered on the down event owns
+      // it (the sliver state disposes it at the end of the drag).
+      _handleReorder = true;
     } else if (_handleDx > 0) {
       // Right: remove drag. Hold the list's scroll — the finger may
       // drift vertically, the list must not follow.
@@ -544,8 +520,6 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
   void _handleDragEnd(PointerUpEvent event) {
     if (event.pointer != _handlePointer) return;
     _handlePointer = null;
-    _handleDownEvent = null;
-    _handleContext = null;
     _handleSong = null;
     if (_removeSong != null) {
       _finishRemoveDrag(commit: _removeDx >= _removeThreshold);
@@ -555,8 +529,6 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
   void _handleDragCancel(PointerCancelEvent event) {
     if (event.pointer != _handlePointer) return;
     _handlePointer = null;
-    _handleDownEvent = null;
-    _handleContext = null;
     _handleSong = null;
     if (_removeSong != null) _finishRemoveDrag(commit: false);
   }
@@ -687,7 +659,23 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
   }
 
   Future<void> _remove(int index, Song song) async {
-    await ref.read(audioPlayerServiceProvider).removeFromQueue(index);
+    try {
+      await ref.read(audioPlayerServiceProvider).removeFromQueue(index);
+    } catch (error) {
+      // Runs from an animation listener via unawaited: an error here had
+      // nowhere to go, and the row the user swiped away came back silently.
+      DebugLog.instance.warning(
+        'QueueScreen',
+        'Retrait de la file impossible',
+        error: error,
+      );
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Impossible de retirer « ${song.title} ».')),
+      );
+      return;
+    }
     await _syncActiveQueue();
     if (!mounted) return;
     setState(() {});
@@ -700,9 +688,23 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
     // The queue can shrink between the tap and the call (a song removed
     // from elsewhere): an out-of-range index crashed here.
     if (index < 0 || index >= queue.length) return;
-    await ref
-        .read(audioPlayerServiceProvider)
-        .playSong(queue[index], queue: queue, index: index);
+    try {
+      await ref
+          .read(audioPlayerServiceProvider)
+          .playSong(queue[index], queue: queue, index: index);
+    } catch (_) {
+      // A tap on a row whose file is gone or unreadable: say which, instead
+      // of an unhandled error and a tap that did nothing.
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            PlaybackFailure.of(queue[index], canSkip: false).message,
+          ),
+        ),
+      );
+      return;
+    }
     if (mounted) setState(() {});
   }
 
@@ -796,14 +798,25 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
                           // déplacer, droite pour retirer (voir le suivi
                           // de la poignée dans le State).
                           leading: Listener(
+                            // Opaque over a 48 dp square: the handle used to
+                            // answer only on its 24 dp glyph, half the
+                            // minimum touch target — a drag started a few
+                            // pixels off became a list scroll instead.
+                            behavior: HitTestBehavior.opaque,
                             onPointerDown: (e) =>
                                 _handleDragStart(e, song, index, context),
                             onPointerMove: _handleDragMove,
                             onPointerUp: _handleDragEnd,
                             onPointerCancel: _handleDragCancel,
-                            child: Icon(
-                              Icons.drag_handle,
-                              color: scheme.onSurfaceVariant,
+                            child: Semantics(
+                              label: 'Glisser pour déplacer ou retirer',
+                              child: SizedBox.square(
+                                dimension: 48,
+                                child: Icon(
+                                  Icons.drag_handle,
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
                             ),
                           ),
                           title: Text(
@@ -918,4 +931,54 @@ class _RowExtentProbeState extends State<_RowExtentProbe> {
     }
     return widget.child;
   }
+}
+
+/// « File d'attente » with the queue's size and total length under it —
+/// how long the queue will play is the first thing a long queue hides.
+/// Follows the service's queue, so a removal or a play-next updates it.
+class QueueSummaryTitle extends ConsumerWidget {
+  const QueueSummaryTitle({super.key, this.style});
+
+  /// Style of the main title; the app bar's own when null.
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final service = ref.watch(audioPlayerServiceProvider);
+    final textTheme = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    return ValueListenableBuilder<List<Song>>(
+      valueListenable: service.queueListenable,
+      builder: (context, queue, _) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('File d\u2019attente', style: style),
+          if (queue.isNotEmpty)
+            Text(
+              queueSummary(queue),
+              style: textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// « 12 morceaux · 47 min » — pure, for the header and its test.
+String queueSummary(List<Song> queue) {
+  final count = queue.length;
+  final totalMs = queue.fold<int>(
+    0,
+    (sum, s) => sum + (s.duration > 0 ? s.duration : 0),
+  );
+  final total = Duration(milliseconds: totalMs);
+  final hours = total.inHours;
+  final minutes = total.inMinutes.remainder(60);
+  final length = hours > 0
+      ? '$hours h ${minutes.toString().padLeft(2, '0')}'
+      : '${total.inMinutes} min';
+  return '$count morceau${count > 1 ? 'x' : ''} · $length';
 }

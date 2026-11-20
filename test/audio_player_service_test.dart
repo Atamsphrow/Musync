@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/data/audio_player_service.dart';
 
 void main() {
@@ -189,6 +193,77 @@ void main() {
 
     test('ignores everything without a duration', () {
       expect(check(dur: null), isFalse);
+    });
+  });
+
+  group('AudioPlayerService.isEffectivelyPlaying', () {
+    test('a finished queue is not playing, whatever `playing` says', () {
+      expect(
+        AudioPlayerService.isEffectivelyPlaying(
+          playing: true,
+          processingState: ProcessingState.completed,
+        ),
+        isFalse,
+      );
+    });
+
+    test('ready or buffering while playing counts as playing', () {
+      for (final state in [ProcessingState.ready, ProcessingState.buffering]) {
+        expect(
+          AudioPlayerService.isEffectivelyPlaying(
+            playing: true,
+            processingState: state,
+          ),
+          isTrue,
+        );
+      }
+    });
+
+    test('paused is never playing', () {
+      expect(
+        AudioPlayerService.isEffectivelyPlaying(
+          playing: false,
+          processingState: ProcessingState.ready,
+        ),
+        isFalse,
+      );
+    });
+  });
+
+  group('PlaybackFailure', () {
+    Song songAt(String path) => Song(
+          id: 1,
+          title: 'Titre',
+          artist: 'Artiste',
+          album: 'Album',
+          duration: 1000,
+          filePath: path,
+        );
+
+    test('a file gone from disk reads as missing, with a refresh hint', () {
+      final failure = PlaybackFailure.of(
+        songAt('/nowhere/at/all/titre.mp3'),
+        canSkip: true,
+      );
+      expect(failure.missingFile, isTrue);
+      expect(failure.canSkip, isTrue);
+      expect(failure.message, contains('introuvable'));
+      expect(failure.message, contains('« Titre »'));
+    });
+
+    test('a file still on disk reads as unreadable, not missing', () async {
+      final dir = await Directory.systemTemp.createTemp('musync_failure_');
+      addTearDown(() => dir.delete(recursive: true));
+      final file = File('${dir.path}/titre.mp3')..writeAsBytesSync([0]);
+      final failure = PlaybackFailure.of(songAt(file.path), canSkip: false);
+      expect(failure.missingFile, isFalse);
+      expect(failure.message, contains('illisible'));
+    });
+
+    test('no known track still gives a sentence', () {
+      final failure = PlaybackFailure.of(null, canSkip: false);
+      expect(failure.missingFile, isFalse);
+      expect(failure.message, contains('ce morceau'));
     });
   });
 }

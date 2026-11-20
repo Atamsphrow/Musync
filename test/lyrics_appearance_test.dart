@@ -16,6 +16,35 @@ void main() {
       expect(a.fontScale, 1.0);
     });
 
+    test('theme: dark by default, and for files written before the setting',
+        () {
+      expect(const LyricsAppearance().themePreference, AppThemePreference.dark);
+      expect(
+        LyricsAppearance.fromJson({'fontSize': 'large'}).themePreference,
+        AppThemePreference.dark,
+      );
+      expect(
+        LyricsAppearance.fromJson({'themePreference': 'nonsense'})
+            .themePreference,
+        AppThemePreference.dark,
+      );
+    });
+
+    test('theme round-trips and takes part in equality', () {
+      const light = LyricsAppearance(themePreference: AppThemePreference.light);
+      expect(
+        LyricsAppearance.fromJson(light.toJson()).themePreference,
+        AppThemePreference.light,
+      );
+      expect(light, isNot(const LyricsAppearance()));
+      expect(
+        const LyricsAppearance().copyWith(
+          themePreference: AppThemePreference.system,
+        ).themePreference,
+        AppThemePreference.system,
+      );
+    });
+
     test('fontScale follows the size', () {
       expect(
         const LyricsAppearance(fontSize: LyricsFontSize.small).fontScale,
@@ -70,6 +99,19 @@ void main() {
       final b = LyricsAppearance.fromJson(a.toJson());
       expect(b.karaokeAnimations, isTrue);
       expect(b.karaokeAnimationStyle, KaraokeAnimationStyle.instant);
+    });
+
+    test('mot à mot estimé : allumé par défaut, aller-retour JSON', () {
+      expect(const LyricsAppearance().karaokeEstimatedWords, isTrue);
+      // Files written before the option existed turn it on.
+      expect(LyricsAppearance.fromJson({}).karaokeEstimatedWords, isTrue);
+      const off = LyricsAppearance(karaokeEstimatedWords: false);
+      expect(LyricsAppearance.fromJson(off.toJson()), off);
+      expect(off, isNot(const LyricsAppearance()));
+      expect(
+        const LyricsAppearance().copyWith(karaokeEstimatedWords: false),
+        off,
+      );
     });
 
     test('bad karaoke style falls back to balayage', () {

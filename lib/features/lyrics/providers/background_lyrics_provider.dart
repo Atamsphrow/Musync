@@ -250,8 +250,8 @@ class BackgroundLyricsService {
     // The user moved on while the check ran.
     if (_ref.read(currentSongProvider)?.filePath != song.filePath) return;
     // Only for something actually being listened to.
-    final playing =
-        _ref.read(playerStateProvider).valueOrNull?.playing ?? false;
+    // Effective playing: a finished queue still says `playing`.
+    final playing = _ref.read(isPlayingProvider);
     if (!playing) return;
     if (_attempted.contains(song.filePath)) return;
     _attempted.add(song.filePath);

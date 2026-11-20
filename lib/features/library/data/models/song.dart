@@ -20,6 +20,10 @@ class Song {
   /// Absolute path on disk. This is what the ID3 reader and writer act on.
   final String filePath;
 
+  /// When MediaStore first indexed the file, in seconds since the epoch —
+  /// the « Ajoutés récemment » sort. Null where unknown (iOS, old rows).
+  final int? dateAdded;
+
   const Song({
     required this.id,
     required this.title,
@@ -28,6 +32,7 @@ class Song {
     required this.duration,
     required this.filePath,
     this.albumId,
+    this.dateAdded,
   });
 
   // There was an `artworkUri` here, building
@@ -46,6 +51,7 @@ class Song {
     int? albumId,
     int? duration,
     String? filePath,
+    int? dateAdded,
   }) {
     return Song(
       id: id ?? this.id,
@@ -55,6 +61,7 @@ class Song {
       albumId: albumId ?? this.albumId,
       duration: duration ?? this.duration,
       filePath: filePath ?? this.filePath,
+      dateAdded: dateAdded ?? this.dateAdded,
     );
   }
 

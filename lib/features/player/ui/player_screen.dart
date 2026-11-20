@@ -4,14 +4,15 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:musync/core/utils/snackbar.dart';
+import 'package:musync/core/utils/audio_file_replace.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/id3/id3_writer.dart';
-import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/core/services/screen_awake.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/router/app_router.dart';
@@ -19,6 +20,8 @@ import 'package:musync/core/theme/app_theme.dart';
 import 'package:musync/core/theme/artwork_scheme_provider.dart';
 import 'package:musync/core/utils/duration_format.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/library/ui/widgets/song_artwork.dart';
+import 'package:musync/features/library/providers/favorites_provider.dart';
 import 'package:musync/core/services/media_store.dart';
 import 'package:musync/core/services/permission_service.dart';
 import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
@@ -29,6 +32,7 @@ import 'package:musync/features/settings/data/lyrics_appearance.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 import 'package:musync/features/settings/providers/backup_provider.dart';
 import 'package:musync/features/player/data/artwork_bytes_cache.dart';
+import 'package:musync/features/player/data/audio_player_service.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/player/ui/widgets/player_controls.dart';
 import 'package:musync/features/player/ui/widgets/marquee_text.dart';
@@ -140,6 +144,30 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
   bool get _queueOpen => _queueController.value > 0.5;
 
+  /// Whether the queue panel has settled open, for [PopScope.canPop].
+  ///
+  /// `canPop` is read at build time, and the panel slides without
+  /// rebuilding the screen (only the AnimatedBuilder's transform moves).
+  /// Computing it from [_queueOpen] in build therefore froze it at
+  /// whatever it was the last time something else rebuilt the screen —
+  /// almost always « closed » — so Back left the player with the panel
+  /// still open instead of closing the panel. The status listener below
+  /// rebuilds once per settle, never per frame.
+  bool _queuePanelSettledOpen = false;
+
+  void _onQueueStatus(AnimationStatus status) {
+    // Read the value, never the status: `animateTo(0)` — how the panel
+    // closes — ends on `completed`, not `dismissed` (animateTo always runs
+    // « forward »). Reading the status left the panel « open » after its
+    // first close, so canPop stayed false: the swipe down to minimise was
+    // refused and the page stayed stuck halfway down.
+    if (_queueController.isAnimating) return;
+    final open = _queueController.value > 0.5;
+    if (open != _queuePanelSettledOpen && mounted) {
+      setState(() => _queuePanelSettledOpen = open);
+    }
+  }
+
   void _openQueue() => _queueController.animateTo(
         1,
         duration: const Duration(milliseconds: 250),
@@ -238,7 +266,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     final velocity = details.primaryVelocity ?? 0;
     if (_dragOffset.value >= _dismissDistance ||
         velocity >= _dismissVelocity) {
-      Navigator.maybePop(context);
+      unawaited(
+        Navigator.maybePop(context).then((_) {
+          // A refused pop (the queue panel was open: Back closes it first)
+          // must not leave the page hanging where the finger let go.
+          if (!mounted) return;
+          if (ModalRoute.of(context)?.isCurrent ?? false) {
+            _dragOffset.value = 0;
+          }
+        }),
+      );
       return;
     }
     // Not far enough: snap back, so an abandoned gesture leaves no trace.
@@ -285,10 +322,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     return _themeData = AppTheme.fromScheme(scheme);
   }
 
-  /// TEMPORARY diagnostic (the freeze hunt): the slow frames of this
-  /// screen's entrance, in the in-app journal (tag « Perf »).
-  FrameProbe? _openProbe;
-
   void _mountPanelWhenOpening() {
     if (!_panelContentBuilt.value && _queueController.value > 0) {
       _panelContentBuilt.value = true;
@@ -304,6 +337,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       value: 0,
     );
     _queueController.addListener(_mountPanelWhenOpening);
+    _queueController.addStatusListener(_onQueueStatus);
     _panelMountTimer = Timer(const Duration(milliseconds: 450), () {
       if (mounted && !_panelContentBuilt.value) {
         _panelContentBuilt.value = true;
@@ -316,7 +350,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       // changes, and that change triggers a build that reads it.
       _themeAnimArmed = true;
     });
-    _openProbe = FrameProbe.start('ouverture lecteur', frames: 40);
   }
 
   @override
@@ -329,8 +362,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       unawaited(ScreenAwake.release());
     }
     _queueController.removeListener(_mountPanelWhenOpening);
+    _queueController.removeStatusListener(_onQueueStatus);
     _queueController.dispose();
-    _openProbe?.stop();
     if (_routeSubscribed) {
       _publishPlayerVisible(false);
       appRouteObserver.unsubscribe(this);
@@ -363,10 +396,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           .playSong(args.song, queue: args.queue, index: args.index)
           .catchError((Object e) {
             if (mounted) {
+              // Says whether the file is gone or only unreadable: « corrupt »
+              // was the only message, even for a track deleted since the
+              // last scan — which a refresh fixes and a re-encode does not.
               ScaffoldMessenger.of(context).showOnly(
-                const SnackBar(
+                SnackBar(
                   content: Text(
-                    'Fichier illisible ou corrompu : impossible de le lire.',
+                    PlaybackFailure.of(args.song, canSkip: false).message,
                   ),
                 ),
               );
@@ -431,7 +467,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
     return PopScope(
       // Back closes the queue panel instead of leaving the player.
-      canPop: !_queueOpen,
+      canPop: !_queuePanelSettledOpen && !_queueOpen,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop && _queueOpen) _closeQueue();
       },
@@ -516,7 +552,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
               const SizedBox(height: 4),
               const PlayerControls(),
               const SizedBox(height: 8),
-              _LyricsActions(song: song),
+              _PlayerActions(song: song, onOpenQueue: _openQueue),
               const SizedBox(height: 12),
             ],
           ),
@@ -620,9 +656,8 @@ class _QueueSlidePanel extends StatelessWidget {
                         tooltip: 'Fermer',
                         onPressed: onClose,
                       ),
-                      Text(
-                        'File d\u2019attente',
-                        style: textTheme.titleLarge,
+                      Expanded(
+                        child: QueueSummaryTitle(style: textTheme.titleLarge),
                       ),
                     ],
                   ),
@@ -884,6 +919,8 @@ class _ArtworkPane extends ConsumerWidget {
     final bytes = await _readCoverBytes(imagePath);
     if (bytes == null || !context.mounted) return;
 
+    // The cache copy, for the cleanup in the catch below.
+    File? workCopy;
     try {
       // 1. System write permission (Android 11+). A refusal aborts silently.
       final granted = await MediaStore.requestWriteAccess(
@@ -896,6 +933,7 @@ class _ArtworkPane extends ConsumerWidget {
       final cacheDir = await getTemporaryDirectory();
       final workPath = p.join(cacheDir.path, 'cover_edit_${target.id}.tmp');
       final workFile = File(workPath);
+      workCopy = workFile;
       if (await workFile.exists()) await workFile.delete();
       await File(target.filePath).copy(workPath);
 
@@ -917,17 +955,20 @@ class _ArtworkPane extends ConsumerWidget {
       ));
 
       // 4. Binary copy over the original, via a sibling temp + atomic rename.
+      //    Neither temp file outlives the call: the cache copy used to stay
+      //    behind after every cover change, a whole audio file each time.
       final original = File(target.filePath);
-      final stage = File('${original.path}.musync.tmp');
-      if (await stage.exists()) await stage.delete();
-      await workFile.copy(stage.path);
-      await stage.rename(original.path);
+      await AudioFileReplace.commit(workFile, original);
 
       // 5. Tell MediaStore the file changed, then drop the cached artwork.
       await MediaStore.rescan(original.path);
       if (!context.mounted) return;
       await ref.read(audioPlayerServiceProvider).forgetArtwork(target);
+      // The list thumbnail and the player's tint come from the old cover too.
+      ThumbnailCache.instance.evict(target.id);
+      ref.invalidate(artworkSchemeProvider);
     } catch (_) {
+      if (workCopy != null) await AudioFileReplace.deleteQuietly(workCopy);
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showOnly(
         const SnackBar(content: Text('Changement de pochette impossible.')),
@@ -1006,13 +1047,30 @@ class _CachedArtworkState extends State<_CachedArtwork> {
   @override
   void initState() {
     super.initState();
+    widget.cache.revision.addListener(_onCacheRevision);
     _syncWithCache();
   }
 
   @override
   void didUpdateWidget(_CachedArtwork oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.cache, widget.cache)) {
+      oldWidget.cache.revision.removeListener(_onCacheRevision);
+      widget.cache.revision.addListener(_onCacheRevision);
+    }
     if (oldWidget.song.id != widget.song.id) _syncWithCache();
+  }
+
+  @override
+  void dispose() {
+    widget.cache.revision.removeListener(_onCacheRevision);
+    super.dispose();
+  }
+
+  /// A cover was forgotten (edited): if it is this one, fetch it again. The
+  /// old picture stays up until the new one arrives.
+  void _onCacheRevision() {
+    if (!widget.cache.isResolved(widget.song)) _syncWithCache();
   }
 
   void _syncWithCache() {
@@ -1067,10 +1125,44 @@ class _LyricsPane extends ConsumerWidget {
 
     return lyricsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
+      // A dead end used to be all there was: one grey sentence. The tag may
+      // simply have been mid-write (another app, a batch), so a retry is
+      // the first thing to offer; the online search is the way out when
+      // the file's own lyrics are unreadable for good.
       error: (error, _) => Center(
-        child: Text(
-          'Lecture des paroles impossible.',
-          style: TextStyle(color: scheme.onSurfaceVariant),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.error_outline, size: 48, color: scheme.error),
+              const SizedBox(height: 12),
+              Text(
+                'Les paroles de ce fichier n’ont pas pu être lues.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FilledButton.tonalIcon(
+                    onPressed: () => ref.invalidate(currentLyricsProvider),
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('Réessayer'),
+                  ),
+                  if (song != null)
+                    TextButton.icon(
+                      onPressed: searchOnline,
+                      icon: const Icon(Icons.search, size: 18),
+                      label: const Text('Chercher en ligne'),
+                    ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
       data: (pair) {
@@ -1244,9 +1336,12 @@ class _SeekBarState extends ConsumerState<_SeekBar> {
             max: max <= 0 ? 1 : max,
             onChanged: max <= 0 ? null : (v) => setState(() => _dragValue = v),
             onChangeEnd: (v) {
-              ref
-                  .read(audioPlayerServiceProvider)
-                  .seekTo(Duration(milliseconds: v.toInt()));
+              final service = ref.read(audioPlayerServiceProvider);
+              unawaited(
+                PlayerControls.run(
+                  () => service.seekTo(Duration(milliseconds: v.toInt())),
+                ),
+              );
               setState(() => _dragValue = null);
             },
           ),
@@ -1269,168 +1364,295 @@ class _SeekBarState extends ConsumerState<_SeekBar> {
   }
 }
 
-/// The lyrics actions of plan §3.3, gathered in one sheet.
-class _LyricsActions extends ConsumerWidget {
+/// The row of secondary actions under the transport controls — in the
+/// thumb's reach, one tap each, 48 dp minimum.
+///
+/// Three buttons, by how often they are wanted while listening:
+///  * Paroles: the lyrics tools (search online, timing, text) and the tag
+///    editor, as one sheet — the toggle between cover and lyrics stays in
+///    the top bar, where it always was;
+///  * Favori: the ♥, one tap;
+///  * Plus: the rest — the queue, the sleep timer, the saved queues and the
+///    « wrong lyrics » mark. A dot on it while the sleep timer runs.
+class _PlayerActions extends ConsumerWidget {
   final Song? song;
+  final VoidCallback onOpenQueue;
 
-  const _LyricsActions({required this.song});
+  const _PlayerActions({required this.song, required this.onOpenQueue});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final timerActive = ref.watch(sleepTimerProvider).active;
-    return Row(
-      children: [
-        Expanded(
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              TextButton.icon(
-                onPressed: song == null ? null : () => _openSheet(context, ref),
-                icon: const Icon(Icons.tune, size: 18),
-                label: const Text('Paroles'),
-              ),
-              TextButton.icon(
-                onPressed: song == null ? null : () => _openTagEditor(context),
-                icon: const Icon(Icons.edit, size: 18),
-                label: const Text('Tags'),
-              ),
-            ],
+    final timerActive = ref.watch(
+      sleepTimerProvider.select((t) => t.active),
+    );
+    final target = song;
+    final isFavorite =
+        target != null && ref.watch(favoritesProvider).contains(target.filePath);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: [
+          _ActionButton(
+            icon: Icons.lyrics_outlined,
+            label: 'Paroles',
+            tooltip: 'Outils des paroles et tags',
+            onPressed: target == null
+                ? null
+                : () => _openLyricsTools(context, target),
           ),
-        ),
-        PopupMenuButton<String>(
-          icon: const Icon(Icons.more_vert),
-          tooltip: 'Plus',
-          onSelected: (value) {
-            switch (value) {
-              case 'queue':
-                Navigator.of(
-                  context,
-                ).push(queueScreenRoute());
-              case 'queues':
-                showQueuesSheet(context);
-              case 'timer':
-                showSleepTimerSheet(context);
-              case 'mismatch':
-                unawaited(_markLyricsMismatch(context, ref, song!));
-            }
-          },
-          itemBuilder: (context) => [
-            const PopupMenuItem(
-              value: 'queue',
-              child: Row(
-                children: [
-                  Icon(Icons.queue_music, size: 20),
-                  SizedBox(width: 12),
-                  Text('File d’attente'),
-                ],
-              ),
-            ),
-            const PopupMenuItem(
-              value: 'queues',
-              child: Row(
-                children: [
-                  Icon(Icons.playlist_play, size: 20),
-                  SizedBox(width: 12),
-                  Text('Files d’attente'),
-                ],
-              ),
-            ),
-            const PopupMenuItem(
-              value: 'mismatch',
-              child: Row(
-                children: [
-                  Icon(Icons.block, size: 20),
-                  SizedBox(width: 12),
-                  Text('Paroles incorrectes'),
-                ],
-              ),
-            ),
-            PopupMenuItem(
-              value: 'timer',
-              child: Row(
-                children: [
-                  Icon(
-                    timerActive ? Icons.timer : Icons.timer_off_outlined,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 12),
-                  const Text('Minuteur d’arrêt'),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ],
+          _ActionButton(
+            icon: Icons.favorite_border,
+            selectedIcon: Icons.favorite,
+            label: 'Favori',
+            tooltip: isFavorite ? 'Retirer des favoris' : 'Ajouter aux favoris',
+            selected: isFavorite,
+            onPressed: target == null
+                ? null
+                : () {
+                    HapticFeedback.selectionClick();
+                    unawaited(
+                      ref.read(favoritesProvider.notifier).toggle(target),
+                    );
+                  },
+          ),
+          _ActionButton(
+            icon: Icons.more_horiz,
+            label: 'Plus',
+            tooltip: timerActive
+                ? 'Plus d’actions — minuteur en cours'
+                : 'Plus d’actions',
+            badge: timerActive,
+            onPressed: () => _openMoreSheet(context, ref),
+          ),
+        ],
+      ),
     );
   }
 
-  void _openTagEditor(BuildContext context) {
-    Navigator.pushNamed(
-      context,
-      AppRoutes.tagEditor,
-      arguments: SongRouteArgs(song: song!),
-    );
-  }
-
-  void _openSheet(BuildContext context, WidgetRef ref) {
-    final target = song!;
+  /// The lyrics tools and the tag editor: the sheet the « Paroles » button
+  /// of the bottom row always opened.
+  void _openLyricsTools(BuildContext context, Song target) {
     showModalBottomSheet<void>(
       context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.travel_explore),
-              title: const Text('Rechercher des paroles en ligne'),
-              subtitle: const Text(
-                'Paroles calées et texte via LRCLIB',
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        void go(String route, SongRouteArgs args) {
+          Navigator.pop(sheetContext);
+          Navigator.pushNamed(context, route, arguments: args);
+        }
+
+        return SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.travel_explore),
+                  title: const Text('Rechercher des paroles en ligne'),
+                  subtitle: const Text('Paroles calées et texte via LRCLIB'),
+                  onTap: () => go(
+                    AppRoutes.lyricsSearch,
+                    SongRouteArgs(song: target),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.schedule),
+                  title: const Text('Ajuster la synchronisation'),
+                  subtitle: const Text('Caler chaque ligne sur la lecture'),
+                  onTap: () => go(
+                    AppRoutes.syncEditor,
+                    SongRouteArgs(song: target, editorMode: SyncMode.synced),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.edit_note),
+                  title: const Text('Éditer le texte des paroles'),
+                  subtitle: const Text('Saisie ou collage manuel'),
+                  // The same screen, opened on its plain-text half (T4).
+                  onTap: () => go(
+                    AppRoutes.syncEditor,
+                    SongRouteArgs(song: target, editorMode: SyncMode.simple),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.edit),
+                  title: const Text('Modifier les tags'),
+                  subtitle: const Text('Titre, artiste, album, pochette…'),
+                  onTap: () => go(
+                    AppRoutes.tagEditor,
+                    SongRouteArgs(song: target),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Everything else: the queue, the sleep timer, the saved queues and the
+  /// « wrong lyrics » mark.
+  void _openMoreSheet(BuildContext context, WidgetRef ref) {
+    final target = song;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        void go(VoidCallback action) {
+          Navigator.pop(sheetContext);
+          action();
+        }
+
+        return SafeArea(
+          child: SingleChildScrollView(
+            // The sheet's own context dies with the sheet: every action below
+            // runs on the screen's `context` and `ref`, after the pop.
+            child: Consumer(
+              builder: (_, sheetRef, _) {
+                final timer = sheetRef.watch(sleepTimerProvider);
+                final remaining = timer.remaining;
+                final timerSubtitle = !timer.active
+                    ? 'Arrêter la lecture plus tard'
+                    : remaining != null
+                    ? 'Arrêt dans ${remaining.inMinutes} min'
+                    : 'Arrêt à la fin du morceau';
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.queue_music),
+                      title: const Text('File d’attente'),
+                      onTap: () => go(onOpenQueue),
+                    ),
+                    ListTile(
+                      leading: Icon(
+                        timer.active ? Icons.timer : Icons.timer_outlined,
+                      ),
+                      title: const Text('Minuteur d’arrêt'),
+                      subtitle: Text(timerSubtitle),
+                      onTap: () => go(() => showSleepTimerSheet(context)),
+                    ),
+                    ListTile(
+                      leading: const Icon(Icons.playlist_play),
+                      title: const Text('Files d’attente enregistrées'),
+                      onTap: () => go(() => showQueuesSheet(context)),
+                    ),
+                    if (target != null)
+                      ListTile(
+                        leading: const Icon(Icons.block),
+                        title: const Text('Paroles incorrectes'),
+                        subtitle: const Text(
+                          'Supprimer ces paroles et ne plus en télécharger',
+                        ),
+                        onTap: () => go(
+                          () => unawaited(
+                            _markLyricsMismatch(context, ref, target),
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// One button of [_PlayerActions]: icon over a short label, the whole cell
+/// tappable, at least 48 × 48 dp.
+class _ActionButton extends StatelessWidget {
+  final IconData icon;
+  final IconData? selectedIcon;
+  final String label;
+  final String tooltip;
+  final bool selected;
+
+  /// A small dot on the icon: something runs behind this button (the
+  /// sleep timer, behind « Plus »).
+  final bool badge;
+  final VoidCallback? onPressed;
+
+  const _ActionButton({
+    required this.icon,
+    this.selectedIcon,
+    required this.label,
+    required this.tooltip,
+    this.selected = false,
+    this.badge = false,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final enabled = onPressed != null;
+    final color = !enabled
+        ? scheme.onSurface.withValues(alpha: 0.38)
+        : selected
+        ? scheme.onSecondaryContainer
+        : scheme.onSurfaceVariant;
+
+    return Expanded(
+      child: Tooltip(
+        message: tooltip,
+        child: Semantics(
+          button: true,
+          selected: selected,
+          enabled: enabled,
+          label: tooltip,
+          excludeSemantics: true,
+          child: InkWell(
+            onTap: onPressed,
+            borderRadius: BorderRadius.circular(16),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 56),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // The M3 navigation-bar idiom: a pill behind the icon marks
+                  // the « on » state (lyrics shown, timer running).
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOutCubic,
+                    width: 56,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? scheme.secondaryContainer
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      child: Badge(
+                        key: ValueKey<bool>(selected),
+                        isLabelVisible: badge,
+                        smallSize: 8,
+                        child: Icon(
+                          selected ? (selectedIcon ?? icon) : icon,
+                          size: 22,
+                          color: color,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.labelSmall?.copyWith(color: color),
+                  ),
+                ],
               ),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                Navigator.pushNamed(
-                  context,
-                  AppRoutes.lyricsSearch,
-                  arguments: SongRouteArgs(song: target),
-                );
-              },
             ),
-            ListTile(
-              leading: const Icon(Icons.schedule),
-              title: const Text('Ajuster la synchronisation'),
-              subtitle: const Text('Caler chaque ligne sur la lecture'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                Navigator.pushNamed(
-                  context,
-                  AppRoutes.syncEditor,
-                  arguments: SongRouteArgs(
-                    song: target,
-                    editorMode: SyncMode.synced,
-                  ),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.edit_note),
-              title: const Text('Éditer le texte des paroles'),
-              subtitle: const Text('Saisie ou collage manuel'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                // The same screen, but opened on its plain-text half. The two
-                // entries used to land identically, which made one of them
-                // look broken (T4).
-                Navigator.pushNamed(
-                  context,
-                  AppRoutes.syncEditor,
-                  arguments: SongRouteArgs(
-                    song: target,
-                    editorMode: SyncMode.simple,
-                  ),
-                );
-              },
-            ),
-          ],
+          ),
         ),
       ),
     );
