@@ -10,7 +10,6 @@ import 'package:musync/features/player/providers/lyrics_provider.dart';
 import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/player/ui/widgets/player_controls.dart';
 import 'package:musync/core/services/debug_log.dart';
-import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/features/settings/data/lyrics_appearance.dart';
 import 'package:musync/features/settings/providers/lyrics_appearance_provider.dart';
 
@@ -36,9 +35,6 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer> {
   bool _suppressNextTap = false;
 
   void _openPlayer(Song currentSong) {
-    // TEMPORARY (chasse au gel) : 120 frames couvrent la glissade
-    // de 350 ms même à 120 Hz.
-    FrameProbe.start('ouverture mini', frames: 120);
     final service = ref.read(audioPlayerServiceProvider);
     Navigator.pushNamed(
       context,

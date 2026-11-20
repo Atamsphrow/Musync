@@ -5,7 +5,6 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/debug_log.dart';
-import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/player/data/audio_player_service.dart';
 import 'package:musync/features/player/providers/named_queue_provider.dart';
@@ -63,9 +62,6 @@ class _QueueScreenState extends State<QueueScreen>
   /// ValueListenableBuilder in [build] now moves just the Transform.
   final ValueNotifier<double> _dragOffset = ValueNotifier<double>(0);
 
-  /// TEMPORARY diagnostic (the lag hunt): this screen's slow frames.
-  FrameProbe? _openProbe;
-
   /// Drives the page out (on a committed return swipe) or back to rest.
   late final AnimationController _settleAnim;
   double _settleFrom = 0;
@@ -89,14 +85,10 @@ class _QueueScreenState extends State<QueueScreen>
       _settlePops = false;
       Navigator.of(context).pop();
     });
-    // Debug only: in release this sampled every opening and persisted a
-    // journal line per frame batch.
-    if (kDebugMode) _openProbe = FrameProbe.start('ouverture file', frames: 40);
   }
 
   @override
   void dispose() {
-    _openProbe?.stop();
     _settleAnim.dispose();
     _dragOffset.dispose();
     super.dispose();

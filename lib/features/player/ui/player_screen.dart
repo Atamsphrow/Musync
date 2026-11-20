@@ -13,7 +13,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:musync/core/id3/id3_reader.dart';
 import 'package:musync/core/id3/id3_writer.dart';
-import 'package:musync/core/services/frame_probe.dart';
 import 'package:musync/core/services/screen_awake.dart';
 import 'package:musync/core/id3/models/lyrics.dart';
 import 'package:musync/core/router/app_router.dart';
@@ -323,10 +322,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     return _themeData = AppTheme.fromScheme(scheme);
   }
 
-  /// TEMPORARY diagnostic (the freeze hunt): the slow frames of this
-  /// screen's entrance, in the in-app journal (tag « Perf »).
-  FrameProbe? _openProbe;
-
   void _mountPanelWhenOpening() {
     if (!_panelContentBuilt.value && _queueController.value > 0) {
       _panelContentBuilt.value = true;
@@ -355,7 +350,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       // changes, and that change triggers a build that reads it.
       _themeAnimArmed = true;
     });
-    _openProbe = FrameProbe.start('ouverture lecteur', frames: 40);
   }
 
   @override
@@ -370,7 +364,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _queueController.removeListener(_mountPanelWhenOpening);
     _queueController.removeStatusListener(_onQueueStatus);
     _queueController.dispose();
-    _openProbe?.stop();
     if (_routeSubscribed) {
       _publishPlayerVisible(false);
       appRouteObserver.unsubscribe(this);
