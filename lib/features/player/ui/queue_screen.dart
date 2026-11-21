@@ -411,10 +411,10 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
 
   // ── Poignée ≡ : la direction décide, comme Musicolet ──
   //
-  // Au pointer-down, le reorder du framework entre dans l'arène avec un
-  // reconnaisseur VERTICAL uniquement (comme ReorderableDragStartListener,
-  // mais sans l'axe horizontal) — puis les premiers pixels disent où va
-  // le geste :
+  // Au pointer-down, le reorder du framework entre dans l'arène avec
+  // [_HandleReorderRecognizer] (comme ReorderableDragStartListener) — puis
+  // les premiers pixels disent où va le geste, et le reconnaisseur attend
+  // cette décision au lieu de trancher seul :
   //   • vers le haut ou le bas : ce reorder l'emporte sur le défilement
   //     de la liste, inscrit lui aussi dès l'appui ; démarré plus tard,
   //     il arrivait souvent après lui et la liste défilait à la place ;
@@ -422,12 +422,15 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
   //     rigidement, pendant que le défilement de la liste est tenu —
   //     au relâcher, passé le seuil elle finit de sortir et elle est
   //     retirée ; en dessous, elle revient à sa place. Le reconnaisseur
-  //     vertical, jamais accepté, est rejeté au relâcher.
+  //     prend alors l'arène sans lancer de reorder : un arc naturel du
+  //     doigt (150 px à droite, 25 px vers le bas) ne soulève plus la
+  //     ligne en plein retrait, et la liste ne défile pas non plus.
   static const double _handleDecisionSlop = 12;
   static const double _removeThreshold = 120;
 
   int? _handlePointer;
   Song? _handleSong;
+  _HandleReorderRecognizer? _handleRecognizer;
   double _handleDx = 0;
   double _handleDy = 0;
   bool _handleDecided = false;
@@ -456,21 +459,24 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
     _handleDy = 0;
     _handleDecided = false;
     _handleReorder = false;
+    _handleRecognizer = null;
 
     // The reorder joins the gesture arena NOW, on the down event — as
     // Flutter's own ReorderableDragStartListener does. It used to be
     // started later, once the drag had been judged vertical: by then the
     // list's own scroll recognizer, in the arena since the down, had often
     // won, and dragging the handle up or down scrolled the queue instead of
-    // moving the track. A *vertical* recognizer, so a drag to the right is
-    // left alone for the remove gesture below.
+    // moving the track. It waits for [_handleDragMove]'s direction call,
+    // so a drag to the right is left to the remove gesture below.
     final sliver = SliverReorderableList.maybeOf(handleContext);
     if (sliver == null) return;
+    final recognizer = _HandleReorderRecognizer(debugOwner: this);
+    _handleRecognizer = recognizer;
     try {
       sliver.startItemDragReorder(
         index: index,
         event: event,
-        recognizer: VerticalMultiDragGestureRecognizer(debugOwner: this),
+        recognizer: recognizer,
       );
     } catch (e) {
       DebugLog.instance.warning(
@@ -497,6 +503,9 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
     final ady = _handleDy.abs();
     if (adx < _handleDecisionSlop && ady < _handleDecisionSlop) return;
     _handleDecided = true;
+    // Told before the recognizer sees this same move: listeners run ahead
+    // of the gesture arena's pointer routes.
+    _handleRecognizer?.reorder = ady >= adx;
     if (ady >= adx) {
       // Vertical: the reorder recognizer registered on the down event owns
       // it (the sliver state disposes it at the end of the drag).
@@ -521,6 +530,7 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
     if (event.pointer != _handlePointer) return;
     _handlePointer = null;
     _handleSong = null;
+    _handleRecognizer = null; // The sliver disposes it.
     if (_removeSong != null) {
       _finishRemoveDrag(commit: _removeDx >= _removeThreshold);
     }
@@ -530,6 +540,7 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
     if (event.pointer != _handlePointer) return;
     _handlePointer = null;
     _handleSong = null;
+    _handleRecognizer = null;
     if (_removeSong != null) _finishRemoveDrag(commit: false);
   }
 
@@ -901,6 +912,79 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
 /// Measuring beats guessing: the nominal 72 dp is wrong as soon as text
 /// scaling or theme metrics move, and a wrong guess misses the current
 /// track by `index × error`.
+/// The ≡ handle's reorder recognizer: vertical, like Flutter's own
+/// [VerticalMultiDragGestureRecognizer], except that it never decides by
+/// itself. Flutter's accepted as soon as the finger had moved past the touch
+/// slop vertically, whatever it had done horizontally — so a swipe right to
+/// remove, drifting 25 px down on the way, lifted the row into a reorder
+/// mid-slide.
+///
+/// The queue screen sets [reorder] once the first pixels have shown the
+/// direction: true, and the reorder starts past the slop as before; false,
+/// and the recognizer takes the gesture without starting any drag, so
+/// neither a reorder nor the list's scroll can claim it during the swipe.
+class _HandleReorderRecognizer extends MultiDragGestureRecognizer {
+  _HandleReorderRecognizer({super.debugOwner});
+
+  /// The direction call: null until made.
+  bool? reorder;
+
+  @override
+  MultiDragPointerState createNewPointerState(PointerDownEvent event) =>
+      _HandlePointerState(this, event.position, event.kind, gestureSettings);
+
+  @override
+  String get debugDescription => 'queue handle reorder';
+}
+
+class _HandlePointerState extends MultiDragPointerState {
+  _HandlePointerState(
+    this._owner,
+    super.initialPosition,
+    super.kind,
+    super.gestureSettings,
+  );
+
+  final _HandleReorderRecognizer _owner;
+
+  /// Whether this pointer already asked the arena for the gesture.
+  bool _claimed = false;
+
+  /// Handed over by the arena once the gesture is ours. Kept, not called
+  /// at once: the arena can also give it by default before the direction
+  /// is known (every other member gone), and only a reorder starts a drag.
+  GestureMultiDragStartCallback? _starter;
+  bool _started = false;
+
+  @override
+  void checkForResolutionAfterMove() {
+    final reorder = _owner.reorder;
+    if (reorder == null) return;
+    if (reorder &&
+        pendingDelta!.dy.abs() <= computeHitSlop(kind, gestureSettings)) {
+      return;
+    }
+    if (!_claimed) {
+      _claimed = true;
+      resolve(GestureDisposition.accepted);
+    }
+    _maybeStart();
+  }
+
+  @override
+  void accepted(GestureMultiDragStartCallback starter) {
+    _starter = starter;
+    _maybeStart();
+  }
+
+  void _maybeStart() {
+    final starter = _starter;
+    if (starter == null || _started || _owner.reorder != true) return;
+    _started = true;
+    starter(initialPosition);
+  }
+}
+
 class _RowExtentProbe extends StatefulWidget {
   const _RowExtentProbe({required this.onExtent, required this.child});
 

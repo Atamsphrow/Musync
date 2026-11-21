@@ -185,18 +185,29 @@ class _BufferingRingState extends ConsumerState<BufferingRing> {
 
   @override
   Widget build(BuildContext context) {
+    // Sized by [child] alone, the ring drawn over it and past its edges:
+    // as a plain Stack child the ring grew the Stack from the icon's size
+    // to [diameter] when it appeared — inside the mini player's IconButton,
+    // which does not clamp its content, the button grew by 8 dp and the
+    // title beside it jumped, then jumped back when buffering ended.
     return Stack(
       alignment: Alignment.center,
+      clipBehavior: Clip.none,
       children: [
         widget.child,
         if (_visible)
-          IgnorePointer(
-            child: SizedBox.square(
-              dimension: widget.diameter,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.5,
-                color: widget.color,
-                semanticsLabel: 'Chargement',
+          Positioned.fill(
+            child: IgnorePointer(
+              child: OverflowBox(
+                minWidth: widget.diameter,
+                maxWidth: widget.diameter,
+                minHeight: widget.diameter,
+                maxHeight: widget.diameter,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  color: widget.color,
+                  semanticsLabel: 'Chargement',
+                ),
               ),
             ),
           ),

@@ -210,9 +210,11 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
   Brightness _platformBrightness =
       WidgetsBinding.instance.platformDispatcher.platformBrightness;
 
-  /// The brightness the app last rendered at: the artwork prewarm below
-  /// must compute the scheme the player will actually ask for.
-  Brightness _brightness = Brightness.dark;
+  /// The brightness the app renders at: the artwork prewarm below must
+  /// compute the scheme the player will actually ask for. Set in initState
+  /// — the prewarm's first call runs there, before any build — and kept in
+  /// step by [build].
+  late Brightness _brightness;
 
   @override
   void didChangePlatformBrightness() {
@@ -266,12 +268,21 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
     // se re-thémait d'un coup et l'agrandissement semblait se figer à
     // mi-course. La luminosité de la requête est celle de l'app (réglage
     // Apparence › Thème), comme dans l'écran de lecture.
-    // `fireImmediately` couvre le morceau déjà en cours au démarrage.
+    // `fireImmediately` couvre le morceau déjà en cours au démarrage : la
+    // luminosité est donc résolue ici, avant le premier build (le réglage
+    // chargé plus tard, ou un changement de thème, relance le préchauffage
+    // depuis build).
+    _brightness = _resolveBrightness();
     ref.listenManual(currentSongProvider, (previous, next) {
       if (next == null) return;
       unawaited(warmArtworkScheme(ref, next.id, _brightness));
     }, fireImmediately: true);
   }
+
+  Brightness _resolveBrightness() => effectiveBrightness(
+    ref.read(lyricsAppearanceProvider).themePreference,
+    _platformBrightness,
+  );
 
   @override
   void dispose() {
@@ -312,7 +323,18 @@ class _MusyncAppState extends ConsumerState<MusyncApp>
       lyricsAppearanceProvider.select((a) => a.themePreference),
     );
     final brightness = effectiveBrightness(preference, _platformBrightness);
-    _brightness = brightness;
+    if (brightness != _brightness) {
+      _brightness = brightness;
+      // The stored theme landed (or the user or the system changed it):
+      // the scheme warmed so far is for the other brightness.
+      final song = ref.read(currentSongProvider);
+      if (song != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || brightness != _brightness) return;
+          unawaited(warmArtworkScheme(ref, song.id, brightness));
+        });
+      }
+    }
 
     return DynamicColorBuilder(
       builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
