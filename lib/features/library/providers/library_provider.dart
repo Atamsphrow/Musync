@@ -46,6 +46,13 @@ class SongListNotifier extends AsyncNotifier<List<Song>> {
   List<Song>? _lastScan;
   LibrarySort? _lastSort;
 
+  /// The scan still running, if any. A sort change that lands while a
+  /// rescan is in flight (an AI rename invalidated the list, say) waits for
+  /// it instead of re-sorting [_lastScan]: Riverpod drops the superseded
+  /// build's result, so the shortcut used to put the pre-rename paths back
+  /// on screen — and a tap on one said « Fichier introuvable ».
+  Future<List<Song>>? _scanInFlight;
+
   @override
   Future<List<Song>> build() async {
     // Rebuilds when the sort changes, which keeps the ordering logic in one
@@ -53,21 +60,37 @@ class SongListNotifier extends AsyncNotifier<List<Song>> {
     final sort = ref.watch(librarySortProvider);
     final previousSort = _lastSort;
     _lastSort = sort;
-    final cached = _lastScan;
-    if (cached != null && previousSort != null && previousSort != sort) {
-      return _sorted(cached, sort);
+    if (previousSort != null && previousSort != sort) {
+      final pending = _scanInFlight;
+      if (pending != null) return _sorted(await pending, sort);
+      final cached = _lastScan;
+      if (cached != null) return _sorted(cached, sort);
+    }
+    return _sorted(await _scan(), sort);
+  }
+
+  /// Scans the library (empty without the audio permission) and keeps the
+  /// result as [_lastScan], tracked in [_scanInFlight] while it runs.
+  Future<List<Song>> _scan() {
+    final scan = () async {
+      // Scanning without permission returns an empty list on Android, which
+      // is indistinguishable from "no music"; the screen needs to tell them
+      // apart.
+      if (!await PermissionService.hasAudioAccess()) {
+        _lastScan = null;
+        return const <Song>[];
+      }
+      final songs = await ref.read(musicScannerProvider).scanAllSongs();
+      _lastScan = songs;
+      return songs;
+    }();
+    _scanInFlight = scan;
+    void settle() {
+      if (identical(_scanInFlight, scan)) _scanInFlight = null;
     }
 
-    // Scanning without permission returns an empty list on Android, which is
-    // indistinguishable from "no music"; the screen needs to tell them apart.
-    if (!await PermissionService.hasAudioAccess()) {
-      _lastScan = null;
-      return const [];
-    }
-
-    final songs = await ref.read(musicScannerProvider).scanAllSongs();
-    _lastScan = songs;
-    return _sorted(songs, sort);
+    scan.then((_) => settle(), onError: (Object _) => settle());
+    return scan;
   }
 
   /// Replaces one song in the emitted list after a tag edit, keeping the
@@ -98,15 +121,10 @@ class SongListNotifier extends AsyncNotifier<List<Song>> {
     ThumbnailCache.instance.clear();
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
-      if (!await PermissionService.hasAudioAccess()) {
-        _lastScan = null;
-        return const <Song>[];
-      }
       // Cache only: the refresh re-queries MediaStore, like the initial
       // scan in [build]. No deep re-read of the files' ID3 tags — a
       // pull-to-refresh fired by accident must stay cheap.
-      final songs = await ref.read(musicScannerProvider).scanAllSongs();
-      _lastScan = songs;
+      final songs = await _scan();
       return _sorted(songs, ref.read(librarySortProvider));
     });
   }

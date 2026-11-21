@@ -4,6 +4,8 @@ library;
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:just_audio/just_audio.dart'
+    show PositionDiscontinuity, PositionDiscontinuityReason;
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/library/data/listening_history_store.dart';
 import 'package:musync/features/library/data/models/song.dart';
@@ -109,8 +111,9 @@ class ListeningHistoryNotifier extends Notifier<Map<String, ListenEntry>> {
   }
 }
 
-/// Counts listens as tracks play: once per time a track becomes current
-/// and plays past [listenThreshold]. Started once by the app root.
+/// Counts listens as tracks play: once per time a track starts — becomes
+/// current, or starts over (repeat-one, replayed, a one-track loop) — and
+/// plays past [listenThreshold]. Started once by the app root.
 final listeningHistoryRecorderProvider = Provider<ListeningHistoryRecorder>((
   ref,
 ) {
@@ -130,26 +133,54 @@ class ListeningHistoryRecorder {
 
   StreamSubscription<Song?>? _songSub;
   StreamSubscription<Duration>? _positionSub;
+  StreamSubscription<PositionDiscontinuity>? _discontinuitySub;
   Song? _tracking;
   bool _counted = false;
+
+  /// Back within this much of the start after the listen was counted: the
+  /// same track is playing again, from the top — the next pass is a new
+  /// listen. Catches what emits no new track: a one-track queue on repeat
+  /// all, a replay of the playing track, « Précédent » restarting it.
+  static const Duration restartWindow = Duration(seconds: 3);
 
   void start() {
     if (_songSub != null) return;
     _tracking = _service.currentSong;
     _songSub = _service.currentSongStream.listen((song) {
-      if (song?.id == _tracking?.id) return;
+      final sameTrack = song?.id == _tracking?.id;
+      // Always the latest copy, even for the same track: a rename or a move
+      // re-emits it with its new path, and the listen must land there.
       _tracking = song;
-      _counted = false;
+      if (!sameTrack) _counted = false;
     });
     // Rides the position stream the service already feeds; no timer of its
     // own.
     _positionSub = _service.positionStream.listen(_onPosition);
+    // Repeat-one wraps the track without changing it: just_audio reports
+    // that as an auto-advance onto the same index.
+    _discontinuitySub = _service.positionDiscontinuityStream.listen((event) {
+      if (event.reason != PositionDiscontinuityReason.autoAdvance) return;
+      if (event.previousEvent.currentIndex == event.event.currentIndex) {
+        _counted = false;
+      }
+    });
   }
 
   void _onPosition(Duration position) {
     final song = _tracking;
-    if (_counted || song == null || !_service.isPlaying) return;
-    if (position < listenThreshold(song.durationValue)) return;
+    if (song == null) return;
+    final threshold = listenThreshold(song.durationValue);
+    if (_counted) {
+      // Never at or past the threshold itself (a very short track's is
+      // below the window): that would count the same pass twice.
+      final window = threshold < restartWindow * 2
+          ? threshold ~/ 2
+          : restartWindow;
+      if (position < window) _counted = false;
+      return;
+    }
+    if (!_service.isPlaying) return;
+    if (position < threshold) return;
     _counted = true;
     unawaited(_record(song.filePath));
   }
@@ -157,8 +188,10 @@ class ListeningHistoryRecorder {
   void stop() {
     unawaited(_songSub?.cancel());
     unawaited(_positionSub?.cancel());
+    unawaited(_discontinuitySub?.cancel());
     _songSub = null;
     _positionSub = null;
+    _discontinuitySub = null;
   }
 }
 

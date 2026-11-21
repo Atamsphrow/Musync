@@ -1,6 +1,10 @@
 // The library's sorts, including the two added ones (date, length).
+import 'dart:async';
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:musync/features/library/data/models/song.dart';
+import 'package:musync/features/library/data/music_scanner.dart';
 import 'package:musync/features/library/providers/library_provider.dart';
 
 Song _song(int id, String title, {int? added, int length = 1000}) => Song(
@@ -13,7 +17,50 @@ Song _song(int id, String title, {int? added, int length = 1000}) => Song(
       dateAdded: added,
     );
 
+/// A scanner whose scans finish when the test says so.
+class _GatedScanner extends MusicScanner {
+  final scans = <Completer<List<Song>>>[];
+
+  @override
+  Future<List<Song>> scanAllSongs() {
+    final scan = Completer<List<Song>>();
+    scans.add(scan);
+    return scan.future;
+  }
+}
+
 void main() {
+  test('a sort change during a rescan shows the rescan, not the old scan',
+      () async {
+    final scanner = _GatedScanner();
+    final container = ProviderContainer(
+      overrides: [musicScannerProvider.overrideWithValue(scanner)],
+    );
+    addTearDown(container.dispose);
+    final sub = container.listen(songListProvider, (_, _) {});
+    addTearDown(sub.close);
+
+    await Future<void>.delayed(Duration.zero);
+    scanner.scans.single.complete([_song(1, 'old name')]);
+    await container.read(songListProvider.future);
+
+    // Files renamed by the app: the list is invalidated, a rescan starts…
+    container.invalidate(songListProvider);
+    container.read(songListProvider);
+    await Future<void>.delayed(Duration.zero);
+    expect(scanner.scans, hasLength(2));
+    // …and the sort changes before it lands.
+    container.read(librarySortProvider.notifier).state = LibrarySort.duration;
+    container.read(songListProvider);
+    await Future<void>.delayed(Duration.zero);
+    scanner.scans[1].complete([_song(1, 'new name')]);
+
+    final shown = await container.read(songListProvider.future);
+    expect(shown.single.title, 'new name');
+    // The sort change itself did not cost a third scan.
+    expect(scanner.scans, hasLength(2));
+  });
+
   final songs = [
     _song(1, 'charlie', added: 100, length: 3000),
     _song(2, 'Alpha', added: 300, length: 1000),

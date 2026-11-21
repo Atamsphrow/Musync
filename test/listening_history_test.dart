@@ -1,12 +1,15 @@
 // The listening history: what counts as a listen, how it is stored, and
 // the two orders the « Historique » view shows.
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:musync/features/library/data/listening_history_store.dart';
 import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/library/providers/listening_history_provider.dart';
+import 'package:musync/features/player/data/audio_player_service.dart';
 
 Song _song(int id) => Song(
       id: id,
@@ -17,7 +20,128 @@ Song _song(int id) => Song(
       filePath: '/music/$id.mp3',
     );
 
+/// Feeds the recorder by hand: the current track, positions, loop wraps.
+class _FakePlayer extends AudioPlayerService {
+  final songs = StreamController<Song?>.broadcast();
+  final positions = StreamController<Duration>.broadcast();
+  final discontinuities = StreamController<PositionDiscontinuity>.broadcast();
+  Song? current;
+
+  @override
+  Song? get currentSong => current;
+
+  @override
+  Stream<Song?> get currentSongStream => songs.stream;
+
+  @override
+  Stream<Duration> get positionStream => positions.stream;
+
+  @override
+  Stream<PositionDiscontinuity> get positionDiscontinuityStream =>
+      discontinuities.stream;
+
+  @override
+  bool get isPlaying => true;
+
+  Future<void> emitSong(Song song) async {
+    current = song;
+    songs.add(song);
+    await Future<void>.delayed(Duration.zero);
+  }
+
+  Future<void> at(int seconds) async {
+    positions.add(Duration(seconds: seconds));
+    await Future<void>.delayed(Duration.zero);
+  }
+
+  Future<void> loopOne() async {
+    discontinuities.add(
+      PositionDiscontinuity(
+        PositionDiscontinuityReason.autoAdvance,
+        PlaybackEvent(currentIndex: 0),
+        PlaybackEvent(currentIndex: 0),
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  group('the recorder', () {
+    late _FakePlayer player;
+    late List<String> recorded;
+    late ListeningHistoryRecorder recorder;
+
+    setUp(() {
+      player = _FakePlayer();
+      recorded = [];
+      recorder = ListeningHistoryRecorder(player, (path) async {
+        recorded.add(path);
+      })
+        ..start();
+    });
+
+    tearDown(() async {
+      recorder.stop();
+      await player.songs.close();
+      await player.positions.close();
+      await player.discontinuities.close();
+    });
+
+    test('counts one listen per pass of the threshold', () async {
+      await player.emitSong(_song(1));
+      await player.at(10);
+      await player.at(31);
+      await player.at(60);
+      expect(recorded, ['/music/1.mp3']);
+    });
+
+    test('repeat-one: every loop past the threshold is a listen', () async {
+      await player.emitSong(_song(1));
+      await player.at(31);
+      await player.loopOne();
+      await player.at(31);
+      await player.loopOne();
+      await player.at(31);
+      expect(recorded, List.filled(3, '/music/1.mp3'));
+    });
+
+    test('back to the start of the same track: a new listen', () async {
+      await player.emitSong(_song(1));
+      await player.at(40);
+      await player.at(0); // Replayed, or a one-track queue looping.
+      await player.at(35);
+      expect(recorded, List.filled(2, '/music/1.mp3'));
+    });
+
+    test('a seek back mid-track is not a new listen', () async {
+      await player.emitSong(_song(1));
+      await player.at(40);
+      await player.at(20);
+      await player.at(45);
+      expect(recorded, ['/music/1.mp3']);
+    });
+
+    test('renamed while playing: the listen lands on the new path', () async {
+      await player.emitSong(_song(1));
+      await player.at(10);
+      await player.emitSong(_song(1).copyWith(filePath: '/music/new.mp3'));
+      await player.at(31);
+      expect(recorded, ['/music/new.mp3']);
+    });
+
+    test('a very short track is counted once per pass', () async {
+      final short = _song(2).copyWith(duration: 4000); // Threshold: 2 s.
+      await player.emitSong(short);
+      await player.at(2);
+      await player.at(2);
+      await player.at(3);
+      expect(recorded, ['/music/2.mp3']);
+    });
+  });
+
   test('a listen is 30 s, or half of a track under a minute', () {
     expect(listenThreshold(const Duration(minutes: 4)),
         const Duration(seconds: 30));

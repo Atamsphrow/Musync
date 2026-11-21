@@ -50,6 +50,27 @@ void main() {
     expect(container.read(favoritesProvider), isEmpty);
   });
 
+  test('a tap before the load lands keeps the stored favourites', () async {
+    SharedPreferences.setMockInitialValues({
+      FavoritesStore.prefsKey: ['/music/7.mp3', '/music/8.mp3'],
+    });
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final notifier = container.read(favoritesProvider.notifier);
+    // No wait: the stored list is still loading.
+    expect(await notifier.toggle(_song(1)), isTrue);
+    // Removing a stored one the screen did not show yet, then adding it
+    // back, replays in order.
+    expect(await notifier.toggle(_song(1)), isFalse);
+    expect(await notifier.toggle(_song(2)), isTrue);
+    await Future<void>.delayed(Duration.zero); // Let the load land.
+
+    const stored = ['/music/7.mp3', '/music/8.mp3', '/music/2.mp3'];
+    expect(container.read(favoritesProvider), stored);
+    expect(await const FavoritesStore().load(), stored);
+    expect((await const FavoritesStore().loadKeys()).keys, ['/music/2.mp3']);
+  });
+
   test('a reload (import) replaces the list, it does not merge', () async {
     SharedPreferences.setMockInitialValues({});
     final container = ProviderContainer();

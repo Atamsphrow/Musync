@@ -23,9 +23,19 @@ final favoritesProvider = NotifierProvider<FavoritesNotifier, List<String>>(
 );
 
 class FavoritesNotifier extends Notifier<List<String>> {
-  /// Set by the first [toggle]: a load landing after it must not overwrite
-  /// what the user just did.
-  bool _touched = false;
+  /// False until the stored list is in [state]. Until then a tap changes
+  /// the screen at once but is only noted in [_beforeLoad]: saved then, the
+  /// near-empty list of the first frames would overwrite every favourite
+  /// on disk.
+  bool _loaded = false;
+
+  /// Taps made before the load landed, in order: the path and whether it
+  /// was added. Replayed on top of the stored list, then saved with it.
+  final List<(String, bool)> _beforeLoad = [];
+
+  /// Bumped by each [build], so a load started by an earlier one (before an
+  /// import invalidated the provider) cannot land over the new one.
+  int _generation = 0;
 
   /// What each favourite was when the library last listed it (see
   /// [FavoriteKey]), to find it again after a rename made elsewhere.
@@ -39,29 +49,40 @@ class FavoritesNotifier extends Notifier<List<String>> {
   List<String> build() {
     // The notifier outlives a rebuild (an import invalidates it): start
     // over, so the reload replaces the list instead of merging the old one.
-    _touched = false;
+    _loaded = false;
+    _beforeLoad.clear();
     _keys = const {};
-    _hydration = _hydrate();
+    _hydration = _hydrate(++_generation);
     return const [];
   }
 
-  Future<void> _hydrate() async {
+  Future<void> _hydrate(int generation) async {
     final store = ref.read(favoritesStoreProvider);
     final loaded = await store.load();
-    final keys = await store.loadKeys();
-    // Keys noted by taps made before the load win: they are newer.
-    _keys = {...keys, ..._keys};
-    if (_touched) {
-      // Merge rather than drop: keep both the stored list and the taps made
-      // before it arrived.
-      final merged = [...loaded];
-      for (final path in state) {
-        if (!merged.contains(path)) merged.add(path);
+    final storedKeys = await store.loadKeys();
+    if (generation != _generation) return; // Rebuilt meanwhile.
+    final list = [...loaded];
+    final keys = {...storedKeys};
+    // The taps made before the load, in the order they were made: each is
+    // what the user meant from what the screen showed, so an « add » of a
+    // track already stored is simply a no-op.
+    final hadTaps = _beforeLoad.isNotEmpty;
+    for (final (path, added) in _beforeLoad) {
+      if (added) {
+        if (!list.contains(path)) list.add(path);
+        final key = _keys[path];
+        if (key != null) keys[path] = key;
+      } else {
+        list.remove(path);
+        keys.remove(path);
       }
-      state = List.unmodifiable(merged);
-      return;
     }
-    state = loaded;
+    _beforeLoad.clear();
+    _keys = keys;
+    _loaded = true;
+    state = List.unmodifiable(list);
+    // Written only now, stored list included: never just the taps.
+    if (hadTaps) await _save(keys: true);
   }
 
   bool isFavorite(String path) => state.contains(path);
@@ -69,7 +90,6 @@ class FavoritesNotifier extends Notifier<List<String>> {
   /// Adds [song] to the favourites, or removes it. Returns whether it is a
   /// favourite now.
   Future<bool> toggle(Song song) async {
-    _touched = true;
     final path = song.filePath;
     final now = !state.contains(path);
     state = List.unmodifiable(
@@ -80,6 +100,11 @@ class FavoritesNotifier extends Notifier<List<String>> {
         if (entry.key != path) entry.key: entry.value,
       if (now) path: FavoriteKey.of(song),
     };
+    if (!_loaded) {
+      // Saved by [_hydrate], merged with the stored list.
+      _beforeLoad.add((path, now));
+      return now;
+    }
     await _save(keys: true);
     return now;
   }
