@@ -222,13 +222,7 @@ class MainActivity : AudioServiceActivity() {
         // Home-screen widget: Dart pushes the playing track, the widget's
         // buttons call back. On this engine — the one audio_service keeps
         // with the playback — so the widget keeps working with the UI closed.
-        WidgetBridge.attach(
-            MethodChannel(
-                flutterEngine.dartExecutor.binaryMessenger,
-                WidgetBridge.CHANNEL,
-            ),
-            this,
-        )
+        WidgetBridge.attach(flutterEngine, this)
 
         // Keep-screen-on for the lyrics displays (player lyrics pane;
         // the floating bubble sets the same flag on its own overlay
@@ -694,9 +688,14 @@ class MainActivity : AudioServiceActivity() {
             // Tapping the notification must land on the batch review screen,
             // not just reopen the app wherever it was.
             openIntent.putExtra("musync_open_batch", true)
+            // Its own request code: the launcher intent filterEquals the
+            // widget's « open the app » one and the alarm clock's show
+            // intent, so on a shared code each FLAG_UPDATE_CURRENT
+            // refresh of theirs would strip this extra — and the tap would
+            // open the library instead of the batch review.
             val pending = PendingIntent.getActivity(
                 this,
-                0,
+                BATCH_NOTIFICATION_REQUEST_CODE,
                 openIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
@@ -946,6 +945,12 @@ class MainActivity : AudioServiceActivity() {
     companion object {
         // Identifiant stable réservé au dialogue d'autorisation MediaStore.
         private const val WRITE_ACCESS_REQUEST_CODE = 0x4D53
+
+        /// PendingIntent de la notification « recherche terminée ». Distinct
+        /// de 0 (montre du réveil) et du code « ouvrir l'app » du widget :
+        /// les trois portent le même intent de lancement au sens de
+        /// filterEquals, et un code partagé partage aussi les extras.
+        private const val BATCH_NOTIFICATION_REQUEST_CODE = 0x4D42
 
         const val MEDIA_STORE_CHANNEL = "com.atamsphrow.musync/media_store"
 

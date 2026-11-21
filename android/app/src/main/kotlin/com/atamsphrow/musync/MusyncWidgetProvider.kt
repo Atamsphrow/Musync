@@ -21,7 +21,7 @@ import android.widget.RemoteViews
 /// service with nothing queued, and a foreground service that never shows
 /// its notification is killed by Android — with Musync. Instead they come
 /// here, and are forwarded to Dart only while a live player listens
-/// ([WidgetBridge.channel]). Otherwise the widget shows « open the app »
+/// ([WidgetBridge.isLive]). Otherwise the widget shows « open the app »
 /// and every tap opens it, which is the one safe way to get a player back.
 class MusyncWidgetProvider : AppWidgetProvider() {
 
@@ -43,7 +43,7 @@ class MusyncWidgetProvider : AppWidgetProvider() {
             else -> return
         }
         val channel = WidgetBridge.channel
-        if (channel == null) {
+        if (channel == null || !WidgetBridge.isLive) {
             // A tap that outlived the process that drew the buttons: show the
             // « open the app » face, and try to open it.
             refreshAll(context)
@@ -142,7 +142,7 @@ class MusyncWidgetProvider : AppWidgetProvider() {
 
         private fun buildViews(context: Context): RemoteViews {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            val live = WidgetBridge.channel != null
+            val live = WidgetBridge.isLive
             val title = prefs.getString(KEY_TITLE, null)
             val artist = prefs.getString(KEY_ARTIST, null)
             val controls = live && title != null
@@ -217,10 +217,17 @@ class MusyncWidgetProvider : AppWidgetProvider() {
                         Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED,
                 )
 
+        /// Request code of the « open the app » PendingIntent. Never 0:
+        /// [launchIntent] filterEquals the launcher intent the batch-done
+        /// notification and the alarm clock use, and on a shared code each
+        /// FLAG_UPDATE_CURRENT widget refresh replaced their extras — the
+        /// notification then opened the library, not the batch review.
+        private const val OPEN_APP_REQUEST_CODE = 0x4D57
+
         private fun openAppIntent(context: Context): PendingIntent =
             PendingIntent.getActivity(
                 context,
-                0,
+                OPEN_APP_REQUEST_CODE,
                 launchIntent(context),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
