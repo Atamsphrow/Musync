@@ -71,9 +71,11 @@ class AiFilenameResolver {
 
   const AiFilenameResolver(this.reader);
 
+  /// [hints]: see [AiFilenameReader.read].
   Future<AiResolution> resolve({
     required AiSettings settings,
     required String fileName,
+    String? hints,
   }) async {
     final providers = settings.usable;
     if (providers.isEmpty) return const AiResolution();
@@ -86,6 +88,7 @@ class AiFilenameResolver {
           provider: provider,
           instruction: settings.instruction,
           fileName: fileName,
+          hints: hints,
         );
 
         attempts.add(

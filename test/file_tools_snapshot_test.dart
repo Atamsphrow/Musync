@@ -125,6 +125,7 @@ class _ScriptedReader extends AiFilenameReader {
     required AiProviderConfig provider,
     required String instruction,
     required String fileName,
+    String? hints,
   }) async {
     asked++;
     return guess;

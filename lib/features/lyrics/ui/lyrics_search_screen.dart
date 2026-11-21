@@ -6,6 +6,7 @@ import 'package:musync/features/library/data/models/song.dart';
 import 'package:musync/features/lyrics/data/providers/lyrics_provider_interface.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
 import 'package:musync/features/lyrics/data/filename_guess.dart';
+import 'package:musync/features/lyrics/data/search_prefill.dart';
 import 'package:musync/features/lyrics/data/search_variants.dart';
 import 'package:musync/features/lyrics/providers/search_provider.dart';
 import 'package:musync/features/lyrics/data/lyrics_align.dart';
@@ -82,6 +83,28 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
   /// button that looks idle invites a second press.
   bool _guessing = false;
 
+  /// The last full guess (heuristic, completed by the model when one
+  /// answered), and which model gave it. The file does not change while the
+  /// screen is open: the automatic second attempt after « Deviner » reuses
+  /// it instead of asking the model the same question a second time.
+  FilenameGuess? _guessed;
+  String? _guessedBy;
+
+  /// Whether [_guessed] is final: a model answered, or none is configured.
+  /// A guess made while every model failed is the heuristic's alone, and a
+  /// later press asks the models again.
+  bool _guessSettled = false;
+
+  /// What the file name says, for the ranking (a candidate agreeing with it
+  /// on title and artist ranks higher): the full guess once made, the
+  /// heuristic until then. Null when the name says nothing.
+  FilenameGuess? get _rankingGuess {
+    final guess = _guessed ?? FilenameParser.parse(widget.song.filePath);
+    return guess.title.trim().isEmpty && guess.artist.trim().isEmpty
+        ? null
+        : guess;
+  }
+
   /// Incrémenté à chaque recherche lancée « pour de vrai » (écran ouvert,
   /// Rechercher, Entrée, Réessayer). La cascade du 2e essai se souvient de
   /// la valeur de départ et s'arrête dès qu'elle change : une recherche
@@ -116,12 +139,20 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
   ///
   /// [silent] coupe les snackbars : utilisé par le 2e essai automatique,
   /// qui ne doit pas bruiter l'écran quand il devine dans le vide.
+  ///
+  /// Le modèle reçoit aussi le dossier et les tags actuels comme indices
+  /// (voir [aiFilenameHints]), et un champ qu'il laisse vide est repris de
+  /// l'heuristique (voir [completeGuess]).
   Future<FilenameGuess?> _guessFromFilename({bool silent = false}) async {
     final messenger = ScaffoldMessenger.of(context);
+    final cached = _guessed;
+    if (cached != null && _guessSettled) return _usable(cached, silent);
 
     // The heuristic first, always. It costs nothing, needs no network, and is
     // right on the regular shapes — so it is both the answer and the fallback.
-    var guess = FilenameParser.parse(widget.song.filePath);
+    final heuristic = FilenameParser.parse(widget.song.filePath);
+    var guess = heuristic;
+    var settled = true;
     // Which model answered, or null when the heuristic's answer is the one being
     // shown. Named rather than a bare flag because with a fallback chain the
     // provider that answered is not necessarily the first one configured.
@@ -140,6 +171,12 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
       final resolution = await resolver.resolve(
         settings: settings,
         fileName: widget.song.filePath.split(RegExp(r'[/\\]')).last,
+        hints: aiFilenameHints(
+          filePath: widget.song.filePath,
+          title: widget.song.title,
+          artist: widget.song.artist,
+          album: widget.song.album,
+        ),
       );
       if (!mounted) return null;
       // Feeds the per-provider indicators in Paramètres › IA, so the answer to
@@ -147,9 +184,12 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
       statuses.recordAttempts(resolution.attempts);
 
       if (resolution.answered) {
-        guess = resolution.guess!;
+        guess = completeGuess(resolution.guess!, heuristic);
         answeredBy = resolution.providerName;
-      } else if (resolution.allFailed && !silent) {
+      } else if (resolution.allFailed) {
+        settled = false;
+      }
+      if (resolution.allFailed && !silent) {
         // The heuristic's answer still goes into the fields below; this only
         // says why the model did not get a say.
         messenger.showOnly(
@@ -168,32 +208,24 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
 
     if (!mounted) return null;
 
-    if (guess.title.isEmpty && guess.artist.isEmpty) {
-      if (!silent) {
-        messenger.showOnly(
-          const SnackBar(
-            content: Text('Le nom du fichier ne dit rien d’exploitable.'),
-          ),
-        );
-      }
-      return null;
-    }
+    _guessed = guess;
+    _guessedBy = answeredBy;
+    _guessSettled = settled;
+    return _usable(guess, silent);
+  }
 
+  /// [guess], or null — with the message, unless [silent] — when it is
+  /// empty.
+  FilenameGuess? _usable(FilenameGuess guess, bool silent) {
+    if (guess.title.isNotEmpty || guess.artist.isNotEmpty) return guess;
     if (!silent) {
-      // Said out loud, because the fields may have been right already and the
-      // user needs to see that something happened — and where it came from.
-      final source = answeredBy == null ? '' : '$answeredBy : ';
-      messenger.showOnly(
-        SnackBar(
-          content: Text(
-            guess.artist.isEmpty
-                ? '${source}titre deviné, pas d’artiste dans le nom.'
-                : '$source${guess.artist} — ${guess.title}',
-          ),
+      ScaffoldMessenger.of(context).showOnly(
+        const SnackBar(
+          content: Text('Le nom du fichier ne dit rien d’exploitable.'),
         ),
       );
     }
-    return guess;
+    return null;
   }
 
   /// Rewrites the two fields from what the file is called.
@@ -205,13 +237,38 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
   ///
   /// Only the fields are touched. Nothing reaches the file until the user picks
   /// a result, so a wrong guess costs one correction, not a bad tag.
+  ///
+  /// When the guess changes a field, the search runs again at once with it:
+  /// pressing Deviner then Rechercher was always the next step. A guess the
+  /// fields already hold says so instead of searching the same thing again.
   Future<void> _fillFromFilename() async {
     final guess = await _guessFromFilename();
     if (guess == null || !mounted) return;
+    final title = guess.title.isNotEmpty ? guess.title : _titleController.text;
+    final artist =
+        guess.artist.isNotEmpty ? guess.artist : _artistController.text;
+    final changed =
+        title != _titleController.text || artist != _artistController.text;
+    // Said out loud, because the fields may have been right already and the
+    // user needs to see that something happened — and where it came from.
+    final source = _guessedBy == null ? '' : '$_guessedBy : ';
+    ScaffoldMessenger.of(context).showOnly(
+      SnackBar(
+        content: Text(
+          !changed
+              ? '${source}les champs disent déjà ce que dit le nom du fichier.'
+              : guess.artist.isEmpty
+              ? '${source}titre deviné, pas d’artiste dans le nom.'
+              : '$source${guess.artist} — ${guess.title}',
+        ),
+      ),
+    );
+    if (!changed) return;
     setState(() {
-      if (guess.title.isNotEmpty) _titleController.text = guess.title;
-      if (guess.artist.isNotEmpty) _artistController.text = guess.artist;
+      _titleController.text = title;
+      _artistController.text = artist;
     });
+    await _search(explicit: true, prefill: false);
   }
 
   /// Interrompt la recherche en cours (le × dans le cercle de chargement).
@@ -223,10 +280,11 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
   /// Lance la recherche des champs courants. Le Future rendu se termine
   /// quand la recherche — et son éventuel 2e essai automatique — est finie.
   ///
-  /// [prefill] : remplace les champs encore à leur valeur d'origine par ce
-  /// que dit le nom du fichier. Coupé pour les variantes de la cascade, dont
-  /// les champs sont déjà ce qu'on veut chercher — sans quoi une variante
-  /// égale aux tags d'origine serait réécrite par l'heuristique.
+  /// [prefill] : remplace un champ encore à sa valeur d'origine quand ce
+  /// n'est pas vraiment un nom — inconnu, nom de fichier brut, décoration
+  /// de téléchargement — par ce que dit le nom du fichier, ou par le tag
+  /// nettoyé (voir [prefillTitle]). Coupé pour les variantes de la cascade,
+  /// dont les champs sont déjà ce qu'on veut chercher.
   ///
   /// [maxWait] : plafond d'attente de cette recherche (voir
   /// [performLyricsSearch]). Null pour la 1re recherche.
@@ -238,32 +296,41 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
   }) {
     if (autoRetry) _cascadeEpoch++;
     final epoch = _cascadeEpoch;
-    // Assurer l'artiste et le titre AVANT de chercher : le nom du fichier
-    // dit souvent mieux que les tags qui est l'artiste et quel est le titre
-    // (artiste « Unknown », titre = nom du fichier entier). L'heuristique
-    // locale suffit ici — instantanée, sans réseau — et le deviné complet
+    // Assurer l'artiste et le titre AVANT de chercher, sans gâcher de bons
+    // tags : un champ n'est remplacé que s'il n'est pas vraiment un nom
+    // (artiste « Unknown », titre = nom du fichier entier, « (Lyrics) »…).
+    // Remplacer systématiquement par le nom du fichier transformait un
+    // « Bohemian Rhapsody » propre en « Bohemian Rhapsody (Remastered
+    // 2011) », que les sources exactes ne trouvent pas. L'heuristique locale
+    // suffit ici — instantanée, sans réseau — et le deviné complet
     // (heuristique puis IA) reste sur le bouton Deviner et sur le 2e essai
     // automatique. Seuls les champs encore à leur valeur d'origine sont
-    // remplacés : une correction tapée à la main n'est jamais écrasée.
+    // concernés : une correction tapée à la main n'est jamais écrasée.
     if (prefill) {
       final filenameGuess = FilenameParser.parse(widget.song.filePath);
-      if (filenameGuess.title.isNotEmpty ||
-          filenameGuess.artist.isNotEmpty) {
-        var changed = false;
-        if (_titleController.text == _initialTitle &&
-            filenameGuess.title.isNotEmpty &&
-            filenameGuess.title != _titleController.text) {
-          _titleController.text = filenameGuess.title;
+      var changed = false;
+      if (_titleController.text == _initialTitle) {
+        final next = prefillTitle(
+          _titleController.text,
+          filePath: widget.song.filePath,
+          guess: filenameGuess,
+        );
+        if (next != _titleController.text) {
+          _titleController.text = next;
           changed = true;
         }
-        if (_artistController.text == _initialArtist &&
-            filenameGuess.artist.isNotEmpty &&
-            filenameGuess.artist != _artistController.text) {
-          _artistController.text = filenameGuess.artist;
-          changed = true;
-        }
-        if (changed) setState(() {});
       }
+      if (_artistController.text == _initialArtist) {
+        final next = prefillArtist(
+          _artistController.text,
+          guess: filenameGuess,
+        );
+        if (next != _artistController.text) {
+          _artistController.text = next;
+          changed = true;
+        }
+      }
+      if (changed) setState(() {});
     }
     final title = _titleController.text;
     final artist = _artistController.text;
@@ -275,6 +342,7 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
       durationMs: widget.song.duration,
       explicit: explicit,
       maxWait: maxWait,
+      filenameGuess: _rankingGuess,
     ).then((_) async {
       if (mounted && autoRetry) await _autoRetryWithGuess(title, artist, epoch);
     });
@@ -288,6 +356,7 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
       artist: _artistController.text,
       album: widget.song.album,
       durationMs: widget.song.duration,
+      filenameGuess: _rankingGuess,
     );
   }
 
@@ -336,8 +405,11 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
 
     if (!allowed()) return;
     var partial = ref.read(lyricsSearchResultsProvider);
-    final guess = await _guessFromFilename(silent: true);
-    if (!mounted || guess == null) return;
+    // A name that says nothing still leaves the query itself to clean and
+    // to try without its artist: an empty guess falls back to it.
+    final guess =
+        await _guessFromFilename(silent: true) ?? (artist: '', title: '');
+    if (!mounted) return;
     if (!allowed()) return;
 
     final variants = buildSearchVariants(

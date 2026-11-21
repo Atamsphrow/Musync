@@ -227,6 +227,31 @@ String keyHelpFor(AiProviderKind kind) => switch (kind) {
 /// looking at both fields anyway.
 const String defaultAiInstruction = '''
 Tu reçois le nom d'un fichier audio. Il vient souvent d'un téléchargement et
+porte des mentions parasites : nom de chaîne ou de site, « Official Video »,
+« Lyrics », identifiant de vidéo, résolution, année d'upload, numéro de piste.
+
+Des indices peuvent suivre : le dossier du fichier et ses tags actuels. Ils
+sont souvent faux ou incomplets — sers-t'en pour compléter ou pour trancher,
+mais le nom du fichier prime.
+
+Déduis l'artiste et le titre réels du morceau.
+
+Règles :
+- Retire tout ce qui n'appartient pas au nom de l'œuvre.
+- Garde ce qui en fait partie : « (Remix) », « feat. X », « (Live) », « (Acoustic) ».
+- L'ordre n'est pas toujours « artiste - titre ». Déduis-le du sens.
+- Si le nom ne permet pas de trancher, laisse le champ vide plutôt que d'inventer.
+
+Réponds uniquement par un objet JSON, sans texte autour :
+{"artist": "...", "title": "..."}
+''';
+
+/// Earlier defaults, as they were saved. A stored instruction equal to one
+/// of them was never edited by the user: it is read as today's default, so
+/// an improvement to the default reaches everyone who kept it.
+const List<String> previousDefaultAiInstructions = [
+  '''
+Tu reçois le nom d'un fichier audio. Il vient souvent d'un téléchargement et
 porte des mentions parasites : nom de chaîne, « Official Video », « Lyrics »,
 résolution, année d'upload.
 
@@ -240,7 +265,18 @@ Règles :
 
 Réponds uniquement par un objet JSON, sans texte autour :
 {"artist": "...", "title": "..."}
-''';
+''',
+];
+
+/// [stored], or today's default when [stored] is blank or an old default.
+String resolveStoredAiInstruction(Object? stored) {
+  if (stored is! String || stored.trim().isEmpty) return defaultAiInstruction;
+  final trimmed = stored.trim();
+  for (final previous in previousDefaultAiInstructions) {
+    if (previous.trim() == trimmed) return defaultAiInstruction;
+  }
+  return stored;
+}
 
 /// Reads and writes the providers and the instruction.
 ///
@@ -318,12 +354,9 @@ class AiSettingsStore {
           }),
         );
       }
-      final instruction = decoded['instruction'];
       return AiSettings(
         providers: providers,
-        instruction: instruction is String && instruction.trim().isNotEmpty
-            ? instruction
-            : defaultAiInstruction,
+        instruction: resolveStoredAiInstruction(decoded['instruction']),
       );
     } catch (error, stack) {
       // Do not silently replace credential-read failures with an empty store

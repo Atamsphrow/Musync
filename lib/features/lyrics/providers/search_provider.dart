@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/core/services/shared_http_client.dart';
+import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/lyrics/data/lyrics_mismatch_store.dart';
 import 'package:musync/features/lyrics/data/lyrics_repository.dart';
 import 'package:musync/features/lyrics/data/lyrics_source_health.dart';
@@ -142,6 +143,11 @@ int _searchGeneration = 0;
 /// does not answer must not cost its full retry budget (12 s + 1 s + 12 s)
 /// on every variant. It does not apply to [sourceName].
 ///
+/// [filenameGuess] is what the file's name says (heuristic, or the model's
+/// reading): a candidate that matches it on both title and artist ranks
+/// higher — the same agreement bonus the background and batch searches
+/// already gave, and the manual screen did not.
+///
 /// Returns what was found, so a caller that needs to react (a toast when
 /// a single source finds nothing) does not have to re-read the state.
 Future<List<LyricsSearchResult>> performLyricsSearch(
@@ -153,6 +159,7 @@ Future<List<LyricsSearchResult>> performLyricsSearch(
   bool explicit = false,
   String? sourceName,
   Duration? maxWait,
+  FilenameGuess? filenameGuess,
 }) async {
   // Everything is resolved off `ref` before the first await, and held.
   //
@@ -196,6 +203,7 @@ Future<List<LyricsSearchResult>> performLyricsSearch(
         artist: artist,
         album: album,
         durationMs: durationMs,
+        filenameGuess: filenameGuess,
       );
       if (!isStale()) results.state = found;
       return found;
@@ -210,6 +218,7 @@ Future<List<LyricsSearchResult>> performLyricsSearch(
       artist: artist,
       album: album,
       durationMs: durationMs,
+      filenameGuess: filenameGuess,
     );
     if (maxWait == null) {
       await for (final ranked in stream) {

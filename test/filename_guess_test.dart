@@ -114,6 +114,149 @@ void main() {
     });
   });
 
+  group('what converters and yt-dlp leave behind', () {
+    test('a YouTube id, bracketed or appended, is not part of the title', () {
+      expectGuess(
+        'Rick Astley - Never Gonna Give You Up [dQw4w9WgXcQ].mp3',
+        artist: 'Rick Astley',
+        title: 'Never Gonna Give You Up',
+      );
+      expectGuess(
+        'Rick Astley - Never Gonna Give You Up-dQw4w9WgXcQ.mp3',
+        title: 'Never Gonna Give You Up',
+      );
+      // An id may hold underscores: they are not spaces.
+      expectGuess('A - B [a_B3c-dE4fG].mp3', title: 'B');
+    });
+
+    test('an eleven-letter word in brackets is not an id', () {
+      expectGuess('A - B [Instrumenta].mp3', title: 'B [Instrumenta]');
+    });
+
+    test('the converter site goes, before or after', () {
+      expectGuess(
+        'y2mate.com - Rick Astley - Never Gonna Give You Up_v720P.mp3',
+        artist: 'Rick Astley',
+        title: 'Never Gonna Give You Up',
+      );
+      expectGuess('[www.mp3juices.cc] Daft Punk - One More Time.mp3',
+          artist: 'Daft Punk', title: 'One More Time');
+      expectGuess('Daft Punk - One More Time - ytmp3.cc.mp3',
+          title: 'One More Time');
+      expectGuess('Daft Punk - One More Time (www.site.com).mp3',
+          title: 'One More Time');
+    });
+
+    test('a bare bitrate or resolution at the end goes', () {
+      expectGuess('A - B 320kbps.mp3', title: 'B');
+      expectGuess('A - B HD.mp3', title: 'B');
+    });
+
+    test('(Audio), (Visualizer), (Official MV) are decoration', () {
+      expectGuess('A - B (Audio).mp3', title: 'B');
+      expectGuess('A - B (Official Visualizer).mp3', title: 'B');
+      expectGuess('A - B [Official MV].mp3', title: 'B');
+      expectGuess('A - B (Video Oficial).mp3', title: 'B');
+    });
+  });
+
+  group('track numbers', () {
+    test('a name that starts with a number keeps it', () {
+      // The old rule read any number and a space as a track number.
+      expectGuess('3 Doors Down - Kryptonite.mp3', artist: '3 Doors Down');
+      expectGuess('50 Cent - In Da Club.mp3', artist: '50 Cent');
+      expectGuess('7 Rings.mp3', title: '7 Rings');
+    });
+
+    test('zero-padded, punctuated, disc-track and "Track 05" are numbers', () {
+      expectGuess('01 Titre.mp3', title: 'Titre');
+      expectGuess('1-03 Daft Punk - Digital Love.mp3', artist: 'Daft Punk');
+      expectGuess('Track 05 - Daft Punk - Aerodynamic.mp3',
+          artist: 'Daft Punk', title: 'Aerodynamic');
+    });
+
+    test('a number on the title side goes too', () {
+      expectGuess('Daft Punk - 03. Digital Love.mp3', title: 'Digital Love');
+      expectGuess(
+        'Daft Punk - Discovery - 03 - Digital Love.mp3',
+        artist: 'Daft Punk',
+        title: 'Digital Love',
+      );
+      // A title that is a number stays one.
+      expectGuess('Taylor Swift - 22.mp3', title: '22');
+    });
+  });
+
+  group('other separators', () {
+    test('an en dash needs no spaces, a hyphen does', () {
+      expectGuess('Daft Punk–One More Time.mp3',
+          artist: 'Daft Punk', title: 'One More Time');
+      expectGuess('Jay-Z.mp3', artist: '', title: 'Jay-Z');
+    });
+
+    test('a quoted title after the artist', () {
+      expectGuess('Rick Astley "Never Gonna Give You Up" (Official Video).mp3',
+          artist: 'Rick Astley', title: 'Never Gonna Give You Up');
+      expectGuess('Stromae « Papaoutai » (Live).mp3',
+          artist: 'Stromae', title: 'Papaoutai (Live)');
+    });
+
+    test('quotes wrapping a half are dropped', () {
+      expectGuess('Rick Astley - "Never Gonna Give You Up".mp3',
+          title: 'Never Gonna Give You Up');
+      // An apostrophe is not a quote.
+      expectGuess("Lynyrd Skynyrd - Don't Ask Me No Questions.mp3",
+          title: "Don't Ask Me No Questions");
+    });
+  });
+
+  group('completeGuess', () {
+    test('a field the model left empty comes from the heuristic', () {
+      expect(
+        completeGuess(
+          (artist: '', title: 'Biloo'),
+          (artist: 'ALG', title: 'Biloo'),
+        ),
+        (artist: 'ALG', title: 'Biloo'),
+      );
+      // The model answered nothing at all: the heuristic stands.
+      expect(
+        completeGuess((artist: '', title: ''), (artist: 'A', title: 'B')),
+        (artist: 'A', title: 'B'),
+      );
+    });
+
+    test('the model has the last word on what it filled', () {
+      expect(
+        completeGuess(
+          (artist: 'Rick Astley', title: 'Never Gonna Give You Up'),
+          (artist: '', title: 'never gonna give you up official'),
+        ),
+        (artist: 'Rick Astley', title: 'Never Gonna Give You Up'),
+      );
+    });
+
+    test('never the same name in both fields', () {
+      // The model read `Biloo - ALG` the other way round and left the
+      // title empty: the heuristic's title is the model's artist.
+      expect(
+        completeGuess(
+          (artist: 'Biloo', title: ''),
+          (artist: 'ALG', title: 'Biloo'),
+        ),
+        (artist: 'Biloo', title: ''),
+      );
+    });
+  });
+
+  test('stripDecoration leaves a clean tag alone', () {
+    expect(FilenameParser.stripDecoration('Bohemian Rhapsody (Remastered 2011)'),
+        'Bohemian Rhapsody (Remastered 2011)');
+    expect(FilenameParser.stripDecoration('Panda (Lyrics)'), 'Panda');
+    expect(FilenameParser.stripDecoration('Never_Gonna_Give_You_Up'),
+        'Never Gonna Give You Up');
+  });
+
   group('accents', () {
     test('junk words are matched despite them', () {
       // Dart's \b is defined over [A-Za-z0-9_], so there is no word boundary

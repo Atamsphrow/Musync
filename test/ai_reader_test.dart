@@ -118,6 +118,44 @@ void main() {
       expect(h.sent.single.headers['Authorization'], 'Bearer $_secret');
       expect(h.sent.single.url.toString(), endsWith('/chat/completions'));
     });
+
+    test('hints follow the file name in the user message', () async {
+      final h = _reader(_openAiBody('{"artist":"a","title":"t"}'));
+
+      await h.reader.read(
+        provider: _provider(AiProviderKind.openAiCompatible),
+        instruction: 'x',
+        fileName: '01.mp3',
+        hints: 'Indices : dossier Daft Punk - Discovery',
+      );
+
+      final messages =
+          (jsonDecode(h.sent.single.body) as Map)['messages'] as List;
+      expect(
+        (messages.last as Map)['content'],
+        '01.mp3\n\nIndices : dossier Daft Punk - Discovery',
+      );
+    });
+
+    test('without hints, the file name alone, as before', () async {
+      expect(AiFilenameReader.userMessage('f.mp3', null), 'f.mp3');
+      expect(AiFilenameReader.userMessage('f.mp3', '  '), 'f.mp3');
+    });
+  });
+
+  group('the default instruction', () {
+    test('an old default left untouched becomes the new one', () {
+      for (final previous in previousDefaultAiInstructions) {
+        expect(resolveStoredAiInstruction(previous), defaultAiInstruction);
+      }
+      expect(defaultAiInstruction, contains('Des indices peuvent suivre'));
+    });
+
+    test('an edited instruction is kept, a blank one is the default', () {
+      expect(resolveStoredAiInstruction('Réponds en JSON.'), 'Réponds en JSON.');
+      expect(resolveStoredAiInstruction('  '), defaultAiInstruction);
+      expect(resolveStoredAiInstruction(null), defaultAiInstruction);
+    });
   });
 
   group('a model that does not answer cleanly', () {

@@ -25,6 +25,7 @@ class _ScriptedReader extends AiFilenameReader {
     required AiProviderConfig provider,
     required String instruction,
     required String fileName,
+    String? hints,
   }) async {
     asked.add(provider.id);
     final outcome = script[provider.id];

@@ -121,25 +121,38 @@ class AiFilenameReader {
   /// Returns the guess. Either field may come back empty, which is the honest
   /// answer for a name that does not say — the instruction asks for exactly
   /// that rather than an invention.
+  ///
+  /// [hints], when given, follows the file name in the same message: the
+  /// folder and the current tags (see `aiFilenameHints`), for the names that
+  /// say too little on their own.
   Future<FilenameGuess> read({
     required AiProviderConfig provider,
     required String instruction,
     required String fileName,
+    String? hints,
   }) async {
+    final message = userMessage(fileName, hints);
     final answer = switch (provider.kind) {
       AiProviderKind.gemini => await _askGemini(
         provider,
         instruction,
-        fileName,
+        message,
       ),
       AiProviderKind.openAiCompatible => await _askOpenAi(
         provider,
         instruction,
-        fileName,
+        message,
       ),
     };
 
     return _parseAnswer(answer);
+  }
+
+  /// What the model is sent: the file name alone, as before, or followed by
+  /// [hints] after a blank line.
+  static String userMessage(String fileName, String? hints) {
+    final extra = hints?.trim() ?? '';
+    return extra.isEmpty ? fileName : '$fileName\n\n$extra';
   }
 
   /// Asks the provider whether [provider]'s model still exists.

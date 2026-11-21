@@ -15,16 +15,19 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/utils/snackbar.dart';
+import 'package:musync/features/lyrics/data/filename_guess.dart';
 import 'package:musync/features/lyrics/data/lyrics_source_health.dart';
 import 'package:musync/features/lyrics/providers/search_provider.dart';
 
-/// Opens the sheet. [title]/[artist] are the query the sheet asks with.
+/// Opens the sheet. [title]/[artist] are the query the sheet asks with;
+/// [filenameGuess] ranks the answers like the main search does.
 Future<void> showSourcePickerSheet({
   required BuildContext context,
   required String title,
   required String artist,
   String? album,
   int? durationMs,
+  FilenameGuess? filenameGuess,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -33,6 +36,7 @@ Future<void> showSourcePickerSheet({
       artist: artist,
       album: album,
       durationMs: durationMs,
+      filenameGuess: filenameGuess,
     ),
   );
 }
@@ -43,12 +47,14 @@ class _SourcePickerSheet extends ConsumerWidget {
     required this.artist,
     this.album,
     this.durationMs,
+    this.filenameGuess,
   });
 
   final String title;
   final String artist;
   final String? album;
   final int? durationMs;
+  final FilenameGuess? filenameGuess;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -173,6 +179,7 @@ class _SourcePickerSheet extends ConsumerWidget {
       durationMs: durationMs,
       explicit: true,
       sourceName: sourceName,
+      filenameGuess: filenameGuess,
     );
     if (!context.mounted) return;
     final error = ref.read(lyricsSearchErrorProvider);
