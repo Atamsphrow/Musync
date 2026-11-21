@@ -202,16 +202,22 @@ class SongTile extends ConsumerWidget {
     try {
       switch (value) {
         case _TileMenu.playNext:
-          await ref.read(audioPlayerServiceProvider).playNext(song);
+          final queued = await ref
+              .read(audioPlayerServiceProvider)
+              .playNext(song);
           // The SnackBar below checks `mounted`, but this sync runs after
           // the same await with no guard: a disposed widget would use
           // `ref` and throw (swallowed here, the sync silently skipped).
           if (!context.mounted) return;
-          await _syncActiveQueue(ref);
+          if (queued) await _syncActiveQueue(ref);
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('« ${song.title} » sera joué ensuite'),
+                content: Text(
+                  queued
+                      ? '« ${song.title} » sera joué ensuite'
+                      : '« ${song.title} » est déjà en cours de lecture',
+                ),
               ),
             );
           }

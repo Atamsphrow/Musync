@@ -109,19 +109,30 @@ class HomeWidgetBridge {
         case 'previous':
           await _service.previous();
         case 'toggle':
-          // Not awaited: play()'s future follows the playback itself.
-          unawaited(_service.togglePlayPause());
+          // Not awaited: play()'s future follows the playback itself. Its
+          // error is caught on the future, though — the try below cannot
+          // see a future it does not await, and a play() that throws
+          // (source in error, file deleted) was an uncaught zone error.
+          unawaited(
+            _service.togglePlayPause().catchError(
+              (Object error) => _logFailure(call.arguments, error),
+            ),
+          );
         case 'next':
           await _service.next();
       }
     } catch (error) {
-      DebugLog.instance.warning(
-        'Widget',
-        'Commande du widget impossible (${call.arguments})',
-        error: error,
-      );
+      _logFailure(call.arguments, error);
     }
     return null;
+  }
+
+  static void _logFailure(Object? command, Object error) {
+    DebugLog.instance.warning(
+      'Widget',
+      'Commande du widget impossible ($command)',
+      error: error,
+    );
   }
 
   /// Sends what [song] shows: at once, with its cover when the player has

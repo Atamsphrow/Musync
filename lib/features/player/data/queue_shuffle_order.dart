@@ -37,6 +37,9 @@ class QueueShuffleOrder extends ShuffleOrder {
   bool _keepSlot = false;
   int? _freedSlot;
 
+  /// Set by [startNextShuffleAt]: the child the next [shuffle] puts first.
+  int? _nextShuffleStart;
+
   /// The next insert lands right after [childIndex] in the shuffled order —
   /// « play next » under shuffle.
   void placeNextInsertAfter(int childIndex) {
@@ -53,16 +56,24 @@ class QueueShuffleOrder extends ShuffleOrder {
     _anchorChild = null;
   }
 
+  /// The next [shuffle] starts its order at [childIndex], whatever initial
+  /// index just_audio passes — « Aléatoire » on the queue already playing:
+  /// [AudioPlayer.shuffle] passes the current index, which is still the old
+  /// track, while the new run must begin at the one about to play.
+  void startNextShuffleAt(int childIndex) => _nextShuffleStart = childIndex;
+
   @override
   void shuffle({int? initialIndex}) {
+    final start = _nextShuffleStart ?? initialIndex;
+    _nextShuffleStart = null;
     // Same as DefaultShuffleOrder: random order, current item first.
     if (indices.length <= 1) return;
     indices.shuffle(_random);
-    if (initialIndex == null) return;
-    final swapPos = indices.indexOf(initialIndex);
+    if (start == null) return;
+    final swapPos = indices.indexOf(start);
     if (swapPos < 0) return;
     indices[swapPos] = indices[0];
-    indices[0] = initialIndex;
+    indices[0] = start;
   }
 
   @override
@@ -123,5 +134,6 @@ class QueueShuffleOrder extends ShuffleOrder {
     _anchorChild = null;
     _keepSlot = false;
     _freedSlot = null;
+    _nextShuffleStart = null;
   }
 }

@@ -17,7 +17,8 @@ import 'package:musync/features/player/providers/player_provider.dart';
 /// The shuffle mode is set *before* the queue is installed: just_audio
 /// shuffles a new source when it is set, starting from the chosen track, so
 /// « Aléatoire » gets a fresh order beginning at a random track, and the
-/// player's shuffle button tells the truth. « Tout lire » turns shuffle off
+/// player's shuffle button tells the truth. A list that already is the
+/// queue is reshuffled from that track too ([AudioPlayerService.playShuffled]). « Tout lire » turns shuffle off
 /// for the same reason: in order means in order.
 ///
 /// Not awaited past the start: `playSong`'s future follows just_audio's
@@ -35,10 +36,14 @@ Future<void> playSongs(
     // The mode is a nicety; playing the list is the point.
   }
   final index = shuffle ? Random().nextInt(songs.length) : 0;
+  // `playShuffled`, not `playSong`, when the list is already the queue: a
+  // bare seek would land somewhere inside the old shuffled run, and every
+  // track before it there would never play.
+  final start = shuffle && service.isShuffleEnabled
+      ? service.playShuffled(songs[index], queue: songs, index: index)
+      : service.playSong(songs[index], queue: songs, index: index);
   unawaited(
-    service.playSong(songs[index], queue: songs, index: index).catchError((
-      Object _,
-    ) {
+    start.catchError((Object _) {
       appMessengerKey.currentState?.showOnly(
         SnackBar(
           content: Text(

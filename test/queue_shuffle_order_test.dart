@@ -90,4 +90,23 @@ void main() {
     expect(order.indices.first, 3);
     expect(order.indices.toSet(), {0, 1, 2, 3, 4});
   });
+
+  test('« Aléatoire » on the playing queue starts the run at the new track',
+      () {
+    // just_audio passes the current index (1, the old track); the run must
+    // begin at the track about to play (4), and still hold every child.
+    final order = _orderOf([0, 1, 2, 3, 4]);
+    order.startNextShuffleAt(4);
+    order.shuffle(initialIndex: 1);
+    expect(order.indices.first, 4);
+    expect(order.indices.toSet(), {0, 1, 2, 3, 4});
+  });
+
+  test('the shuffle start request is one-shot', () {
+    final order = _orderOf([0, 1, 2, 3, 4]);
+    order.startNextShuffleAt(4);
+    order.shuffle(initialIndex: 1);
+    order.shuffle(initialIndex: 2);
+    expect(order.indices.first, 2);
+  });
 }

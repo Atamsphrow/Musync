@@ -464,8 +464,31 @@ class AudioPlayerService {
     List<Song>? queue,
     int? index,
     Duration? fadeIn,
+  }) => _startSong(song, queue: queue, index: index, fadeIn: fadeIn);
+
+  /// « Aléatoire » on [queue], starting at [song] (its slot [index]): a fresh
+  /// shuffled order that begins at [song] and runs through every other
+  /// track. Shuffle mode must already be on.
+  ///
+  /// Not [playSong]: when [queue] is already the playing queue, playSong
+  /// only seeks to the track inside the existing shuffled run — every track
+  /// placed before it in that run was then never played.
+  Future<void> playShuffled(
+    Song song, {
+    required List<Song> queue,
+    required int index,
+  }) => _startSong(song, queue: queue, index: index, reshuffle: true);
+
+  Future<void> _startSong(
+    Song song, {
+    List<Song>? queue,
+    int? index,
+    Duration? fadeIn,
+    bool reshuffle = false,
   }) {
-    _cancelVolumeFade();
+    // Eager, not inside the gate: a sleep-timer fade-out must be silenced
+    // right now, before its own completion handler looks at the player.
+    final settled = _endFadeQuietly();
     final previous = _playSongGate;
     // The gate serializes the expensive, stateful part: building the audio
     // source and seeking. Starting playback stays outside it on purpose:
@@ -474,8 +497,8 @@ class AudioPlayerService {
     // holding the gate that long would wedge every later tap on a song
     // behind the current one. The caller's future still reports play()
     // errors.
-    final setup = (previous ?? Future.value()).then(
-      (_) => _playSong(song, queue: queue, index: index),
+    final setup = Future.wait([settled, previous ?? Future.value()]).then(
+      (_) => _playSong(song, queue: queue, index: index, reshuffle: reshuffle),
     );
     _playSongGate = setup.then<void>((_) {}, onError: (_) {});
     return setup.then((_) {
@@ -486,7 +509,12 @@ class AudioPlayerService {
     });
   }
 
-  Future<void> _playSong(Song song, {List<Song>? queue, int? index}) async {
+  Future<void> _playSong(
+    Song song, {
+    List<Song>? queue,
+    int? index,
+    bool reshuffle = false,
+  }) async {
     final newQueue =
         queue ?? (_queue.contains(song) ? _queue : [..._queue, song]);
     final resolvedIndex = _resolveIndex(newQueue, song, index);
@@ -500,6 +528,9 @@ class AudioPlayerService {
       // the old track on screen after picking a different one from the same
       // list.
       _setCurrentSong(newQueue.isEmpty ? null : newQueue[resolvedIndex]);
+      if (reshuffle && _player.shuffleModeEnabled) {
+        await _reshuffleFrom(resolvedIndex);
+      }
       await _seekWithRecord(Duration.zero, index: resolvedIndex);
       return;
     }
@@ -555,6 +586,18 @@ class AudioPlayerService {
     }
     // The queue actually changed: the next launch restores all of it.
     _persistPlaybackState();
+  }
+
+  /// A new shuffled order for the installed queue, beginning at [child].
+  ///
+  /// just_audio's own [AudioPlayer.shuffle] starts the order at the
+  /// *current* index, which is still the old track at this point; the
+  /// queue's [QueueShuffleOrder] is told the real start instead. A new
+  /// source needs none of this: just_audio shuffles it from its initial
+  /// index when it is set.
+  Future<void> _reshuffleFrom(int child) async {
+    _orderOf(_player.audioSource)?.startNextShuffleAt(child);
+    await _player.shuffle();
   }
 
   /// Prefers the caller's index, since a library list can legitimately hold the
@@ -642,17 +685,60 @@ class AudioPlayerService {
     });
   }
 
-  /// Annule le fondu en cours et restaure le volume cible : une pause en
-  /// plein fondu suivie d'une reprise ne doit pas laisser la lecture à
-  /// volume réduit.
-  void _cancelVolumeFade() {
-    if (_fadeTimer == null) return;
-    _fadeTimer?.cancel();
+  /// Arrête le fondu en cours sans toucher au volume, et règle un
+  /// [fadeOutAndPause] en cours comme annulé. Rend le volume à restaurer,
+  /// ou null quand aucun fondu ne tournait.
+  ///
+  /// Le volume reste où le fondu l'avait laissé : c'est à l'appelant de le
+  /// remettre, au bon moment (voir [_endFadeQuietly]).
+  double? _stopVolumeFade() {
+    final timer = _fadeTimer;
+    if (timer == null) return null;
+    timer.cancel();
     _fadeTimer = null;
-    unawaited(_player.setVolume(_fadeTargetVolume));
     final pending = _fadeOutCompleter;
     _fadeOutCompleter = null;
     if (pending != null && !pending.isCompleted) pending.complete(false);
+    return _fadeTargetVolume;
+  }
+
+  /// Annule le fondu en cours et restaure le volume cible tout de suite :
+  /// une pause en plein fondu suivie d'une reprise ne doit pas laisser la
+  /// lecture à volume réduit.
+  void _cancelVolumeFade() {
+    final restore = _stopVolumeFade();
+    if (restore != null) unawaited(_restoreVolume(restore));
+  }
+
+  /// Puts the volume a fade had moved back to [volume]. Best-effort: a
+  /// failed setVolume must not fail the transport action around it.
+  Future<void> _restoreVolume(double volume) async {
+    try {
+      await _player.setVolume(volume);
+    } catch (_) {
+      // The next fade, or the next track, sets it again.
+    }
+  }
+
+  /// Ends a running fade before a skip or a new track, without a burst.
+  ///
+  /// The sleep timer's fade-out is silenced first — paused, then the volume
+  /// restored — because restoring first played the still-running track at
+  /// full volume for a moment (and, on a skip, started the next one loud
+  /// before the timer paused it): bedtime means silence. A wake-up fade-in
+  /// is simply brought to full volume, as before.
+  Future<void> _endFadeQuietly() async {
+    final fadingOut = _fadeOutCompleter != null;
+    final restore = _stopVolumeFade();
+    if (restore == null) return;
+    if (fadingOut && _player.playing) {
+      try {
+        await _player.pause();
+      } catch (_) {
+        // Restored below either way; the music was nearly silent anyway.
+      }
+    }
+    await _restoreVolume(restore);
   }
 
   /// Lowers the volume to silence over [duration], then pauses and puts the
@@ -660,8 +746,8 @@ class AudioPlayerService {
   /// the music stopping mid-phrase.
   ///
   /// Any transport action meanwhile (pause, skip, a new track) cancels the
-  /// fade through [_cancelVolumeFade], which restores the volume; the call
-  /// then returns false without pausing. True when it paused.
+  /// fade and restores the volume once the audio is paused (see
+  /// [_endFadeQuietly]); the call then returns false. True when it paused.
   Future<bool> fadeOutAndPause(Duration duration) async {
     _cancelVolumeFade();
     if (!isPlaying) return true; // Nothing to land: already silent.
@@ -740,15 +826,28 @@ class AudioPlayerService {
     // pause transition cannot lose the position — but a failing save must
     // never block the actual pause (e.g. headphones unplugged with a full
     // disk: the music still has to stop).
-    _cancelVolumeFade();
-    await checkpointPosition();
-    await _player.pause();
+    //
+    // A fade in progress stops where it is, and its volume comes back only
+    // once the audio is paused: restoring it first played the end of the
+    // sleep timer's fade-out at full volume for as long as the checkpoint
+    // write took.
+    final restore = _stopVolumeFade();
+    try {
+      await checkpointPosition();
+      await _player.pause();
+    } finally {
+      if (restore != null) await _restoreVolume(restore);
+    }
   }
 
-  Future<void> stop() {
-    _cancelVolumeFade();
+  Future<void> stop() async {
+    final restore = _stopVolumeFade();
     _wasPlayingBeforeInterruption = false;
-    return _player.stop();
+    try {
+      await _player.stop();
+    } finally {
+      if (restore != null) await _restoreVolume(restore);
+    }
   }
 
   /// Re-opens the playback state from when the app was last closed: the whole
@@ -1061,7 +1160,7 @@ class AudioPlayerService {
   );
 
   Future<void> next() async {
-    _cancelVolumeFade();
+    await _endFadeQuietly();
     DebugLog.instance.info(
       'Player',
       'next: file=${_queue.length} idx=${_player.currentIndex} hasNext=${_player.hasNext}',
@@ -1070,7 +1169,7 @@ class AudioPlayerService {
   }
 
   Future<void> previous() async {
-    _cancelVolumeFade();
+    await _endFadeQuietly();
     DebugLog.instance.info(
       'Player',
       'prev: file=${_queue.length} idx=${_player.currentIndex} hasPrev=${_player.hasPrevious}',
@@ -1194,21 +1293,26 @@ class AudioPlayerService {
   /// When the song is already in the queue it is moved instead of duplicated —
   /// "play next" on an already-queued track means "sooner", not "twice". With
   /// no queue loaded at all, this simply starts playback of the song.
-  Future<void> playNext(Song song) async {
+  ///
+  /// False when [song] is the track playing right now: nothing can come
+  /// sooner than that, and moving it onto its own slot used to re-place it
+  /// at random in the shuffled run — changing what played next.
+  Future<bool> playNext(Song song) async {
     final source = _player.audioSource;
     if (source is! ConcatenatingAudioSource || _queue.isEmpty) {
       await playSong(song, queue: [song], index: 0);
-      return;
+      return true;
     }
     final insertAt = (currentIndex + 1).clamp(0, _queue.length);
     final existing = _queue.indexOf(song);
+    if (existing >= 0 && existing == currentIndex) return false;
     final shuffling = _player.shuffleModeEnabled;
     // Already exactly next: nothing to do. Under shuffle « next » is the
     // shuffled successor, not the plain-order neighbour.
     final alreadyNext = shuffling
         ? existing >= 0 && _player.nextIndex == existing
         : existing == insertAt;
-    if (alreadyNext) return;
+    if (alreadyNext) return true;
     // Under shuffle, just_audio would drop the track at a random spot of the
     // shuffled run: « Lire ensuite » then played it whenever. Pin it right
     // after the current track instead.
@@ -1227,6 +1331,7 @@ class AudioPlayerService {
       await source.insert(insertAt, _toSource(song));
     }
     await _reconcileCurrentIndex();
+    return true;
   }
 
   /// Re-aligns the player's index with [_queue] after an in-place mutation.
