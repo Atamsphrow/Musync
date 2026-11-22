@@ -36,6 +36,30 @@ const Set<String> _junkWords = {
   'mp3',
   'mp4',
   'download',
+  'oficial',
+  'videoclip',
+  'mv',
+  'visualiser',
+  'letra',
+  'uhd',
+};
+
+/// Words that may sit in a decoration group without being decoration on
+/// their own: `(Official Music Video)`, `(Official Video with Lyrics)` are
+/// decoration, `(Music)` alone is not.
+const Set<String> _neutralWords = {
+  'music',
+  'musique',
+  'musica',
+  'with',
+  'and',
+  'avec',
+  'et',
+  'con',
+  'y',
+  'the',
+  'en',
+  'w',
 };
 
 /// `1080p`, `320kbps`, `4k`. Une année seule n'en fait pas partie.
@@ -81,10 +105,15 @@ bool _isDecoration(String inner) {
     return words.length > 1;
   }
 
-  // Décoration de téléchargement : que des mots parasites, des années ou
-  // des résolutions, avec au moins un mot parasite ou une résolution.
+  // Décoration de téléchargement : que des mots parasites, des années, des
+  // résolutions ou des mots neutres, avec au moins un mot parasite ou une
+  // résolution.
   final allNoise = words.every(
-    (w) => _junkWords.contains(w) || _quality.hasMatch(w) || _year.hasMatch(w),
+    (w) =>
+        _junkWords.contains(w) ||
+        _neutralWords.contains(w) ||
+        _quality.hasMatch(w) ||
+        _year.hasMatch(w),
   );
   final anySignal = words.any(
     (w) => _junkWords.contains(w) || _quality.hasMatch(w),
@@ -112,9 +141,14 @@ bool _isDecoration(String inner) {
     return true;
   }
 
-  // (Acoustic), (Instrumental), (Karaoke) en premier ou dernier mot.
-  const alone = {'acoustic', 'instrumental', 'karaoke'};
+  // (Acoustic), (Instrumental), (Karaoke), (Explicit) en premier ou
+  // dernier mot ; (Clean) seul.
+  const alone = {'acoustic', 'instrumental', 'karaoke', 'explicit'};
   if (alone.contains(words.first) || alone.contains(words.last)) return true;
+  if (words.length == 1 && words.first == 'clean') return true;
+
+  // (From the Motion Picture …), (From "Frozen") : une bande originale.
+  if (words.first == 'from' && words.length > 1) return true;
 
   // (Radio Edit), (Original Single Mono Version), (Extended Mix).
   return const {'version', 'edit', 'mix', 'mono', 'stereo'}.contains(words.last);
@@ -125,11 +159,23 @@ String _tidy(String text) => text
     .replaceAll(RegExp(r'^[\s\-–—_,]+|[\s\-–—_,]+$'), '')
     .trim();
 
+/// ` - Remastered 2011`, ` - Live`, ` - Radio Edit` : la version que les
+/// services de streaming ajoutent après un tiret, hors parenthèses. Seule
+/// la dernière partie, et seulement quand elle se lit comme une décoration
+/// (`Stand By Me - Ben E. King` reste entier).
+final RegExp _dashSuffix = RegExp(r'\s+[-–—]\s+([^\-–—]+)$');
+
 String _clean(String text) {
   var cleaned = text.replaceAllMapped(
     _bracketed,
     (m) => _isDecoration(m.group(1) ?? '') ? '' : m.group(0)!,
   );
+  final suffix = _dashSuffix.firstMatch(cleaned);
+  if (suffix != null &&
+      suffix.start > 0 &&
+      _isDecoration(suffix.group(1)!.replaceAll(RegExp('["“”«»]'), ''))) {
+    cleaned = cleaned.substring(0, suffix.start);
+  }
   cleaned = cleaned.replaceFirst(_trailingFeat, '');
   cleaned = cleaned.replaceAll(_hashtag, '');
   // Groupes imbriqués : seul le plus interne est examiné, donc
@@ -145,9 +191,22 @@ String _clean(String text) {
 /// Les parenthèses qui font partie du vrai titre sont conservées.
 String cleanSearchTitle(String title) => _clean(title);
 
-/// [artist] sans invité (« Daft Punk feat. Pharrell » → « Daft Punk »).
-/// « Simon & Garfunkel » reste entier.
-String cleanSearchArtist(String artist) => _clean(artist);
+/// Où s'arrête l'artiste principal d'une liste : `A x B`, `A vs. B`,
+/// `A; B`, `A / B`. Ni `&` ni la virgule : « Simon & Garfunkel » et
+/// « Earth, Wind & Fire » sont des noms. Un `x` minuscule seulement :
+/// « Lil Nas X » garde son X.
+final RegExp _artistListCut = RegExp(r'\s+(?:x|×|vs\.?)\s+|\s*;\s*|\s+/\s+');
+
+/// [artist] sans invité (« Daft Punk feat. Pharrell » → « Daft Punk »),
+/// réduit à l'artiste principal d'une liste (« Major Lazer x DJ Snake » →
+/// « Major Lazer »). « Simon & Garfunkel » reste entier.
+String cleanSearchArtist(String artist) {
+  final cleaned = _clean(artist);
+  final cut = _artistListCut.firstMatch(cleaned);
+  if (cut == null || cut.start == 0) return cleaned;
+  final main = _tidy(cleaned.substring(0, cut.start));
+  return main.isEmpty ? cleaned : main;
+}
 
 String _key(String title, String artist) =>
     '${title.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim()}\u0000'
@@ -159,6 +218,12 @@ String _key(String title, String artist) =>
 /// 2. **nettoyé** : le même sans décorations ;
 /// 3. **titre seul** : sans artiste, quand l'artiste est mal deviné.
 ///
+/// [mayBeReversed] : le deviné vient de la seule heuristique, qui lit
+/// toujours `artiste - titre` — or bien des fichiers sont nommés
+/// `titre - artiste`. La version nettoyée est alors essayée inversée aussi,
+/// avant le titre seul. Pas quand un modèle a répondu : il déduit l'ordre
+/// du sens.
+///
 /// Un champ deviné vide retombe sur la valeur utilisée. Une variante
 /// identique à la requête déjà faite, ou à une variante précédente
 /// (insensible à la casse et aux espaces), est sautée : jamais deux fois
@@ -168,6 +233,7 @@ List<SearchVariant> buildSearchVariants({
   required String usedArtist,
   required String guessTitle,
   required String guessArtist,
+  bool mayBeReversed = false,
 }) {
   final fullTitle = guessTitle.trim().isNotEmpty ? guessTitle : usedTitle;
   final fullArtist = guessArtist.trim().isNotEmpty ? guessArtist : usedArtist;
@@ -185,6 +251,9 @@ List<SearchVariant> buildSearchVariants({
 
   add(fullTitle, fullArtist);
   add(cleanTitle, cleanArtist);
+  if (mayBeReversed && guessArtist.trim().isNotEmpty) {
+    add(cleanSearchTitle(guessArtist), cleanSearchArtist(guessTitle));
+  }
   add(cleanTitle, '');
   return variants;
 }

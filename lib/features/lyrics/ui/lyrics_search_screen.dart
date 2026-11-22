@@ -417,6 +417,9 @@ class _LyricsSearchScreenState extends ConsumerState<LyricsSearchScreen> {
       usedArtist: usedArtist,
       guessTitle: guess.title,
       guessArtist: guess.artist,
+      // The heuristic alone always reads `artist - title`; a model that
+      // answered decided the order from the meaning.
+      mayBeReversed: _guessedBy == null,
     );
     if (variants.isEmpty) return;
 

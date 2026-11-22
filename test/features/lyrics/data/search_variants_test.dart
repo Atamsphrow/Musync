@@ -53,6 +53,35 @@ void main() {
       expect(cleanSearchTitle('Song ((Live))'), 'Song');
     });
 
+    test('retire les mentions longues et les bandes originales', () {
+      expect(cleanSearchTitle('Song (Official Music Video)'), 'Song');
+      expect(cleanSearchTitle('Song (Official Video with Lyrics)'), 'Song');
+      expect(cleanSearchTitle('Song [Official MV]'), 'Song');
+      expect(cleanSearchTitle('Song (Explicit)'), 'Song');
+      expect(
+        cleanSearchTitle('Let It Go (From "Frozen"/Soundtrack Version)'),
+        'Let It Go',
+      );
+      // `(Music)` seul n'est pas une décoration.
+      expect(cleanSearchTitle('Song (Music)'), 'Song (Music)');
+    });
+
+    test('retire la version après un tiret, façon streaming', () {
+      expect(
+        cleanSearchTitle('Bohemian Rhapsody - Remastered 2011'),
+        'Bohemian Rhapsody',
+      );
+      expect(cleanSearchTitle('Song - Live'), 'Song');
+      expect(cleanSearchTitle('Song - Radio Edit'), 'Song');
+      expect(cleanSearchTitle('Let It Go - From "Frozen"'), 'Let It Go');
+      // Ce qui suit le tiret n'est pas une version : rien ne bouge.
+      expect(
+        cleanSearchTitle('Stand By Me - Ben E. King'),
+        'Stand By Me - Ben E. King',
+      );
+      expect(cleanSearchTitle('Song - 1986'), 'Song - 1986');
+    });
+
     test('ne rend jamais une chaîne vide', () {
       expect(cleanSearchTitle('(Live)'), '(Live)');
       expect(cleanSearchTitle(''), '');
@@ -66,6 +95,16 @@ void main() {
         'Daft Punk',
       );
       expect(cleanSearchArtist('Simon & Garfunkel'), 'Simon & Garfunkel');
+    });
+
+    test('garde l\'artiste principal d\'une liste', () {
+      expect(cleanSearchArtist('Major Lazer x DJ Snake'), 'Major Lazer');
+      expect(cleanSearchArtist('Tiësto vs. Dzeko'), 'Tiësto');
+      expect(cleanSearchArtist('Artiste A; Artiste B'), 'Artiste A');
+      expect(cleanSearchArtist('A / B'), 'A');
+      // Des noms, pas des listes.
+      expect(cleanSearchArtist('Lil Nas X'), 'Lil Nas X');
+      expect(cleanSearchArtist('Earth, Wind & Fire'), 'Earth, Wind & Fire');
     });
   });
 
@@ -143,6 +182,43 @@ void main() {
         (title: 'Song', artist: 'Y'),
         (title: 'Song', artist: ''),
       ]);
+    });
+
+    test('deviné heuristique : la version inversée avant le titre seul', () {
+      final v = buildSearchVariants(
+        usedTitle: 'Rolling in the Deep - Adele',
+        usedArtist: 'Unknown',
+        guessTitle: 'Adele',
+        guessArtist: 'Rolling in the Deep',
+        mayBeReversed: true,
+      );
+      expect(v, [
+        (title: 'Adele', artist: 'Rolling in the Deep'),
+        (title: 'Rolling in the Deep', artist: 'Adele'),
+        (title: 'Adele', artist: ''),
+      ]);
+    });
+
+    test('pas d\'inversion sans artiste deviné, ni quand un modèle a lu', () {
+      expect(
+        buildSearchVariants(
+          usedTitle: 'T',
+          usedArtist: 'A',
+          guessTitle: 'Song',
+          guessArtist: '',
+          mayBeReversed: true,
+        ),
+        [(title: 'Song', artist: 'A'), (title: 'Song', artist: '')],
+      );
+      expect(
+        buildSearchVariants(
+          usedTitle: 'T',
+          usedArtist: 'A',
+          guessTitle: 'Song',
+          guessArtist: 'Art',
+        ),
+        [(title: 'Song', artist: 'Art'), (title: 'Song', artist: '')],
+      );
     });
 
     test('jamais deux fois la même requête', () {
