@@ -139,22 +139,39 @@ class SongListNotifier extends AsyncNotifier<List<Song>> {
 /// in a stable order. The newest additions come first, the shortest tracks
 /// first; a track without a date goes after every dated one.
 List<Song> sortedSongs(List<Song> songs, LibrarySort sort) {
-  int byTitle(Song a, Song b) =>
-      a.title.toLowerCase().compareTo(b.title.toLowerCase());
-  final compare = switch (sort) {
+  // Lower-cased once per song, not twice per comparison: a sort makes
+  // n·log n comparisons, so on 10 000 tracks that was some 270 000 string
+  // copies on the UI isolate for one change of sort or one tag edit.
+  final keyed = [
+    for (final song in songs)
+      (
+        song: song,
+        title: song.title.toLowerCase(),
+        text: switch (sort) {
+          LibrarySort.artist => song.artist.toLowerCase(),
+          LibrarySort.album => song.album.toLowerCase(),
+          _ => '',
+        },
+      ),
+  ];
+  int byTitle(({Song song, String title, String text}) a,
+          ({Song song, String title, String text}) b) =>
+      a.title.compareTo(b.title);
+  keyed.sort(switch (sort) {
     LibrarySort.title => byTitle,
-    LibrarySort.artist => (Song a, Song b) =>
-        a.artist.toLowerCase().compareTo(b.artist.toLowerCase()),
-    LibrarySort.album => (Song a, Song b) =>
-        a.album.toLowerCase().compareTo(b.album.toLowerCase()),
-    LibrarySort.dateAdded => (Song a, Song b) {
-      final byDate = (b.dateAdded ?? -1).compareTo(a.dateAdded ?? -1);
+    LibrarySort.artist || LibrarySort.album => (a, b) => a.text.compareTo(
+      b.text,
+    ),
+    LibrarySort.dateAdded => (a, b) {
+      final byDate = (b.song.dateAdded ?? -1).compareTo(
+        a.song.dateAdded ?? -1,
+      );
       return byDate != 0 ? byDate : byTitle(a, b);
     },
-    LibrarySort.duration => (Song a, Song b) {
-      final byLength = a.duration.compareTo(b.duration);
+    LibrarySort.duration => (a, b) {
+      final byLength = a.song.duration.compareTo(b.song.duration);
       return byLength != 0 ? byLength : byTitle(a, b);
     },
-  };
-  return List<Song>.from(songs)..sort(compare);
+  });
+  return [for (final entry in keyed) entry.song];
 }
