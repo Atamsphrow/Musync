@@ -236,11 +236,19 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final state = ref.watch(syncEditorProvider(widget.song));
-    final position = ref.watch(positionProvider).valueOrNull ?? Duration.zero;
-
     // Highlighting follows the sorted view, since that is the order playback
     // actually visits the lines in.
-    final playingLine = state.asSyncedLyrics.getLineAt(position);
+    //
+    // Only the playing *line* is watched, not the position: the position
+    // ticks about five times a second, and watching it here rebuilt the
+    // whole editor (scaffold, every visible line, the scroll callback) on
+    // each tick. The seek bar reads the position itself.
+    final synced = state.asSyncedLyrics;
+    final playingLine = ref.watch(
+      positionProvider.select(
+        (p) => synced.getLineAt(p.valueOrNull ?? Duration.zero),
+      ),
+    );
 
     final requested = widget.initialMode;
     if (!state.isLoading && !_modeApplied && requested != null) {
@@ -389,7 +397,6 @@ class _SyncEditorScreenState extends ConsumerState<SyncEditorScreen> {
             ? null
             : _TransportBar(
                 song: widget.song,
-                position: position,
                 state: state,
                 onStampCursor: _stampCursor,
                 onOffset: _editor.offsetAll,
@@ -741,7 +748,6 @@ const int _offsetStepMs = 100;
 
 class _TransportBar extends ConsumerWidget {
   final Song song;
-  final Duration position;
   final SyncEditorState state;
   final VoidCallback onStampCursor;
   final ValueChanged<Duration> onOffset;
@@ -752,7 +758,6 @@ class _TransportBar extends ConsumerWidget {
 
   const _TransportBar({
     required this.song,
-    required this.position,
     required this.state,
     required this.onStampCursor,
     required this.onOffset,
@@ -780,7 +785,7 @@ class _TransportBar extends ConsumerWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _SeekBar(song: song, position: position),
+              _SeekBar(song: song),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -888,9 +893,8 @@ class _TransportBar extends ConsumerWidget {
 /// and makes the audio stutter; the thumb follows the finger locally instead.
 class _SeekBar extends ConsumerStatefulWidget {
   final Song song;
-  final Duration position;
 
-  const _SeekBar({required this.song, required this.position});
+  const _SeekBar({required this.song});
 
   @override
   ConsumerState<_SeekBar> createState() => _SeekBarState();
@@ -909,7 +913,8 @@ class _SeekBarState extends ConsumerState<_SeekBar> {
     final max = duration.inMilliseconds.toDouble();
     if (max <= 0) return const SizedBox(height: 48);
 
-    final value = (_dragValue ?? widget.position.inMilliseconds.toDouble())
+    final position = ref.watch(positionProvider).valueOrNull ?? Duration.zero;
+    final value = (_dragValue ?? position.inMilliseconds.toDouble())
         .clamp(0.0, max);
 
     return Column(
