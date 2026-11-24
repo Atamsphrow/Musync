@@ -147,8 +147,13 @@ public class OverlayService extends Service implements View.OnTouchListener {
             return START_NOT_STICKY;
         }
         if (windowManager != null) {
+            // Musync: a show while the bubble is up replaces its window.
+            // No stopSelf() here: it used to stay pending, destroy the
+            // service once the new window was up, and onDestroy then removed
+            // that new window — the bubble vanished with isActive still
+            // true, so nothing reopened it. safeRemoveView already detaches
+            // the old view from the engine.
             safeRemoveView();
-            stopSelf();
         }
         isRunning = true;
         isStopping = false;
@@ -222,7 +227,14 @@ public class OverlayService extends Service implements View.OnTouchListener {
         }
         params.gravity = WindowSetup.gravity;
         flutterView.setOnTouchListener(this);
-        safeAddView(flutterView, params);
+        if (!safeAddView(flutterView, params)) {
+            // Musync: the window could not be added (permission revoked
+            // between the check and now). Positioning a view that is not
+            // attached would NPE on its null LayoutParams, and leaving
+            // isRunning true would tell Dart a bubble is up: close instead.
+            closeOverlayNow();
+            return START_NOT_STICKY;
+        }
         moveOverlay(dx, dy, null);
         return START_NOT_STICKY;
     }
@@ -260,17 +272,22 @@ public class OverlayService extends Service implements View.OnTouchListener {
     /**
      * Musync: WindowManager calls throw SecurityException when the user
      * revokes "draw over other apps" while the bubble is visible, and
-     * IllegalArgumentException for a stale view. Never let that crash the
-     * service — log and continue.
+     * IllegalArgumentException for a stale view — and addView throws
+     * WindowManager.BadTokenException (a RuntimeException) when the
+     * permission was revoked between the check and the call. Never let that
+     * crash the service (and the playback living in the same process): log
+     * and report whether the view was added.
      */
-    private void safeAddView(View view, WindowManager.LayoutParams params) {
+    private boolean safeAddView(View view, WindowManager.LayoutParams params) {
         try {
             if (windowManager != null && view != null) {
                 windowManager.addView(view, params);
+                return true;
             }
-        } catch (SecurityException | IllegalArgumentException e) {
+        } catch (RuntimeException e) {
             Log.w("OverLay", "addView failed (overlay permission revoked?)", e);
         }
+        return false;
     }
 
     private void safeUpdateViewLayout(WindowManager.LayoutParams params) {
@@ -347,7 +364,11 @@ public class OverlayService extends Service implements View.OnTouchListener {
     private void updateOverlayFlag(MethodChannel.Result result, String flag) {
         if (windowManager != null) {
             WindowSetup.setFlag(flag);
-            WindowManager.LayoutParams params = (WindowManager.LayoutParams) flutterView.getLayoutParams();
+            WindowManager.LayoutParams params = currentLayoutParams();
+            if (params == null) {
+                result.success(false);
+                return;
+            }
             params.flags = WindowSetup.flag | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS |
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN |
                     WindowManager.LayoutParams.FLAG_LAYOUT_INSET_DECOR | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED;
@@ -370,7 +391,11 @@ public class OverlayService extends Service implements View.OnTouchListener {
     private void resizeOverlay(int width, int height, boolean enableDrag, MethodChannel.Result result) {
         if (windowManager != null) {
             refreshScreenSize();
-            WindowManager.LayoutParams params = (WindowManager.LayoutParams) flutterView.getLayoutParams();
+            WindowManager.LayoutParams params = currentLayoutParams();
+            if (params == null) {
+                result.success(false);
+                return;
+            }
             params.width = (width == -1999 || width == -1) ? -1 : dpToPx(width);
             // Musync: the stock `(height != 1999 || height != -1)` was a
             // tautology — always true — so sentinels were converted with
@@ -388,10 +413,26 @@ public class OverlayService extends Service implements View.OnTouchListener {
         }
     }
 
+    /**
+     * Musync: the bubble window's layout params, or null when the view is
+     * not (or no longer) attached — its getLayoutParams() is then null.
+     */
+    private WindowManager.LayoutParams currentLayoutParams() {
+        if (flutterView == null) {
+            return null;
+        }
+        return (WindowManager.LayoutParams) flutterView.getLayoutParams();
+    }
+
     private void moveOverlay(int x, int y, MethodChannel.Result result) {
         if (windowManager != null) {
             refreshScreenSize();
-            WindowManager.LayoutParams params = (WindowManager.LayoutParams) flutterView.getLayoutParams();
+            WindowManager.LayoutParams params = currentLayoutParams();
+            if (params == null) {
+                if (result != null)
+                    result.success(false);
+                return;
+            }
             params.x = (x == -1999 || x == -1) ? -1 : dpToPx(x);
             params.y = dpToPx(y);
             // Musync: never park the bubble off screen.
