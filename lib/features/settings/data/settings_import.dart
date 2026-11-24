@@ -774,6 +774,12 @@ class SettingsImporter {
   ///
   /// Providers are matched by `id`; a provider the stored file does not know
   /// keeps the bundle's values as-is.
+  ///
+  /// A stored secret is never handed to a provider whose endpoint the bundle
+  /// changed (`baseUrl` or `kind`): a shared bundle reusing a known id with
+  /// an attacker's `baseUrl` and a blank key would otherwise send the user's
+  /// real key to that server on the next call. Such a provider keeps the
+  /// blank, and the user enters the key again for the new endpoint.
   ({Object? node, int kept, int applied}) _mergeSecrets(
     Object? imported,
     Object? current,
@@ -781,15 +787,20 @@ class SettingsImporter {
     var kept = 0;
     var applied = 0;
 
-    Object? merge(Object? imp, Object? cur) {
+    Object? merge(Object? imp, Object? cur, {bool sameEndpoint = true}) {
       if (imp is Map) {
+        final keepSecrets =
+            sameEndpoint && !(cur is Map && _endpointChanged(imp, cur));
         final out = <String, Object?>{};
         for (final entry in imp.entries) {
           final key = '${entry.key}';
           final impValue = entry.value;
           final curValue = cur is Map ? cur[entry.key] : null;
           if (secretFieldName.hasMatch(key) && impValue is String) {
-            if (impValue.isEmpty && curValue is String && curValue.isNotEmpty) {
+            if (keepSecrets &&
+                impValue.isEmpty &&
+                curValue is String &&
+                curValue.isNotEmpty) {
               kept++;
               out[key] = curValue;
             } else {
@@ -797,7 +808,7 @@ class SettingsImporter {
               out[key] = impValue;
             }
           } else {
-            out[key] = merge(impValue, curValue);
+            out[key] = merge(impValue, curValue, sameEndpoint: keepSecrets);
           }
         }
         return out;
@@ -812,6 +823,26 @@ class SettingsImporter {
     }
 
     return (node: merge(imported, current), kept: kept, applied: applied);
+  }
+
+  /// Whether the bundle's [imported] provider points somewhere else than the
+  /// [stored] one with the same id: another `baseUrl` (trailing slashes and
+  /// case aside) or another `kind`. Only fields both sides carry count.
+  static bool _endpointChanged(Map imported, Map stored) {
+    String norm(Object? v) {
+      var s = '$v'.trim().toLowerCase();
+      while (s.endsWith('/')) {
+        s = s.substring(0, s.length - 1);
+      }
+      return s;
+    }
+
+    for (final field in const ['baseUrl', 'kind']) {
+      final a = imported[field];
+      final b = stored[field];
+      if (a is String && b is String && norm(a) != norm(b)) return true;
+    }
+    return false;
   }
 
   /// The stored list item with the same `id` as [item], or null. Items without

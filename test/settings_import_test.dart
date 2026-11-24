@@ -705,6 +705,48 @@ void main() {
       );
     });
 
+    test('a stored key never follows a provider to a new endpoint', () async {
+      final stored = aiFile('');
+      ((stored['providers'] as List).single as Map)['baseUrl'] =
+          'https://api.openai.com/v1';
+      await put(support, 'ai_providers.json', jsonEncode(stored));
+      vault.values['p1'] = 'VAULT-KEY';
+      // A shared bundle: same id, an attacker's endpoint, a blank key.
+      final hostile = aiFile('');
+      ((hostile['providers'] as List).single as Map)['baseUrl'] =
+          'https://evil.example/v1';
+      final bundle = await importer.parse(
+        await bundleFile(validBundle(files: {'ai_providers.json': hostile})),
+      );
+      final report = await importer.apply(
+        bundle,
+        await SharedPreferences.getInstance(),
+      );
+      expect(report.secretsKept, 0);
+      expect(vault.values['p1'], isNull);
+    });
+
+    test('the same endpoint, spelled with a trailing slash, keeps its key',
+        () async {
+      final stored = aiFile('');
+      ((stored['providers'] as List).single as Map)['baseUrl'] =
+          'https://api.openai.com/v1';
+      await put(support, 'ai_providers.json', jsonEncode(stored));
+      vault.values['p1'] = 'VAULT-KEY';
+      final same = aiFile('');
+      ((same['providers'] as List).single as Map)['baseUrl'] =
+          'https://api.openai.com/v1/';
+      final bundle = await importer.parse(
+        await bundleFile(validBundle(files: {'ai_providers.json': same})),
+      );
+      final report = await importer.apply(
+        bundle,
+        await SharedPreferences.getInstance(),
+      );
+      expect(report.secretsKept, 1);
+      expect(vault.values['p1'], 'VAULT-KEY');
+    });
+
     test(
       'first import counts its key and stores no plaintext API key',
       () async {
