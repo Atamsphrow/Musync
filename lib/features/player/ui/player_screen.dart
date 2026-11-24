@@ -1744,9 +1744,23 @@ Future<void> _markLyricsMismatch(
       // puis marquer) qui fait tenir l'ensemble.
       await repository.embedLyrics(song.filePath);
     } catch (e) {
-      if (canUndo) await backups.discardLatest(song.filePath);
+      // Torn in place: keep the backup (it is in the tag history), and
+      // say so instead of « nothing happened ».
+      final torn = canUndo && writeMayHaveChangedFile(e);
+      if (torn) {
+        await backups.markWritten(song.filePath);
+      } else if (canUndo) {
+        await backups.discardLatest(song.filePath);
+      }
       messenger.showOnly(
-        SnackBar(content: Text('Suppression impossible : $e')),
+        SnackBar(
+          content: Text(
+            torn
+                ? 'Suppression interrompue : le fichier a pu changer. '
+                      'L’état précédent reste restaurable.'
+                : 'Suppression impossible : $e',
+          ),
+        ),
       );
       return;
     }

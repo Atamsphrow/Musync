@@ -24,6 +24,18 @@ class Id3WriteException implements Exception {
       'Id3WriteException: $message${cause == null ? '' : ' (cause : $cause)'}';
 }
 
+/// The write failed after it had started changing the file in place: the
+/// head of the tag may be torn. Unlike every other [Id3WriteException],
+/// the file is not known to be untouched — a caller holding a backup must
+/// keep it (and offer it), not discard it as a copy of an unchanged state.
+class Id3PartialWriteException extends Id3WriteException {
+  const Id3PartialWriteException(super.message, [super.cause]);
+}
+
+/// Whether [error], thrown by a tag write, may have left the file changed —
+/// the one case where the undo backup taken before the write must be kept.
+bool writeMayHaveChangedFile(Object error) => error is Id3PartialWriteException;
+
 /// Writes USLT (plain) and SYLT (synchronised) lyrics into an MP3's ID3 tag.
 ///
 /// Every other frame is carried across untouched, and the tag keeps its
@@ -553,19 +565,41 @@ class Id3Writer {
       await handle.setPosition(0);
       await handle.writeFrom(newTag);
       await handle.flush();
+    } on FileSystemException catch (e) {
+      // Past this point the original head may be half overwritten.
+      throw Id3PartialWriteException(
+        'Écriture interrompue en cours de route : le tag peut être abîmé.',
+        e,
+      );
     } finally {
       await handle.close();
     }
-    final check = await file.open(mode: FileMode.read);
+    final RandomAccessFile check;
+    try {
+      check = await file.open(mode: FileMode.read);
+    } on FileSystemException catch (e) {
+      // Written, but unverifiable: the file has changed either way.
+      throw Id3PartialWriteException(
+        'Vérification après écriture impossible : le fichier n’a pas pu être '
+        'relu.',
+        e,
+      );
+    }
     try {
       await check.setPosition(0);
       final written = await check.read(newTag.length);
       if (!_bytesEqual(written, newTag)) {
-        throw const Id3WriteException(
+        throw const Id3PartialWriteException(
           'Vérification après écriture impossible : la tête du tag relue ne '
           'correspond pas à ce qui a été écrit.',
         );
       }
+    } on FileSystemException catch (e) {
+      throw Id3PartialWriteException(
+        'Vérification après écriture impossible : le fichier n’a pas pu être '
+        'relu.',
+        e,
+      );
     } finally {
       await check.close();
     }

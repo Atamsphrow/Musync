@@ -24,6 +24,8 @@ import 'package:musync/features/player/providers/player_provider.dart';
 import 'package:musync/features/settings/data/playback_settings.dart';
 import 'package:musync/features/settings/providers/backup_provider.dart';
 import 'package:musync/features/settings/providers/playback_settings_provider.dart';
+import 'package:musync/core/id3/id3_writer.dart';
+import 'package:musync/core/services/debug_log.dart';
 
 /// Cherche les paroles du morceau en cours et les intègre quand c'est sûr.
 ///
@@ -553,8 +555,19 @@ Future<bool> _writeLyricsUndoable(
       synced: synced,
       unsynced: unsynced,
     );
-  } catch (_) {
-    if (canUndo) await backups.discardLatest(song.filePath);
+  } catch (e, stack) {
+    DebugLog.instance.error(
+      'Paroles IA',
+      'Écriture des paroles impossible : ${song.filePath}',
+      error: e,
+      stackTrace: stack,
+    );
+    // Torn in place: keep the backup, it is the way back.
+    if (canUndo && writeMayHaveChangedFile(e)) {
+      await backups.markWritten(song.filePath);
+    } else if (canUndo) {
+      await backups.discardLatest(song.filePath);
+    }
     return false;
   }
   if (canUndo) await backups.markWritten(song.filePath);

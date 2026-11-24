@@ -24,6 +24,7 @@ import 'package:musync/features/lyrics/providers/search_provider.dart';
 import 'package:musync/features/lyrics/providers/tag_change_provider.dart';
 import 'package:musync/features/settings/providers/ai_settings_provider.dart';
 import 'package:musync/features/settings/providers/backup_provider.dart';
+import 'package:musync/core/id3/id3_writer.dart';
 
 enum LyricsFindVerdict { integrated, needsChoice, notFound, keptExisting }
 
@@ -782,7 +783,13 @@ class AiLyricsFinder {
         error: e,
         stackTrace: stack,
       );
-      await backups.discardLatest(song.filePath);
+      // A write that broke off half way may have changed the file: its
+      // backup is the way back, kept in the history — not discarded.
+      if (writeMayHaveChangedFile(e)) {
+        await backups.markWritten(song.filePath);
+      } else {
+        await backups.discardLatest(song.filePath);
+      }
       return null;
     }
     await backups.markWritten(song.filePath);

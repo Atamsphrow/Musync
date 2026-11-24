@@ -213,6 +213,24 @@ Future<EmbedOutcome> embedLyrics(
       error: e.cause,
       stackTrace: stack,
     );
+    if (canUndo && writeMayHaveChangedFile(e)) {
+      // The in-place write broke off half way: the file may be torn, and
+      // the copy taken above is the one way back. Kept, marked as a real
+      // change, and offered — never discarded as « nothing was written ».
+      await backups.markWritten(filePath);
+      changes.fileChanged(filePath);
+      messenger.showOnly(
+        SnackBar(
+          content: Text('${e.message} Annulez pour restaurer le fichier.'),
+          duration: const Duration(seconds: 10),
+          action: SnackBarAction(
+            label: 'Annuler',
+            onPressed: () => _undo(changes, messenger, filePath),
+          ),
+        ),
+      );
+      return EmbedOutcome.failed;
+    }
     // Nothing was written, so the copy taken above is a backup of a state the
     // file is already in. Dropping it matters because the store keeps a bounded
     // number of them: a batch run over an album of unsupported files would
