@@ -1330,20 +1330,31 @@ class _SeekBarState extends ConsumerState<_SeekBar> {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
         children: [
-          Slider(
-            value: value,
-            // A zero max would make Slider throw before the duration arrives.
-            max: max <= 0 ? 1 : max,
-            onChanged: max <= 0 ? null : (v) => setState(() => _dragValue = v),
-            onChangeEnd: (v) {
-              final service = ref.read(audioPlayerServiceProvider);
-              unawaited(
-                PlayerControls.run(
-                  () => service.seekTo(Duration(milliseconds: v.toInt())),
-                ),
-              );
-              setState(() => _dragValue = null);
-            },
+          Semantics(
+            label: 'Position de lecture',
+            child: Slider(
+              value: value,
+              // TalkBack read a bare percentage (« 47 % »): the time, as
+              // the labels under the bar show it.
+              semanticFormatterCallback: (v) =>
+                  '${formatClock(Duration(milliseconds: v.toInt()))} '
+                  'sur ${formatClock(duration)}',
+              // A zero max would make Slider throw before the duration
+              // arrives.
+              max: max <= 0 ? 1 : max,
+              onChanged: max <= 0
+                  ? null
+                  : (v) => setState(() => _dragValue = v),
+              onChangeEnd: (v) {
+                final service = ref.read(audioPlayerServiceProvider);
+                unawaited(
+                  PlayerControls.run(
+                    () => service.seekTo(Duration(milliseconds: v.toInt())),
+                  ),
+                );
+                setState(() => _dragValue = null);
+              },
+            ),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:musync/core/services/debug_log.dart';
 import 'package:musync/features/library/data/models/song.dart';
@@ -819,8 +820,9 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
                             onPointerMove: _handleDragMove,
                             onPointerUp: _handleDragEnd,
                             onPointerCancel: _handleDragCancel,
-                            child: Semantics(
-                              label: 'Glisser pour déplacer ou retirer',
+                            // The row's own actions (below) do what the
+                            // drag does, for TalkBack and switch access.
+                            child: ExcludeSemantics(
                               child: SizedBox.square(
                                 dimension: 48,
                                 child: Icon(
@@ -875,6 +877,24 @@ class _QueueListBodyState extends ConsumerState<QueueListBody>
                           onTap: () => _playAt(queue, index),
                         ),
                       ),
+                    );
+                    // The handle is drag-only: a screen-reader or switch
+                    // user could neither move nor remove a track with it.
+                    // The same three moves, as actions on the row.
+                    row = Semantics(
+                      selected: isCurrent,
+                      customSemanticsActions: {
+                        if (index > 0)
+                          const CustomSemanticsAction(label: 'Monter'): () =>
+                              _reorder(index, index - 1),
+                        if (index < queue.length - 1)
+                          const CustomSemanticsAction(label: 'Descendre'):
+                              () => _reorder(index, index + 1),
+                        const CustomSemanticsAction(
+                          label: 'Retirer de la file',
+                        ): () => unawaited(_remove(index, song)),
+                      },
+                      child: row,
                     );
                     // Remove drag in flight: the row itself slides right
                     // with the finger, over its emptied slot.

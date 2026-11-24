@@ -3,6 +3,7 @@
 // slop, which used to let the vertical reorder recognizer lift the row into
 // a drag proxy mid-slide. A straight vertical drag still reorders.
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:musync/features/library/data/models/song.dart';
@@ -131,5 +132,31 @@ void main() {
     expect(player.removals, isEmpty);
     expect(player.reorders, isNotEmpty);
     expect(player.reorders.single.$1, 0);
+  });
+
+  testWidgets('TalkBack can move and remove a row without dragging',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    final player = await _pump(tester);
+
+    void perform(String rowTitle, String action) {
+      final id = CustomSemanticsAction.getIdentifier(
+        CustomSemanticsAction(label: action),
+      );
+      var node = tester.getSemantics(find.text(rowTitle));
+      while (!node.getSemanticsData().customSemanticsActionIds!.contains(id)) {
+        node = node.parent!;
+      }
+      node.owner!.performAction(node.id, SemanticsAction.customAction, id);
+    }
+
+    perform('Titre 0', 'Descendre');
+    await tester.pumpAndSettle();
+    expect(player.reorders, [(0, 1)]);
+
+    perform('Titre 2', 'Retirer de la file');
+    await tester.pumpAndSettle();
+    expect(player.removals, [2]);
+    semantics.dispose();
   });
 }

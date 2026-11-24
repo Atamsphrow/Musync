@@ -47,9 +47,18 @@ class PlayerControls extends ConsumerWidget {
 
     final isPlaying = ref.watch(isPlayingProvider);
 
-    final repeatIcon = loopMode == LoopMode.one
-        ? Icons.repeat_one
-        : Icons.repeat;
+    // « all » gets its own icon: it used to differ from « off » by colour
+    // alone, which a colour-blind user cannot see and TalkBack never says.
+    final repeatIcon = switch (loopMode) {
+      LoopMode.one => Icons.repeat_one_on,
+      LoopMode.all => Icons.repeat_on,
+      LoopMode.off => Icons.repeat,
+    };
+    final repeatTooltip = switch (loopMode) {
+      LoopMode.one => 'Répétition : ce morceau',
+      LoopMode.all => 'Répétition : toute la file',
+      LoopMode.off => 'Répétition désactivée',
+    };
     final repeatColor = loopMode == LoopMode.off
         ? scheme.onSurfaceVariant
         : scheme.primary;
@@ -58,10 +67,11 @@ class PlayerControls extends ConsumerWidget {
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
         IconButton(
-          icon: Icon(
-            Icons.shuffle,
-            color: isShuffle ? scheme.primary : scheme.onSurfaceVariant,
-          ),
+          // isSelected: TalkBack announces « activé / désactivé », and the
+          // icon changes too — the state no longer rests on colour alone.
+          isSelected: isShuffle,
+          icon: Icon(Icons.shuffle, color: scheme.onSurfaceVariant),
+          selectedIcon: Icon(Icons.shuffle_on, color: scheme.primary),
           tooltip: 'Lecture aléatoire',
           onPressed: shuffleReady
               ? () => run(playerService.toggleShuffle)
@@ -115,8 +125,9 @@ class PlayerControls extends ConsumerWidget {
           onPressed: () => run(playerService.next),
         ),
         IconButton(
+          isSelected: loopMode != LoopMode.off,
           icon: Icon(repeatIcon, color: repeatColor),
-          tooltip: 'Répétition',
+          tooltip: repeatTooltip,
           onPressed:
               loopReady ? () => run(playerService.cycleRepeatMode) : null,
         ),
