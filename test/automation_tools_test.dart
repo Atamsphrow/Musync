@@ -225,4 +225,36 @@ void main() {
       );
     });
   });
+
+  test('une sauvegarde impossible n\'est jamais annoncée « Programmé »',
+      () async {
+    final container = ProviderContainer(
+      overrides: [
+        automationStoreProvider.overrideWithValue(_FailingStore()),
+      ],
+    );
+    addTearDown(container.dispose);
+    await container.read(automationsProvider.future);
+    final at = DateTime.now().add(const Duration(days: 1));
+    await expectLater(
+      () => const ScheduleOnceTool().execute(_ctx(container), {
+        'datetime': '${at.year.toString().padLeft(4, '0')}-'
+            '${at.month.toString().padLeft(2, '0')}-'
+            '${at.day.toString().padLeft(2, '0')}T07:00',
+        'tool': 'pause',
+      }),
+      throwsA(isA<AutomationSaveException>()),
+    );
+    expect(container.read(automationsProvider).value?.actions, isEmpty);
+  });
+}
+
+/// Lit un document vide, refuse toute écriture (disque plein).
+class _FailingStore extends AutomationStore {
+  @override
+  Future<AutomationsDoc> load() async => const AutomationsDoc();
+
+  @override
+  Future<void> save(AutomationsDoc doc) async =>
+      throw const FileSystemException('disque plein');
 }

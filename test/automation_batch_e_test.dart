@@ -138,12 +138,17 @@ void main() {
       addTearDown(container.dispose);
       await container.read(automationsProvider.future);
 
-      await container.read(automationsProvider.notifier).scheduleDaily(
-            hour: 22,
-            minute: 0,
-            tool: 'play',
-            label: 'new',
-          );
+      // L'échec remonte : l'outil ou l'écran dit que rien n'a été
+      // programmé, au lieu d'annoncer une alarme qui ne sonnera pas.
+      await expectLater(
+        container.read(automationsProvider.notifier).scheduleDaily(
+              hour: 22,
+              minute: 0,
+              tool: 'play',
+              label: 'new',
+            ),
+        throwsA(isA<AutomationSaveException>()),
+      );
 
       // L'état affiché est l'ancien : l'UI ne montre pas une
       // automatisation qui n'existe pas sur disque.

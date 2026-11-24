@@ -107,7 +107,8 @@ class ScheduleOnceTool extends AiTool {
               label: label,
             );
     return AiToolResult.ok(
-      'Programmé : « $label » — ${action.describeSchedule()}.',
+      'Programmé : « $label » — ${action.describeSchedule()}.'
+      '${_unarmedWarning(ctx)}',
     );
   }
 }
@@ -176,7 +177,8 @@ class ScheduleDailyTool extends AiTool {
               label: label,
             );
     return AiToolResult.ok(
-      'Programmé : « $label » — ${action.describeSchedule()}.',
+      'Programmé : « $label » — ${action.describeSchedule()}.'
+      '${_unarmedWarning(ctx)}',
     );
   }
 }
@@ -377,3 +379,12 @@ class ClearHeadphoneTriggerTool extends AiTool {
     return AiToolResult.ok('Déclencheur écouteurs supprimé.');
   }
 }
+
+/// Ajouté au « Programmé » quand Android a refusé d'armer l'alarme
+/// (Android 12+ sans « Alarmes et rappels ») : enregistrée, elle ne
+/// sonnera pas tant que l'autorisation manque.
+String _unarmedWarning(AiToolContext ctx) =>
+    ctx.ref.read(exactAlarmGrantedProvider) == false
+        ? ' Attention : l’alarme n’est pas armée — autorisez « Alarmes et '
+              'rappels » pour Musync dans les réglages Android.'
+        : '';

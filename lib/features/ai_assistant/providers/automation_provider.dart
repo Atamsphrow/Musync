@@ -77,7 +77,12 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
   /// document absent du disque laisserait une automatisation active en
   /// mémoire + native qui disparaît au redémarrage — et une suppression
   /// non persistée « ressusciterait » au boot.
-  Future<void> _commit(AutomationsDoc next) async {
+  ///
+  /// Rend false quand la sauvegarde a échoué (l'état est alors restauré) :
+  /// les mutations demandées par l'utilisateur passent par
+  /// [_commitOrThrow], pour qu'un « Programmé » ou un « Annulé » ne soit
+  /// jamais annoncé sur une alarme qui n'a pas été enregistrée.
+  Future<bool> _commit(AutomationsDoc next) async {
     final previous = state.valueOrNull;
     state = AsyncValue.data(next);
     try {
@@ -92,7 +97,7 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
       // `_commit` n'est appelé que depuis un travail sérialisé, après
       // `_ready()` : un état précédent existe toujours ici.
       if (previous != null) state = AsyncValue.data(previous);
-      return;
+      return false;
     }
     final armed = await SchedulerBridge.syncAlarms(next.actions);
     // L'état ne peut qu'être confirmé ou infirmé par un armement réel : un
@@ -103,6 +108,13 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
       ref.read(exactAlarmGrantedProvider.notifier).state =
           await SchedulerBridge.canScheduleExactAlarms();
     }
+    return true;
+  }
+
+  /// [_commit], en échec bruyant : l'appelant (un outil de l'assistant,
+  /// l'onglet IA) doit dire que rien n'a changé.
+  Future<void> _commitOrThrow(AutomationsDoc next) async {
+    if (!await _commit(next)) throw const AutomationSaveException();
   }
 
   /// Suffixe d'unicité des ids : `microsecondsSinceEpoch` seul peut
@@ -147,7 +159,7 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
           label: label,
         );
         final current = state.valueOrNull ?? const AutomationsDoc();
-        await _commit(AutomationsDoc(
+        await _commitOrThrow(AutomationsDoc(
           actions: [...current.actions, action],
           headphoneTrigger: current.headphoneTrigger,
         ));
@@ -177,7 +189,7 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
           label: label,
         );
         final current = state.valueOrNull ?? const AutomationsDoc();
-        await _commit(AutomationsDoc(
+        await _commitOrThrow(AutomationsDoc(
           actions: [...current.actions, action],
           headphoneTrigger: current.headphoneTrigger,
         ));
@@ -273,7 +285,7 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
   Future<void> cancel(String id) => _serialized(() async {
         await _ready();
         final current = state.valueOrNull ?? const AutomationsDoc();
-        await _commit(AutomationsDoc(
+        await _commitOrThrow(AutomationsDoc(
           actions: [for (final a in current.actions) if (a.id != id) a],
           headphoneTrigger: current.headphoneTrigger,
         ));
@@ -287,7 +299,7 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
       _serialized(() async {
         await _ready();
         final current = state.valueOrNull ?? const AutomationsDoc();
-        await _commit(AutomationsDoc(
+        await _commitOrThrow(AutomationsDoc(
           actions: current.actions,
           headphoneTrigger: HeadphoneTrigger(
             toolName: tool,
@@ -301,7 +313,7 @@ class AutomationsNotifier extends AsyncNotifier<AutomationsDoc> {
   Future<void> clearHeadphoneTrigger() => _serialized(() async {
         await _ready();
         final current = state.valueOrNull ?? const AutomationsDoc();
-        await _commit(AutomationsDoc(actions: current.actions));
+        await _commitOrThrow(AutomationsDoc(actions: current.actions));
       });
 
   /// Réarme toutes les alarmes natives depuis l'état chargé, sans écrire
@@ -327,4 +339,14 @@ extension on AutomationsDoc {
     }
     return null;
   }
+}
+
+/// Les automatisations n'ont pas pu être enregistrées : rien n'a changé,
+/// ni sur le disque ni dans les alarmes Android.
+class AutomationSaveException implements Exception {
+  const AutomationSaveException();
+
+  @override
+  String toString() =>
+      'Enregistrement des automatisations impossible : rien n’a changé.';
 }

@@ -1094,5 +1094,16 @@ Future<void> _confirmAutomationDelete(
       ],
     ),
   );
-  if (confirmed == true) await onConfirm();
+  if (confirmed != true) return;
+  try {
+    await onConfirm();
+  } on AutomationSaveException catch (error) {
+    // Rien n'a été supprimé : le dire, au lieu de laisser croire que
+    // l'alarme a disparu alors qu'elle sonnera.
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    }
+  }
 }
