@@ -100,14 +100,46 @@ abstract final class FilenameParser {
   static final RegExp _bracketedId = RegExp(r'\s*\[([A-Za-z0-9_-]{11})\]');
   static final RegExp _trailingId = RegExp(r'-([A-Za-z0-9_-]{11})$');
 
+  // Compiled once: [parse] runs for every track of a batch or background
+  // search, and these used to be rebuilt on every call.
+  static final RegExp _digit = RegExp(r'\d');
+  static final RegExp _idPunctuation = RegExp(r'[_-]');
+  static final RegExp _lowerThenUpper = RegExp(r'[a-z][A-Z]');
+  static final RegExp _mangledAmpersand = RegExp(r'-?u0026');
+  static final RegExp _leadingDashes = RegExp(r'^[\s\-–—]+');
+  static final RegExp _trailingDomain = RegExp(
+    r'\s*[-–—|]\s*' + _domain.pattern + r'\s*$',
+    caseSensitive: false,
+  );
+  static final RegExp _pathSeparator = RegExp(r'[/\\]');
+  static final RegExp _spaces = RegExp(r'\s+');
+  static final RegExp _spacedDash = RegExp(r'\s+[-–—]\s+');
+  static final RegExp _bareLongDash = RegExp(r'\s*[–—]\s*');
+  static final RegExp _leadingGroup = RegExp(
+    r'^[\(\[]([^\(\)\[\]]+)[\)\]]\s*(.+)$',
+  );
+  static final RegExp _quotedTitle = RegExp(
+    r'^(.+?)\s+["“«]\s*([^"“”«»]+?)\s*["”»]\s*'
+    r'((?:[\(\[][^\(\)\[\]]*[\)\]]\s*)*)$',
+  );
+  static final RegExp _bareNumber = RegExp(r'^\d{1,3}$');
+  static final RegExp _anyDash = RegExp(r'[-–—]');
+  static final RegExp _wrappingQuotes = RegExp(
+    r'''^(["“«'‘])\s*(.+?)\s*(["”»'’])$''',
+  );
+  static final RegExp _doubleQuote = RegExp(r'''["“”«»]''');
+  static final RegExp _edgePunctuation = RegExp(
+    r'^[\s\-–—_.,|]+|[\s\-–—_.,|]+$',
+  );
+
   /// Whether [text] reads as a random video id rather than a word: an
   /// eleven-letter word in brackets (`[Instrumenta]`) must survive.
   static bool _looksLikeVideoId(String text) {
-    if (RegExp(r'\d').hasMatch(text)) return true;
-    if (RegExp(r'[_-]').hasMatch(text.substring(1))) return true;
+    if (_digit.hasMatch(text)) return true;
+    if (_idPunctuation.hasMatch(text.substring(1))) return true;
     // A lower-case letter followed by a capital: `dQwAbcdEfgh`, never a
     // word in title case.
-    return RegExp(r'[a-z][A-Z]').hasMatch(text);
+    return _lowerThenUpper.hasMatch(text);
   }
 
   /// Anything that is not a letter or a digit separates two words.
@@ -180,7 +212,7 @@ abstract final class FilenameParser {
 
     // `-u0026` is a mangled `&`, which is what a downloader leaves behind
     // when it writes an escaped ampersand out as literal text.
-    text = text.replaceAll(RegExp(r'-?u0026'), '&');
+    text = text.replaceAll(_mangledAmpersand, '&');
 
     // Underscores stand in for spaces, but `_-_` is a separator in disguise.
     text = text.replaceAll('_-_', ' - ').replaceAll('_', ' ');
@@ -189,19 +221,16 @@ abstract final class FilenameParser {
     text = _stripJunkGroups(text);
     text = text.replaceFirst(_trackNumber, '');
     // Leading dashes, of which these names have plenty: `- - - BASTA`.
-    text = text.replaceFirst(RegExp(r'^[\s\-–—]+'), '');
+    text = text.replaceFirst(_leadingDashes, '');
     // A site left at the end: `… - y2mate.com`.
-    text = text.replaceFirst(
-      RegExp(r'\s*[-–—|]\s*' + _domain.pattern + r'\s*$', caseSensitive: false),
-      '',
-    );
+    text = text.replaceFirst(_trailingDomain, '');
     text = text.replaceFirst(_trailingQuality, '');
     text = text.replaceFirst(_trailingJunk, '');
     return _collapseSpaces(text);
   }
 
   static String _baseName(String path) {
-    final cut = path.lastIndexOf(RegExp(r'[/\\]'));
+    final cut = path.lastIndexOf(_pathSeparator);
     var name = cut < 0 ? path : path.substring(cut + 1);
 
     final dot = name.lastIndexOf('.');
@@ -222,7 +251,7 @@ abstract final class FilenameParser {
   }
 
   static String _collapseSpaces(String text) =>
-      text.replaceAll(RegExp(r'\s+'), ' ').trim();
+      text.replaceAll(_spaces, ' ').trim();
 
   /// Splits on the separating dash.
   ///
@@ -234,8 +263,7 @@ abstract final class FilenameParser {
   /// the file name really does not say.
   static FilenameGuess _split(String text) {
     final match =
-        RegExp(r'\s+[-–—]\s+').firstMatch(text) ??
-        RegExp(r'\s*[–—]\s*').firstMatch(text);
+        _spacedDash.firstMatch(text) ?? _bareLongDash.firstMatch(text);
     if (match != null && match.start > 0) {
       return (
         artist: _unquote(_tidy(text.substring(0, match.start))),
@@ -247,9 +275,7 @@ abstract final class FilenameParser {
 
     // No separator. A name that opens with a bracketed group and carries on is
     // conventionally `(artist) title` — `(DRAGIN D' Ihosy ) JANGOBO`.
-    final leading = RegExp(
-      r'^[\(\[]([^\(\)\[\]]+)[\)\]]\s*(.+)$',
-    ).firstMatch(text);
+    final leading = _leadingGroup.firstMatch(text);
     if (leading != null) {
       final rest = _tidy(leading.group(2)!);
       if (rest.isNotEmpty) {
@@ -260,10 +286,7 @@ abstract final class FilenameParser {
     // `Rick Astley "Never Gonna Give You Up"`: the quoted part is the title,
     // what comes before it the artist. Double quotes and guillemets only —
     // a single quote is far more often an apostrophe.
-    final quoted = RegExp(
-      r'^(.+?)\s+["“«]\s*([^"“”«»]+?)\s*["”»]\s*'
-      r'((?:[\(\[][^\(\)\[\]]*[\)\]]\s*)*)$',
-    ).firstMatch(text);
+    final quoted = _quotedTitle.firstMatch(text);
     if (quoted != null) {
       return (
         artist: _tidy(quoted.group(1)!),
@@ -280,11 +303,11 @@ abstract final class FilenameParser {
   /// carry there: `Artist - 01. Title`, `Artist - Album - 03 - Title`.
   static String _titleHalf(String text) {
     var title = _tidy(text);
-    final segments = title.split(RegExp(r'\s+[-–—]\s+'));
+    final segments = title.split(_spacedDash);
     if (segments.length > 1) {
       // The title is what follows the last segment that is only a number.
       for (var i = segments.length - 2; i >= 0; i--) {
-        if (RegExp(r'^\d{1,3}$').hasMatch(segments[i].trim())) {
+        if (_bareNumber.hasMatch(segments[i].trim())) {
           final rest = _tidy(segments.sublist(i + 1).join(' - '));
           if (rest.isNotEmpty) title = rest;
           break;
@@ -301,7 +324,7 @@ abstract final class FilenameParser {
   /// Only the run after the final dash, and only when it reads as junk:
   /// `BHERINDR - DEE ANDRIAMBELO` must survive intact.
   static String _dropTrailingJunkPhrase(String title) {
-    final cut = title.lastIndexOf(RegExp(r'[-–—]'));
+    final cut = title.lastIndexOf(_anyDash);
     if (cut <= 0) return title;
 
     return _readsAsJunk(title.substring(cut + 1))
@@ -312,21 +335,19 @@ abstract final class FilenameParser {
   /// `"Title"`, `« Title »`, `'Title'` → `Title`, when the quotes wrap the
   /// whole half and nothing else.
   static String _unquote(String part) {
-    final match = RegExp(
-      r'''^(["“«'‘])\s*(.+?)\s*(["”»'’])$''',
-    ).firstMatch(part);
+    final match = _wrappingQuotes.firstMatch(part);
     if (match == null) return part;
     const pairs = {'"': '"', '“': '”', '«': '»', "'": "'", '‘': '’'};
     if (pairs[match.group(1)] != match.group(3)) return part;
     final inner = match.group(2)!;
     // `"Hello" and "Goodbye"` is two quoted runs, not one wrapped title.
-    if (RegExp(r'''["“”«»]''').hasMatch(inner)) return part;
+    if (_doubleQuote.hasMatch(inner)) return part;
     return inner;
   }
 
   /// Trims the punctuation left at an edge once a group has been removed.
   static String _tidy(String part) => _collapseSpaces(
-    part.replaceAll(RegExp(r'^[\s\-–—_.,|]+|[\s\-–—_.,|]+$'), ''),
+    part.replaceAll(_edgePunctuation, ''),
   );
 }
 
