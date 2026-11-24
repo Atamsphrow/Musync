@@ -56,7 +56,7 @@ void main() {
 
   test('tags the lyrics with the song they were read for', () async {
     final container = ProviderContainer(
-      overrides: [currentSongProvider.overrideWithValue(songA)],
+      overrides: [currentSongProvider.overrideWith(() => _FixedSong(songA))],
     );
     addTearDown(container.dispose);
 
@@ -68,7 +68,7 @@ void main() {
   test('a song change never lets old lyrics claim to be the new song', () async {
     final songState = StateProvider<Song?>((_) => songA);
     final container = ProviderContainer(
-      overrides: [currentSongProvider.overrideWith((ref) => ref.watch(songState))],
+      overrides: [currentSongProvider.overrideWith(() => _WatchedSong(songState))],
     );
     addTearDown(container.dispose);
 
@@ -96,7 +96,7 @@ void main() {
   test('the line ticker follows the tag, not the stale value', () async {
     final songState = StateProvider<Song?>((_) => songA);
     final container = ProviderContainer(
-      overrides: [currentSongProvider.overrideWith((ref) => ref.watch(songState))],
+      overrides: [currentSongProvider.overrideWith(() => _WatchedSong(songState))],
     );
     addTearDown(container.dispose);
 
@@ -107,4 +107,20 @@ void main() {
     final usable = pair?.song?.id == songB.id ? pair?.synced : null;
     expect(usable, isNull);
   });
+}
+
+class _FixedSong extends CurrentSongNotifier {
+  _FixedSong(this.song);
+  final Song? song;
+
+  @override
+  Song? build() => song;
+}
+
+class _WatchedSong extends CurrentSongNotifier {
+  _WatchedSong(this.source);
+  final StateProvider<Song?> source;
+
+  @override
+  Song? build() => ref.watch(source);
 }

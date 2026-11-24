@@ -354,9 +354,21 @@ class AudioPlayerService {
   }) {
     final current = _currentSong;
     if (current == null) return;
-    _currentSong = current.copyWith(title: title, artist: artist, album: album);
+    final updated = current.copyWith(
+      title: title,
+      artist: artist,
+      album: album,
+    );
+    _currentSong = updated;
     if (!_currentSongController.isClosed) {
       _currentSongController.add(_currentSong);
+    }
+    // The queue too: skipping away and back used to bring the old title
+    // back from `_queue`.
+    if (_queue.any((s) => s.id == current.id)) {
+      _queue = List.unmodifiable([
+        for (final s in _queue) s.id == current.id ? updated : s,
+      ]);
     }
   }
 
@@ -519,8 +531,13 @@ class AudioPlayerService {
         queue ?? (_queue.contains(song) ? _queue : [..._queue, song]);
     final resolvedIndex = _resolveIndex(newQueue, song, index);
 
+    // The player must hold the queue this service built: after a failed
+    // load just_audio keeps the source it could not open, and a « same
+    // list » seek would then land in that one.
     final sameQueue =
-        _listEquals(newQueue, _queue) && _player.audioSource != null;
+        _listEquals(newQueue, _queue) &&
+        _player.audioSource != null &&
+        identical(_player.audioSource, _queueSource);
     if (sameQueue) {
       // Announce the move before seeking. `currentIndexStream` will report it
       // too, but only once the player gets there — and not at all when the
@@ -545,8 +562,6 @@ class AudioPlayerService {
     // playback back through audio_service.
     AudioBackendCheck.ensureIntercepted();
 
-    final previousQueue = _queue;
-    final previousSong = _currentSong;
     _queue = List.unmodifiable(newQueue);
     final target = _queue.isEmpty ? null : _queue[resolvedIndex];
     _setCurrentSong(target);
@@ -572,18 +587,16 @@ class AudioPlayerService {
 
     final children = [for (final s in _queue) _toSource(s)];
     final (queueSource, queueOrder) = _newQueueSource(children);
-    try {
-      await _player.setAudioSource(queueSource, initialIndex: resolvedIndex);
-      _queueSource = queueSource;
-      _queueOrder = queueOrder;
-    } catch (_) {
-      // The new queue was announced but never loaded (corrupt/missing file):
-      // put the old state back so the UI, the index subscription and the real
-      // source agree again, then let the caller report the failure.
-      _queue = previousQueue;
-      _setCurrentSong(previousSong);
-      rethrow;
-    }
+    // Set before the load, not after: just_audio installs the source even
+    // when it fails to open (corrupt or missing file) and keeps it. Rolling
+    // the queue back to the previous one used to leave the service on the
+    // old list while the player held the new one — Next then moved inside
+    // the new source and the index listener mapped it through the old
+    // list, so the screen and the audio named two different tracks. The
+    // new queue is the truth either way; the caller reports the failure.
+    _queueSource = queueSource;
+    _queueOrder = queueOrder;
+    await _player.setAudioSource(queueSource, initialIndex: resolvedIndex);
     // The queue actually changed: the next launch restores all of it.
     _persistPlaybackState();
   }
@@ -802,8 +815,12 @@ class AudioPlayerService {
     if (_player.processingState == ProcessingState.completed) {
       await _seekWithRecord(Duration.zero, index: _player.currentIndex);
     }
-    await _player.play();
+    // Before play(), not after: just_audio's play() completes only when
+    // playback stops, so a fade started after it ran once the music had
+    // ended — the alarm resumed at full volume, and the next manual play
+    // came back quiet.
     if (fadeIn != null) _startVolumeFade(fadeIn);
+    await _player.play();
   }
 
   /// Persists the current track and position right now, outside the 15s

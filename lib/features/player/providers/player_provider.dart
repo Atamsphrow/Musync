@@ -36,13 +36,32 @@ final currentSongStreamProvider = StreamProvider<Song?>((ref) {
 /// different lists both start at index 0, so switching between the catalogue's
 /// tabs moved the audio without ever emitting a new index. The screen went on
 /// showing the previous track's title, art and lyrics.
-final currentSongProvider = Provider<Song?>((ref) {
-  final service = ref.watch(audioPlayerServiceProvider);
-  final streamed = ref.watch(currentSongStreamProvider);
-  // Falls back to the service's own value so a screen opened mid-playback is
-  // filled in immediately, rather than blank until the next track change.
-  return streamed.hasValue ? streamed.value : service.currentSong;
-});
+///
+/// A Notifier, not a plain Provider, for its notification rule: a Provider
+/// notifies only when `previous != next`, and [Song.==] compares ids alone —
+/// so a tag edit or a rename of the playing track (same id, new title or
+/// path) reached nobody: the mini player kept the old title and the lyrics
+/// kept reading a path that no longer existed. Every new [Song] the service
+/// emits is news here.
+final currentSongProvider = NotifierProvider<CurrentSongNotifier, Song?>(
+  CurrentSongNotifier.new,
+);
+
+class CurrentSongNotifier extends Notifier<Song?> {
+  @override
+  Song? build() {
+    final service = ref.watch(audioPlayerServiceProvider);
+    final streamed = ref.watch(currentSongStreamProvider);
+    // Falls back to the service's own value so a screen opened mid-playback
+    // is filled in immediately, rather than blank until the next track
+    // change.
+    return streamed.hasValue ? streamed.value : service.currentSong;
+  }
+
+  @override
+  bool updateShouldNotify(Song? previous, Song? next) =>
+      !identical(previous, next);
+}
 
 final playerStateProvider = StreamProvider<PlayerState>((ref) {
   final service = ref.watch(audioPlayerServiceProvider);

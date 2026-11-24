@@ -4,6 +4,8 @@
 /// l'app appellent — l'assistant ne fait rien que l'UI ne sache déjà faire.
 library;
 
+import 'dart:async';
+
 import 'package:just_audio/just_audio.dart';
 import 'package:musync/features/ai_assistant/data/ai_tool.dart';
 import 'package:musync/features/player/data/volume_fade.dart';
@@ -59,7 +61,7 @@ class PlayTool extends AiTool {
       if (service.currentSong == null) {
         return AiToolResult.fail('Rien en cours de lecture.');
       }
-      await service.play(fadeIn: fadeIn);
+      await awaitPlaybackStart(service.play(fadeIn: fadeIn));
       return AiToolResult.ok('Lecture reprise.');
     }
     final matches = matchSongs(await librarySongs(ctx.ref), q);
@@ -67,7 +69,9 @@ class PlayTool extends AiTool {
       return AiToolResult.fail('Aucun morceau trouvé pour « $q ».');
     }
     final first = matches.first;
-    await service.playSong(first, queue: matches, index: 0, fadeIn: fadeIn);
+    await awaitPlaybackStart(
+      service.playSong(first, queue: matches, index: 0, fadeIn: fadeIn),
+    );
     return AiToolResult.ok('Lecture de ${songLabel(first)}.');
   }
 }
@@ -250,3 +254,18 @@ class CycleRepeatTool extends AiTool {
     return AiToolResult.ok('Répétition : $label.');
   }
 }
+
+/// Waits for [playback] to *start*, not to end.
+///
+/// just_audio's play() completes only when playback stops, so awaiting it
+/// held the tool — and the alarm that ran it, whose advance waits on the
+/// tool — for the whole length of the music. A failure to load still
+/// surfaces: it comes within [window]. Past it, the music is playing and a
+/// later error is the player's to report.
+Future<void> awaitPlaybackStart(
+  Future<void> playback, {
+  Duration window = const Duration(seconds: 3),
+}) => Future.any([
+  playback,
+  Future<void>.delayed(window),
+]);

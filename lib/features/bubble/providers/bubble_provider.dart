@@ -341,11 +341,17 @@ class LyricsBubbleController extends Notifier<BubbleState> {
     // still holds the previous track's value, and without this the bubble
     // would sit frozen on the old song's last line.
     _feeds.add(
-      ref.listen(currentSongProvider, (previous, _) {
+      ref.listen<Song?>(currentSongProvider, (previous, next) {
+        // The same track with new tags or a new path is not a new track:
+        // no tail of a previous one to guard against, just new text.
+        if (previous?.id == next?.id) {
+          _forcePush();
+          return;
+        }
         // Arm the stale-tail guard: until the platform confirms the new
         // track (its position restarts near zero), a sample up at the old
         // duration is the previous track's tail, not the new song.
-        _prevTailMs = (previous as Song?)?.duration;
+        _prevTailMs = previous?.duration;
         _prevTailArmedAtMs = DateTime.now().millisecondsSinceEpoch;
         _forcePush();
       }),
